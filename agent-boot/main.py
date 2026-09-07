@@ -118,9 +118,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--relay-enrollment-token", metavar="TOKEN",
                         default=_env("RELAY_ENROLLMENT_TOKEN", ""),
                         help="User-scoped relay ownership token (default: $RELAY_ENROLLMENT_TOKEN)")
-    parser.add_argument("--relay-id", metavar="ID",
-                        default="",
-                        help="Stable relay ID (default: $RELAY_ID or persisted .relay_id file)")
     parser.add_argument("--relay-mode", metavar="MODE",
                         default=_env("RELAY_MODE", "ws"),
                         choices=["ws", "grpc"],
@@ -249,7 +246,7 @@ def _run_relay(args: argparse.Namespace) -> None:
     relay_mode = getattr(args, "relay_mode", "ws")
     print(f"\n[agent-boot] Starting relay daemon ({relay_mode.upper()} mode)", file=sys.stderr)
     print(f"  Server : {args.relay_server}", file=sys.stderr)
-    print(f"  Relay ID: {args.relay_id}", file=sys.stderr)
+    print(f"  Relay ID: {args.relay_id or '(pending — issued by server)'}", file=sys.stderr)
     print("  Ctrl+C to stop.\n", file=sys.stderr)
 
     async def _run() -> None:
@@ -294,14 +291,14 @@ def _run_relay(args: argparse.Namespace) -> None:
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def _resolve_relay_id(args: argparse.Namespace) -> None:
-    """Pick relay id once per process: explicit flag/env, else persisted file."""
-    explicit = (getattr(args, "relay_id", "") or "").strip() or _env("RELAY_ID", "").strip()
-    if explicit:
-        args.relay_id = explicit
-        return
-    from relay.agent import load_or_create_relay_id
+    """Load the persisted server-issued relay id; empty means "not enrolled yet".
 
-    args.relay_id = load_or_create_relay_id()
+    Identity is not client-declarable — no flag, no env var. The server issues it
+    on register and the agent persists whatever comes back in the RegisterAck.
+    """
+    from relay.agent import load_relay_id
+
+    args.relay_id = load_relay_id()
 
 
 def _bootstrap_options_requested(

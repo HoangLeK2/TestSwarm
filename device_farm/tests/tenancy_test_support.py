@@ -10,8 +10,10 @@ from typing import Any
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from api.auth.rbac import _load_seed_policy_rows, clear_rbac_cache
 from api.deps import _get_current_user, _get_db
 from api.crud.router import api_router
 from db.database import Base
@@ -28,11 +30,71 @@ USER_B = "user-bob"
 PASS = "secret123"
 
 
+async def seed_casbin_policy_tables(conn) -> None:
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS casbin_policy_revision (
+                id INTEGER PRIMARY KEY,
+                revision INTEGER NOT NULL
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            INSERT INTO casbin_policy_revision (id, revision)
+            VALUES (1, 1)
+            ON CONFLICT(id) DO UPDATE SET revision = excluded.revision
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS casbin_rule (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ptype VARCHAR(32) NOT NULL,
+                v0 VARCHAR(255),
+                v1 VARCHAR(255),
+                v2 VARCHAR(255),
+                v3 VARCHAR(255),
+                v4 VARCHAR(255),
+                v5 VARCHAR(255)
+            )
+            """
+        )
+    )
+    await conn.execute(text("DELETE FROM casbin_rule"))
+    for row in _load_seed_policy_rows():
+        padded = list(row[:7]) + [""] * max(0, 7 - len(row))
+        await conn.execute(
+            text(
+                """
+                INSERT INTO casbin_rule (ptype, v0, v1, v2, v3, v4, v5)
+                VALUES (:ptype, :v0, :v1, :v2, :v3, :v4, :v5)
+                """
+            ),
+            {
+                "ptype": padded[0],
+                "v0": padded[1],
+                "v1": padded[2],
+                "v2": padded[3],
+                "v3": padded[4],
+                "v4": padded[5],
+                "v5": padded[6],
+            },
+        )
+    clear_rbac_cache()
+
+
 @pytest_asyncio.fixture
 async def tenancy_engine():
     eng = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await seed_casbin_policy_tables(conn)
     yield eng
     await eng.dispose()
 

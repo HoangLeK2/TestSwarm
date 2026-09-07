@@ -22,6 +22,7 @@ import json
 import logging
 import random
 import socket
+import time
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -30,6 +31,29 @@ if TYPE_CHECKING:
 logger = logging.getLogger("relay.control_client")
 
 _AGENT_VERSION = "2.1.0"
+
+# The log spam this fixes came from logging every retry, not from retrying. So
+# keep polling fast — an admin who re-enables an agent expects it back in
+# seconds — and make the *log* quiet instead.
+DISABLED_RETRY_DELAY_S = 5.0
+DISABLED_RELOG_EVERY_S = 600.0
+
+
+def _is_agent_disabled_error(exc: Exception) -> bool:
+    """Server said this agent is disabled, not that the credentials are wrong."""
+    code = getattr(exc, "code", None)
+    try:
+        status = code() if callable(code) else code
+    except Exception:
+        status = None
+    if getattr(status, "name", "") == "FAILED_PRECONDITION":
+        return True
+    details = getattr(exc, "details", None)
+    try:
+        text = details() if callable(details) else details
+    except Exception:
+        text = None
+    return "disabled by admin" in str(text or "").lower()
 
 # CMD_TYPE constants — must match agent.py / adb_relay_server.py
 _CMD_SHELL           = 0
@@ -90,10 +114,12 @@ class AgentControlClient:
 
     async def run(self) -> None:
         attempt, base = 0, 0.5
+        disabled_logged_at = 0.0
         while self._running:
             try:
                 await self._stream_once()
                 attempt = 0
+                disabled_logged_at = 0.0
                 if self._running:
                     await asyncio.sleep(1.0)
             except asyncio.CancelledError:
@@ -101,7 +127,22 @@ class AgentControlClient:
             except Exception as exc:
                 if not self._running:
                     break
+                if _is_agent_disabled_error(exc):
+                    # An admin turned this agent off. Keep checking often so
+                    # re-enabling feels immediate, but say it once rather than
+                    # once per attempt.
+                    now = time.monotonic()
+                    if now - disabled_logged_at >= DISABLED_RELOG_EVERY_S:
+                        disabled_logged_at = now
+                        logger.warning(
+                            "agent disabled by admin — retrying every %.0fs until it "
+                            "is re-enabled",
+                            DISABLED_RETRY_DELAY_S,
+                        )
+                    await asyncio.sleep(DISABLED_RETRY_DELAY_S)
+                    continue
                 attempt += 1
+                disabled_logged_at = 0.0
                 delay = min(base * (2 ** attempt), 8.0) * (1.0 + 0.2 * random.random())
                 logger.warning(
                     "control stream failed (attempt %d): %s — retry in %.1fs",
@@ -275,6 +316,14 @@ class AgentControlClient:
 
         kind = msg.WhichOneof("payload")
         if kind == "ack":
+            assigned = (msg.ack.relay_id or "").strip()
+            if assigned and assigned != self._agent._relay_id:
+                from .agent import save_relay_id
+
+                self._agent._relay_id = save_relay_id(assigned)
+                logger.info("relay identity issued by server: %s", assigned)
+            if assigned:
+                self._agent._identity_ready.set()
             logger.info("control channel registered: %s", msg.ack.message)
             return
 

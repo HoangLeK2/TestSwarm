@@ -144,6 +144,13 @@ account_action_reconcile_duration_seconds = Histogram(
     "Account action reconciliation pass duration",
     buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10],
 )
+# An action that happened on the phone but could not be written to the ledger is
+# a silent audit hole: the step still succeeds, so nothing else surfaces it.
+account_action_record_failed_total = Counter(
+    "device_farm_account_action_record_failed_total",
+    "Ledger writes that failed after the action was already performed",
+    ["context"],
+)
 
 # ── Fleet stats (DF-T-02-013) ──
 fleet_stats_duration_seconds = Histogram(

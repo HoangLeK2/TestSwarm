@@ -24,7 +24,7 @@ import pytest
 
 from core.config import Config
 from runtime.u2_xpath import XPathElementNotFoundError
-from runtime.core.device_client import DeviceClient
+from runtime.core.device_client import DeviceClient, DeviceState
 from runtime.core.watchdog import WatchdogThread
 from runtime.transports.u2_jsonrpc import (
     U2JsonRpcClient,
@@ -469,6 +469,76 @@ class TestDeviceClientHierarchyRecoveryPolicy:
         )]
         d._a11y_query.assert_not_called()
 
+    def test_hierarchy_direct_relay_http_dump_forwards_profile_options(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d._u2_host = "172.16.0.83"
+        d._loop = object()
+        d.ensure_u2_healthy = lambda *args, **kwargs: True  # type: ignore[method-assign]
+        d._a11y_query = Mock(return_value={"ok": False, "error": "accessibility_not_available"})  # type: ignore[method-assign]
+
+        class _Batch:
+            def batch(self, actions, timeout=30.0):
+                raise AssertionError("u2_batch should not be called when direct HTTP dump works")
+
+        class _Relay:
+            def __init__(self):
+                self.calls: list[tuple[str, str, str, float]] = []
+
+            def resolve_serial(self, serial):
+                return "172.16.0.83:5555"
+
+            def relay_for_serial(self, serial):
+                return object()
+
+            async def u2_http(
+                self,
+                serial,
+                method,
+                path,
+                body="",
+                content_type="application/json",
+                timeout=30.0,
+                priority=None,
+                deadline_ms=None,
+            ):
+                self.calls.append((serial, method, path, timeout))
+                return {
+                    "ok": True,
+                    "status": 200,
+                    "body": "<hierarchy><node text=\"HTTP\" /></hierarchy>",
+                    "content_type": "text/xml",
+                }
+
+        relay = _Relay()
+        d._u2_batch = _Batch()
+
+        def run_now(coro, _loop):
+            result = {}
+
+            async def _run():
+                result["value"] = await coro
+
+            import asyncio
+
+            asyncio.run(_run())
+            return Mock(result=lambda timeout=None: result["value"])
+
+        with patch.object(DeviceClient, "_U2_HIERARCHY_ROOT_IN_ACTIVE", True), \
+                patch.object(DeviceClient, "_U2_HIERARCHY_MAX_DEPTH", 24), \
+                patch.object(DeviceClient, "_U2_HIERARCHY_PRETTY", True), \
+                patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay), \
+                patch("runtime.core.device_client.asyncio.run_coroutine_threadsafe", side_effect=run_now):
+            xml = d.hierarchy_xml(force_refresh=True)
+
+        assert xml is not None
+        assert "HTTP" in xml
+        assert relay.calls == [(
+            "172.16.0.83:5555",
+            "GET",
+            "/dump/hierarchy?compressed=1&root_in_active=1&max_depth=24&pretty=1",
+            d._U2_HIERARCHY_TIMEOUT,
+        )]
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # U2 relay selection: current host must beat stale _adb_serial
@@ -694,6 +764,64 @@ class TestDeviceClientU2Recovery:
 
         assert restart_calls == [("172.16.0.83:5555", 60.0)]
         d._agent_send.assert_not_called()
+
+    def test_hierarchy_empty_reply_triggers_relay_restart_u2_without_host(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d._adb_serial = "logical-serial"
+        d._loop = object()
+        d._agent_send = Mock()
+        d._mark_recovery_start = Mock()
+        d._recovery_log = Mock()
+        d._mark_recovery_end = Mock()
+        d._relay_u2_bind_at = time.monotonic() - 60.0
+        relay = _FakeRelay(["logical-serial"])
+        restart_calls = []
+
+        async def restart_u2(serial, timeout=60.0):
+            restart_calls.append((serial, timeout))
+            return True
+
+        relay.restart_u2 = restart_u2
+
+        def run_now(coro, _loop):
+            asyncio.run(coro)
+            return SimpleNamespace()
+
+        with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay), \
+                patch("runtime.core.device_client.asyncio.run_coroutine_threadsafe", side_effect=run_now):
+            d._note_hierarchy_relay_u2_failure("Remote end closed connection without response")
+            assert restart_calls == []
+            d._note_hierarchy_relay_u2_failure("Remote end closed connection without response")
+
+        assert restart_calls == [("logical-serial", 60.0)]
+        d._agent_send.assert_not_called()
+        assert d._hierarchy_last_u2_failure_kind == "hard"
+
+    def test_restart_u2_failure_escalates_to_restart_atx(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d._adb_serial = "logical-serial"
+        d._loop = object()
+        relay = _FakeRelay(["logical-serial"])
+        restart_u2_calls = []
+        restart_atx = Mock()
+        d._trigger_atx_restart_async = restart_atx
+
+        async def restart_u2(serial, timeout=60.0):
+            restart_u2_calls.append((serial, timeout))
+            return False
+
+        relay.restart_u2 = restart_u2
+
+        def run_now(coro, _loop):
+            asyncio.run(coro)
+            return SimpleNamespace()
+
+        with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay), \
+                patch("runtime.core.device_client.asyncio.run_coroutine_threadsafe", side_effect=run_now):
+            assert d._trigger_u2_restart_async("") is True
+
+        assert restart_u2_calls == [("logical-serial", 60.0)]
+        restart_atx.assert_called_once_with("")
 
     def test_atx_502_triggers_u2_restart_not_atx_restart(self):
         d = DeviceClient(serial="logical-serial", index=0, config=Config())
@@ -976,6 +1104,20 @@ class TestWatchdogAtxProbe:
             assert wd._probe_atx_agent_alive(d, "172.16.0.83") is True
 
         connect.assert_not_called()
+
+    def test_ready_agent_probes_relay_atx_even_when_u2_session_missing(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d.state = DeviceState.READY
+        d._agent_send = Mock()
+        d._u2 = None
+        d._has_active_relay = Mock(return_value=True)
+
+        wd = WatchdogThread(manager=Mock(), config=Config())
+        wd._check_atx_agent = Mock()
+
+        wd._check_device(d)
+
+        wd._check_atx_agent.assert_called_once_with(d, "")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

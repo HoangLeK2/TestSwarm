@@ -11,6 +11,7 @@ from fastapi import FastAPI, WebSocket
 from fastapi.testclient import TestClient
 from jose import jwt
 
+from auth.secret_versioning import JwtKeyMaterial
 from db.crud.device import create_device
 from db.models import Organization, User
 from db.models.enums import DeviceFsmEvent, DeviceFsmState
@@ -42,7 +43,10 @@ def _token(user_id: str = USER_ID) -> str:
 @pytest.fixture
 def jwt_patch():
     with (
-        patch("api.auth.context.jwt_secret_key", return_value=_SECRET),
+        patch(
+            "api.auth.context.all_verify_materials",
+            return_value=[JwtKeyMaterial(kid="v1", secret=_SECRET)],
+        ),
         patch("api.auth.context.jwt_algorithm", return_value=_ALG),
     ):
         yield

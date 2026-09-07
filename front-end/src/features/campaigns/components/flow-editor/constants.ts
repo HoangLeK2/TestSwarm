@@ -6,6 +6,7 @@ export const STEP_COLORS: Record<string, string> = {
   tap_position: 'border-l-blue-500',
   tap_image: 'border-l-blue-500',
   tap_selector: 'border-l-blue-500',
+  tap_xml_match: 'border-l-blue-500',
   long_tap_selector: 'border-l-blue-500',
   swipe_ratio: 'border-l-blue-500',
   input_text: 'border-l-cyan-500',
@@ -293,6 +294,7 @@ export const INSERT_MENU_DEF = [
     groupKey: 'actions' as const,
     items: [
       'tap_selector',
+      'tap_xml_match',
       'tap_ratio',
       'tap_position',
       'tap_image',
@@ -445,6 +447,12 @@ export function getStepSummary(step: FlowStep, t?: FlowStepTranslator): string {
       const by = step.selector?.by ?? step.by;
       const val = step.selector?.value ?? step.value;
       return `[${by}] "${val}"`;
+    }
+    case 'tap_xml_match': {
+      const attr = step.attr ?? step.by ?? 'content-desc';
+      const val = step.contains ?? step.equals ?? step.value ?? '';
+      const op = step.equals != null ? '=' : '~';
+      return `[${attr} ${op} "${val}"]`;
     }
     case 'tap_ratio':
       return `(${step.x}, ${step.y})`;
@@ -671,12 +679,19 @@ export function getStepDisplay(
   const pct = (v: number) => `${Math.round(v * 100)}%`;
   switch (step.type) {
     case 'tap_selector':
+    case 'tap_xml_match':
     case 'long_tap_selector':
     case 'wait_element':
     case 'assert_element':
     case 'scroll_to': {
-      const by = step.selector?.by ?? step.by;
-      const val = step.selector?.value ?? step.value;
+      const by =
+        step.type === 'tap_xml_match'
+          ? (step.attr ?? step.by ?? 'content-desc')
+          : (step.selector?.by ?? step.by);
+      const val =
+        step.type === 'tap_xml_match'
+          ? (step.contains ?? step.equals ?? step.value)
+          : (step.selector?.value ?? step.value);
       return { target: val ?? '', selectorBadge: by };
     }
     case 'input_selector': {

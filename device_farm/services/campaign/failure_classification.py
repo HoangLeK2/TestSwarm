@@ -67,6 +67,7 @@ _DEVICE_LOST_MARKERS = (
     "campaigndeviceclaimlosterror",
     "no adb relay",
     "no u2 for serial",
+    "no control channel",
     "device not available",
     "transport endpoint",
     "transport is offline",
@@ -168,6 +169,12 @@ def classify_campaign_failure(
     """Return an operational class for a failed campaign/step result."""
     text = _combined_text(result, message=message, reason_code=reason_code)
     explicit_reason = _norm(reason_code or (result or {}).get("reason_code")) or None
+    if explicit_reason and explicit_reason.lower() == "ok":
+        # Extraction steps default their diagnostic reason_code to "ok"; when
+        # the step later fails, that stale value rode into the DB and produced
+        # 15 failed rows reading reason_code='ok'. A failed step has no reason
+        # code of "ok" — let the classifier name one.
+        explicit_reason = None
     stype = _step_type(result, step_type)
 
     if any(marker in text for marker in _ACCOUNT_BLOCKED_MARKERS):
@@ -237,11 +244,19 @@ def annotate_step_failure(step_result: dict[str, Any], *, step_type: str | None 
     if not isinstance(step_result, dict) or step_result.get("ok", True):
         return step_result
     classified = classify_campaign_failure(step_result, step_type=step_type)
-    step_result["failure_class"] = classified.failure_class
-    step_result["retry_hint"] = classified.retry_hint
-    step_result["operator_summary"] = classified.operator_summary
-    if classified.reason_code:
+    if not _norm(step_result.get("failure_class")):
+        step_result["failure_class"] = classified.failure_class
+    if not _norm(step_result.get("retry_hint")):
+        step_result["retry_hint"] = classified.retry_hint
+    if not _norm(step_result.get("operator_summary")):
+        step_result["operator_summary"] = classified.operator_summary
+    if classified.reason_code and not _norm(step_result.get("reason_code")):
         step_result["reason_code"] = classified.reason_code
+    elif _norm(step_result.get("reason_code")).lower() == "ok":
+        if classified.reason_code:
+            step_result["reason_code"] = classified.reason_code
+        else:
+            step_result.pop("reason_code", None)
     if classified.retryable and step_result.get("retryable") is None:
         step_result["retryable"] = True
     return step_result

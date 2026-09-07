@@ -23,6 +23,17 @@ log = logging.getLogger("agent_control")
 # Global singleton — set by grpc_relay_server.start_grpc_server()
 _servicer: Optional["AgentControlServicer"] = None
 
+# Register callbacks return the relay_id to use, "" to refuse. This third value
+# separates "admin turned this agent off" from "bad credentials" so the agent
+# can back off instead of hammering a door that will not open today.
+REGISTER_REFUSED_DISABLED = "\x00disabled"
+
+
+def _suspensions():
+    from .agent_suspension import get_agent_suspension_registry
+
+    return get_agent_suspension_registry()
+
 
 def get_control_servicer() -> Optional["AgentControlServicer"]:
     return _servicer
@@ -77,6 +88,10 @@ class ControlConnection:
         finally:
             self._pending.pop(msg_id, None)
 
+    def close(self) -> None:
+        """End the sender loop; the stream teardown then runs its normal path."""
+        self._q.put_nowait(None)
+
     def resolve(self, result_msg) -> None:
         fut = self._pending.get(result_msg.msg_id)
         if fut and not fut.done():
@@ -100,6 +115,8 @@ class AgentControlServicer:
     def __init__(self) -> None:
         self._conns: dict[str, ControlConnection] = {}   # relay_id → conn
         self._serial_index: dict[str, str] = {}           # serial → relay_id
+        # Parked connections: alive, acked, and invisible to every lookup above.
+        self._suspended: dict[str, ControlConnection] = {}
 
         self._on_register:  Optional[Callable] = None
         self._on_heartbeat: Optional[Callable] = None
@@ -127,51 +144,87 @@ class AgentControlServicer:
 
                     if kind == "register":
                         r = msg.register
-                        candidate_relay_id = r.relay_id or f"ctrl-{uuid.uuid4().hex[:8]}"
+                        # Identity is the server's to issue: the agent proposes,
+                        # the register callback disposes. No local id generation.
+                        assigned = r.relay_id
                         if self._on_register:
-                            accepted = await _call_register_callback(self._on_register, {
-                                "relay_id": candidate_relay_id,
+                            assigned = await _call_register_callback(self._on_register, {
+                                "relay_id": r.relay_id,
                                 "hostname": r.hostname,
                                 "ip":       r.ip,
                                 "version":  r.agent_version,
                                 "serials":  list(r.serials),
                                 "enrollment_token": enrollment_token,
                             })
-                            if not accepted:
-                                log.warning(
-                                    "control channel rejected: relay_id=%s host=%s ip=%s",
-                                    candidate_relay_id, r.hostname, r.ip,
-                                )
-                                await context.abort(
-                                    grpc.StatusCode.PERMISSION_DENIED,
-                                    "invalid or missing relay enrollment token",
-                                )
-                                return
+                        if assigned == REGISTER_REFUSED_DISABLED:
+                            # Distinct from a bad token: the agent is enrolled and
+                            # correct, an admin turned it off. Saying "invalid
+                            # token" sent operators hunting a credential problem
+                            # that did not exist.
+                            log.warning(
+                                "control channel refused: agent %s is disabled",
+                                r.relay_id,
+                            )
+                            await context.abort(
+                                grpc.StatusCode.FAILED_PRECONDITION,
+                                "relay agent disabled by admin",
+                            )
+                            return
+                        if not assigned:
+                            log.warning(
+                                "control channel rejected: relay_id=%s host=%s ip=%s",
+                                r.relay_id, r.hostname, r.ip,
+                            )
+                            await context.abort(
+                                grpc.StatusCode.PERMISSION_DENIED,
+                                "invalid or missing relay enrollment token",
+                            )
+                            return
 
-                        relay_id = candidate_relay_id
+                        relay_id = assigned
                         conn = ControlConnection(relay_id, send_q)
                         conn.serials = set(r.serials)
-                        self._conns[relay_id] = conn
-                        for s in r.serials:
-                            self._serial_index[s] = relay_id
+                        if _suspensions().is_relay_suspended(relay_id):
+                            # Park it: acked so the agent stops reconnecting, but
+                            # absent from _conns/_serial_index so nothing routes.
+                            self._suspended[relay_id] = conn
+                            log.info(
+                                "control channel parked (agent disabled): relay_id=%s "
+                                "host=%s serials=%d",
+                                relay_id, r.hostname, len(r.serials),
+                            )
+                        else:
+                            self._conns[relay_id] = conn
+                            for s in r.serials:
+                                self._serial_index[s] = relay_id
+                            log.info(
+                                "control channel registered: relay_id=%s host=%s ip=%s serials=%d",
+                                relay_id, r.hostname, r.ip, len(r.serials),
+                            )
 
                         await send_q.put(relay_pb2.ServerControlMsg(
                             ack=relay_pb2.RegisterAck(
-                                message=f"control channel registered {len(r.serials)} serials"
+                                message=f"control channel registered {len(r.serials)} serials",
+                                relay_id=relay_id,
                             )
                         ))
-                        log.info("control channel registered: relay_id=%s host=%s ip=%s serials=%d",
-                                 relay_id, r.hostname, r.ip, len(r.serials))
 
                     elif kind == "heartbeat" and conn is not None:
                         h = msg.heartbeat
                         new_serials = set(h.serials)
                         old_serials = set(conn.serials)
-                        for s in old_serials - new_serials:
-                            self._serial_index.pop(s, None)
-                        for s in new_serials:
-                            self._serial_index[s] = relay_id
                         conn.serials = new_serials
+                        if relay_id in self._suspended:
+                            # Never index a parked agent — but do keep persisting
+                            # its heartbeat below. The row stays truthful about
+                            # what the host still reports, which is what the
+                            # media plane and the resume path both read.
+                            pass
+                        else:
+                            for s in old_serials - new_serials:
+                                self._serial_index.pop(s, None)
+                            for s in new_serials:
+                                self._serial_index[s] = relay_id
 
                         if self._on_heartbeat:
                             asyncio.create_task(_safe(self._on_heartbeat({
@@ -184,6 +237,7 @@ class AgentControlServicer:
 
             finally:
                 if relay_id:
+                    self._suspended.pop(relay_id, None)
                     self._conns.pop(relay_id, None)
                     for s in set(conn.serials) if conn is not None else ():
                         self._serial_index.pop(s, None)
@@ -231,6 +285,62 @@ class AgentControlServicer:
 
     def online_relay_ids(self) -> list[str]:
         return list(self._conns.keys())
+
+    def suspend(self, relay_id: str) -> bool:
+        """Park a live control stream: keep the socket, drop it from routing.
+
+        Kicking worked but made re-enabling wait for the agent's own reconnect,
+        and every reconnect attempt in between wrote log lines on both sides.
+        """
+        conn = self._conns.pop(relay_id, None)
+        if conn is None:
+            return relay_id in self._suspended
+        for serial in list(self._serial_index):
+            if self._serial_index.get(serial) == relay_id:
+                self._serial_index.pop(serial, None)
+        self._suspended[relay_id] = conn
+        log.info("control channel parked by admin: relay_id=%s", relay_id)
+        return True
+
+    def resume(self, relay_id: str) -> bool:
+        """Put a parked stream back into routing — no reconnect needed."""
+        conn = self._suspended.pop(relay_id, None)
+        if conn is None:
+            return False
+        self._conns[relay_id] = conn
+        for serial in conn.serials:
+            text = str(serial or "").strip()
+            if text and not text.startswith("pending-"):
+                self._serial_index[text] = relay_id
+        log.info(
+            "control channel resumed by admin: relay_id=%s serials=%d",
+            relay_id,
+            len(conn.serials),
+        )
+        return True
+
+    def suspended_relay_ids(self) -> list[str]:
+        return list(self._suspended.keys())
+
+    def kick(self, relay_id: str) -> bool:
+        """Close a live control stream now. Returns False if it was not connected.
+
+        Without this, disabling an agent only took effect at its next reconnect,
+        so the phones stayed drivable for whichever workspace they were on.
+        """
+        conn = self._conns.pop(relay_id, None)
+        if conn is None:
+            return False
+        for serial in list(self._serial_index):
+            if self._serial_index.get(serial) == relay_id:
+                self._serial_index.pop(serial, None)
+        try:
+            conn.close()
+        except Exception as exc:  # pragma: no cover - defensive
+            log.warning("kick relay_id=%s failed to close queue: %s", relay_id, exc)
+            return False
+        log.info("control channel kicked by admin: relay_id=%s", relay_id)
+        return True
 
     async def bootstrap(self, serial: str, timeout: float = 180.0) -> dict:
         return await self._send(serial, "bootstrap", timeout)
@@ -300,10 +410,15 @@ def _metadata_value(context, key: str) -> str:
     return ""
 
 
-async def _call_register_callback(callback, payload: dict) -> bool:
+async def _call_register_callback(callback, payload: dict) -> str:
+    """Return the server-issued relay_id; "" means the registration was refused."""
     try:
         result = await asyncio.wait_for(callback(payload), timeout=5.0)
     except Exception as exc:
         log.warning("control register callback failed: %s", exc)
-        return False
-    return result is not False
+        return ""
+    if result is False:
+        return ""
+    if result is True or result is None:
+        return str(payload.get("relay_id", ""))
+    return str(result or "")

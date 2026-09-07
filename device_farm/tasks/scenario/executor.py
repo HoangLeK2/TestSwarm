@@ -10,6 +10,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, TYPE_CHECKING
 
 from services.execution.step_runner import execute_step_with_retry
+from services.execution.trace_context import (
+    TRACE_CONTEXT_KEY,
+    step_trace_from_context,
+    trace_from_runtime_context,
+)
 
 
 if TYPE_CHECKING:
@@ -271,6 +276,32 @@ class ScenarioExecutor:
                 "context": sc.ctx,
             }
 
+        if sc.scenario.get("capability_preflight", True) is not False:
+            from services.scenario_node_preflight import preflight_scenario_node_capabilities
+
+            preflight = preflight_scenario_node_capabilities(sc.device, sc.scenario)
+            if not preflight.ok:
+                payload = preflight.to_dict()
+                message = preflight.message
+                log.warning("[%s] %s", sc.serial, message)
+                return {
+                    "serial": sc.serial,
+                    "success": False,
+                    "steps_executed": 0,
+                    "step_results": [
+                        {
+                            "index": -1,
+                            "type": "capability_preflight",
+                            "ok": False,
+                            "message": message,
+                            "capability_preflight": payload,
+                            "reason_code": "NODE_CAPABILITY_UNAVAILABLE",
+                        }
+                    ],
+                    "failed_message": message,
+                    "context": sc.ctx,
+                }
+
         if sc.visual_anchor_enabled:
             log.info(f"[{sc.serial}] Visual Anchoring ON (SSIM≥{sc.va_ssim_threshold}, image≥{sc.va_image_threshold})")
         if sc.capture_enabled and sc.capture_dir:
@@ -310,6 +341,25 @@ class ScenarioExecutor:
                 step_index=idx,
             )
             t = step.get("type")
+            parent_trace = trace_from_runtime_context(sc.ctx)
+            step_trace_context = step_trace_from_context(sc.ctx, step=step, step_index=idx)
+            step_trace = trace_from_runtime_context(step_trace_context)
+            step["_scenario_parent_trace"] = parent_trace
+            step.update(
+                {
+                    key: value
+                    for key, value in step_trace.items()
+                    if key in {
+                        "step_path",
+                        "loop_iter",
+                        "loop_id",
+                        "branch",
+                        "step_id",
+                        "step_type",
+                        "depth",
+                    }
+                }
+            )
             trace_log.info(
                 "step_start",
                 trace_id=sc.trace_id,
@@ -324,9 +374,21 @@ class ScenarioExecutor:
 
             step_start_t = time.monotonic()
             step_started_at = datetime.now(timezone.utc)
-            step_result, attempts_used = execute_step_with_retry(
-                sc, step, idx, trace_log=trace_log,
-            )
+            sc.ctx[TRACE_CONTEXT_KEY] = step_trace
+            try:
+                step_result, attempts_used = execute_step_with_retry(
+                    sc, step, idx, trace_log=trace_log,
+                )
+            finally:
+                if parent_trace:
+                    sc.ctx[TRACE_CONTEXT_KEY] = parent_trace
+                else:
+                    sc.ctx.pop(TRACE_CONTEXT_KEY, None)
+            step_result.setdefault("trace", step_trace)
+            if step_trace.get("step_path") is not None:
+                step_result.setdefault("step_path", step_trace.get("step_path"))
+            if step_trace.get("loop_iter") is not None:
+                step_result.setdefault("loop_iter", step_trace.get("loop_iter"))
             step_dur_ms = (time.monotonic() - step_start_t) * 1000.0
             step_ended_at = datetime.now(timezone.utc)
             trace_log.info(

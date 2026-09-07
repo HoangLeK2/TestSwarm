@@ -29,6 +29,24 @@ Design rules:
 from copy import deepcopy
 from typing import Any, Dict, List
 
+
+def _authored(id_prefix: str | None, name: str, step: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach a stable authored id, but only for callers that opted in.
+
+    Shared step builders are used by templates that were authored before nested
+    ids were required, and some of their tests compare whole step dicts. Passing
+    no ``id_prefix`` returns the step untouched, so hardening one template never
+    rewrites the others.
+
+    The id is written from the step's role, never from its position: inserting a
+    step above must not renumber the ones below it. The durable account-action
+    ledger keys a claim by step id, so a shifting id silently splits one action's
+    history into two.
+    """
+    if not id_prefix:
+        return step
+    return {"id": f"{id_prefix}_{name}", **step}
+
 # entity=posts: mở chi tiết bài trước extract; back do kịch bản điều khiển (không auto trong agent).
 _FB_POST_OPEN_EXTRACT: Dict[str, Any] = {
     "open_post_before_extract": True,
@@ -128,130 +146,165 @@ def _fb_open_search_tab_steps(
     tab_vi: str,
     tab_en: str,
     tab_description_contains: str,
+    id_prefix: str | None = None,
 ) -> List[Dict[str, Any]]:
     """Search Facebook and switch to a result tab without selecting a row."""
     return [
-        {
+        _authored(id_prefix, "search_open", {
             "type": "if_element",
             "by": "content-desc",
             "value": "Tìm kiếm",
             "timeout": 5,
             "then": [
-                {
+                _authored(id_prefix, "search_open_tap", {
                     "type": "tap_selector",
                     "by": "content-desc",
                     "value": "Tìm kiếm",
                     "timeout": 4,
-                },
+                }),
             ],
-            "else": [{"type": "tap_ratio", "x": 0.87, "y": 0.035}],
-        },
-        {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
-        {
+            "else": [
+                _authored(
+                    id_prefix,
+                    "search_open_fallback_tap",
+                    {"type": "tap_ratio", "x": 0.87, "y": 0.035},
+                )
+            ],
+        }),
+        _authored(
+            id_prefix,
+            "search_ready",
+            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+        ),
+        _authored(id_prefix, "search_input", {
             "type": "input_text",
             "text": f"${{{search_var}}}",
             "via": "u2",
             "clear_first": True,
-        },
-        {"type": "wait", "seconds": 1},
-        {"type": "key", "key": "enter"},
-        {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-        {
+        }),
+        _authored(
+            id_prefix, "search_input_settle", {"type": "wait", "seconds": 1}
+        ),
+        _authored(id_prefix, "search_submit", {"type": "key", "key": "enter"}),
+        _authored(
+            id_prefix,
+            "search_results_ready",
+            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+        ),
+        _authored(id_prefix, "tab_by_description", {
             "type": "if_element",
             "by": "descriptionContains",
             "value": tab_description_contains,
             "timeout": 5,
             "then": [
-                {
+                _authored(id_prefix, "tab_by_description_tap", {
                     "type": "tap_selector",
                     "by": "descriptionContains",
                     "value": tab_description_contains,
                     "timeout": 4,
                     "ignore_error": True,
-                },
+                }),
             ],
             "else": [
-                {
+                _authored(id_prefix, "tab_by_vi_label", {
                     "type": "if_element",
                     "by": "content-desc",
                     "value": tab_vi,
                     "timeout": 3,
                     "then": [
-                        {
+                        _authored(id_prefix, "tab_by_vi_label_tap", {
                             "type": "tap_selector",
                             "by": "text",
                             "value": tab_vi,
                             "timeout": 3,
                             "ignore_error": True,
-                        },
+                        }),
                     ],
                     "else": [
-                        {
+                        _authored(id_prefix, "tab_by_en_label_tap", {
                             "type": "tap_selector",
                             "by": "text",
                             "value": tab_en,
                             "timeout": 3,
                             "ignore_error": True,
-                        }
+                        })
                     ],
-                }
+                })
             ],
-        },
-        {
+        }),
+        _authored(id_prefix, "tab_selected_check", {
             "type": "if_element",
             "by": "text",
             "value": tab_vi,
             "timeout": 1,
-            "then": [{"type": "wait", "seconds": 0.1}],
+            "then": [
+                _authored(
+                    id_prefix,
+                    "tab_selected_settle",
+                    {"type": "wait", "seconds": 0.1},
+                )
+            ],
             "else": [
                 # Facebook search tabs are horizontally scrollable; Page/Trang
                 # can sit off-screen after All/Posts/Groups/Events.
-                {"type": "swipe_ratio", "x1": 0.86, "y1": 0.16, "x2": 0.22, "y2": 0.16, "duration_ms": 260},
-                {"type": "wait", "seconds": 0.35},
-                {
+                _authored(
+                    id_prefix,
+                    "tab_strip_swipe",
+                    {"type": "swipe_ratio", "x1": 0.86, "y1": 0.16, "x2": 0.22, "y2": 0.16, "duration_ms": 260},
+                ),
+                _authored(
+                    id_prefix,
+                    "tab_strip_swipe_settle",
+                    {"type": "wait", "seconds": 0.35},
+                ),
+                _authored(id_prefix, "tab_by_description_retry", {
                     "type": "if_element",
                     "by": "descriptionContains",
                     "value": tab_description_contains,
                     "timeout": 2,
                     "then": [
-                        {
+                        _authored(id_prefix, "tab_by_description_retry_tap", {
                             "type": "tap_selector",
                             "by": "descriptionContains",
                             "value": tab_description_contains,
                             "timeout": 2,
                             "ignore_error": True,
-                        }
+                        })
                     ],
                     "else": [
-                        {
+                        _authored(id_prefix, "tab_by_vi_label_retry", {
                             "type": "if_element",
                             "by": "text",
                             "value": tab_vi,
                             "timeout": 2,
                             "then": [
-                                {
+                                _authored(id_prefix, "tab_by_vi_label_retry_tap", {
                                     "type": "tap_selector",
                                     "by": "text",
                                     "value": tab_vi,
                                     "timeout": 2,
                                     "ignore_error": True,
-                                }
+                                })
                             ],
                             "else": [
-                                {
+                                _authored(id_prefix, "tab_by_en_label_retry_tap", {
                                     "type": "tap_selector",
                                     "by": "text",
                                     "value": tab_en,
                                     "timeout": 2,
                                     "ignore_error": True,
-                                }
+                                })
                             ],
-                        }
+                        })
                     ],
-                },
+                }),
             ],
-        },
-        {"type": "wait_stable", "timeout": 2, "stable_duration": 0.45},
+        }),
+        _authored(
+            id_prefix,
+            "tab_settled",
+            {"type": "wait_stable", "timeout": 2, "stable_duration": 0.45},
+        ),
     ]
 
 
@@ -283,13 +336,31 @@ def _fb_return_to_feed_steps(prefix: str) -> List[Dict[str, Any]]:
                 "value": "Trang chủ",
                 "timeout": 2,
                 "then": [],
+                # Child ids stay outside the `{prefix}_return_to_feed_` namespace
+                # on purpose: that prefix names the guards, and the bound "at
+                # most 3 Backs" is asserted by counting them.
                 "else": [
-                    {"type": "key", "key": "back"},
-                    {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+                    {
+                        "id": f"{prefix}_feed_back_{attempt}",
+                        "type": "key",
+                        "key": "back",
+                    },
+                    {
+                        "id": f"{prefix}_feed_back_settle_{attempt}",
+                        "type": "wait_stable",
+                        "timeout": 4,
+                        "stable_duration": 0.4,
+                    },
                 ],
             }
         )
-    step.append({"type": "dismiss_popup", "retries": 1})
+    step.append(
+        {
+            "id": f"{prefix}_feed_dismiss_popup",
+            "type": "dismiss_popup",
+            "retries": 1,
+        }
+    )
     return step
 
 
@@ -335,6 +406,7 @@ def _fb_commenter_connect_steps(
             "equals": True,
             "then": [
                 {
+                    "id": f"{prefix}_connect_enabled_{action_index}",
                     "type": "if_variable",
                     "name": "ENABLE_CONNECTION_REQUEST",
                     "equals": True,
@@ -367,8 +439,17 @@ def _fb_commenter_connect_steps(
             "name": "COMMENTER_PROFILE_OPENED",
             "equals": True,
             "then": [
-                {"type": "key", "key": "back"},
-                {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+                {
+                    "id": f"{prefix}_back_{action_index}_key",
+                    "type": "key",
+                    "key": "back",
+                },
+                {
+                    "id": f"{prefix}_back_{action_index}_settle",
+                    "type": "wait_stable",
+                    "timeout": 4,
+                    "stable_duration": 0.4,
+                },
             ],
             "else": [],
         },
@@ -378,8 +459,17 @@ def _fb_commenter_connect_steps(
             "name": "COMMENT_SHEET_OPENED",
             "equals": True,
             "then": [
-                {"type": "key", "key": "back"},
-                {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+                {
+                    "id": f"{prefix}_close_comments_{action_index}_key",
+                    "type": "key",
+                    "key": "back",
+                },
+                {
+                    "id": f"{prefix}_close_comments_{action_index}_settle",
+                    "type": "wait_stable",
+                    "timeout": 4,
+                    "stable_duration": 0.4,
+                },
             ],
             "else": [],
         },
@@ -772,15 +862,26 @@ def _fb_follow_current_page_steps() -> List[Dict[str, Any]]:
     ]
 
 
-def _fb_back_to_page_search_before_next_page_steps() -> List[Dict[str, Any]]:
+def _fb_back_to_page_search_before_next_page_steps(
+    *,
+    id_prefix: str | None = None,
+) -> List[Dict[str, Any]]:
     return [
         {
             "id": "back_to_page_search_before_next_page",
             "type": "key",
             "key": "back",
         },
-        {"type": "wait_stable", "timeout": 4, "stable_duration": 0.5},
-        {"type": "dismiss_popup", "retries": 1},
+        _authored(
+            id_prefix,
+            "back_to_search_settle",
+            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.5},
+        ),
+        _authored(
+            id_prefix,
+            "back_to_search_dismiss",
+            {"type": "dismiss_popup", "retries": 1},
+        ),
     ]
 
 
@@ -1960,7 +2061,13 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                     },
                     {"id": "home_post_author_finish", "type": "key", "key": "home"},
                 ],
-                "else": [{"type": "wait", "seconds": 0.1}],
+                "else": [
+                    {
+                        "id": "home_post_session_not_ready",
+                        "type": "wait",
+                        "seconds": 0.1,
+                    }
+                ],
             },
         ],
     },
@@ -2041,12 +2148,14 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                             # the previous iteration happened to stop.
                             *_fb_return_to_feed_steps("seed_friends"),
                             {
+                                "id": "seed_friends_pick_group_search",
                                 "type": "set_variable",
                                 "name": "GROUP_SEARCH_CURRENT",
                                 "from_list": "${GROUP_SEARCHES}",
                                 "from_list_index": "${GROUP_INDEX}",
                             },
                             {
+                                "id": "seed_friends_pick_group_row_text",
                                 "type": "set_variable",
                                 "name": "GROUP_ROW_TEXT_CURRENT",
                                 "from_list": "${GROUP_ROW_TEXTS}",
@@ -2057,15 +2166,22 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                 tab_vi="Nhóm",
                                 tab_en="Groups",
                                 tab_description_contains="tab Nhóm",
+                                id_prefix="seed_friends",
                             ),
                             {
+                                "id": "seed_friends_open_group_row",
                                 "type": "tap_xml_match",
                                 "attr": "content-desc",
                                 "contains": "${GROUP_ROW_TEXT_CURRENT}",
                                 "clickable": True,
                                 "timeout": 10,
                             },
-                            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+                            {
+                                "id": "seed_friends_group_ready",
+                                "type": "wait_stable",
+                                "timeout": 6,
+                                "stable_duration": 0.5,
+                            },
                             # Tham gia nếu chưa là thành viên. Đã vào rồi thì
                             # community_membership tự nhận trạng thái và bỏ qua.
                             {
@@ -2125,6 +2241,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                         "else": [],
                                     },
                                     {
+                                        "id": "seed_friends_scroll_next_batch",
                                         "type": "scroll_down",
                                         "repeats": 1,
                                         "start_x_ratio": "${SCROLL_X_RATIO}",
@@ -2133,12 +2250,20 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                     },
                                 ],
                             },
-                            *_fb_back_to_page_search_before_next_page_steps(),
+                            *_fb_back_to_page_search_before_next_page_steps(
+                                id_prefix="seed_friends",
+                            ),
                         ],
                     },
                     {"id": "seed_friends_finish", "type": "key", "key": "home"},
                 ],
-                "else": [{"type": "wait", "seconds": 0.1}],
+                "else": [
+                    {
+                        "id": "seed_friends_session_not_ready",
+                        "type": "wait",
+                        "seconds": 0.1,
+                    }
+                ],
             },
         ],
     },
@@ -2977,6 +3102,22 @@ def _graph_mirror_from_steps(steps: list) -> tuple[list, list]:
     return nodes, edges
 
 
+def _seedable_steps(steps: list) -> list:
+    """Steps as they should land in the DB: every authored step carrying an id.
+
+    Templates are authored by hand here, and nothing in this file mints ids —
+    that only ever happened in the flow editor. The seeded row is what a
+    campaign actually runs, and the durable ledger refuses a claim from a step
+    with no id, so the fill happens on the way to the database.
+
+    The returned list is new; the module-level spec is left exactly as written
+    so a template's authored ids remain the ones a reader sees in code.
+    """
+    from services.scenario_dsl.step_tree import assign_missing_step_ids
+
+    return assign_missing_step_ids(list(steps or []))
+
+
 async def repair_builtin_templates_to_sequence(db) -> int:
     """
     Sync builtin templates: steps are canonical; nodes/edges are a derived graph mirror.
@@ -3029,6 +3170,7 @@ async def repair_builtin_templates_to_sequence(db) -> int:
                 )
             continue
 
+        new_steps = _seedable_steps(new_steps)
         graph_nodes, graph_edges = _graph_mirror_from_steps(new_steps)
         updates: Dict[str, Any] = {
             "steps": new_steps,
@@ -3069,6 +3211,7 @@ async def seed_builtin_templates(db) -> int:
         raw_steps = spec.get("steps", [])
         if not raw_steps:
             continue
+        raw_steps = _seedable_steps(raw_steps)
         graph_nodes, graph_edges = _graph_mirror_from_steps(raw_steps)
         existing = await get_template_by_name(db, spec["name"])
         if existing is None:

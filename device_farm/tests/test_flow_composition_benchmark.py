@@ -11,6 +11,7 @@ from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from typing import Any, Dict, Optional
 
 from tasks.scenario_task import run_scenario_task
+from services.execution.trace_context import push_step_path
 from tests.perf_assertions import assert_p95, perf_budget, percentile
 
 
@@ -128,6 +129,44 @@ def _campaign_flow_scenario(
     )
 
 
+def _traceability_loop_branch_scenario(loop_count: int) -> dict[str, Any]:
+    return _scenario(
+        {
+            "variables": {"READY": True},
+            "steps": [
+                {
+                    "id": "outer_gate",
+                    "type": "if_variable",
+                    "name": "READY",
+                    "then": [
+                        {
+                            "id": "cycle",
+                            "type": "loop",
+                            "count": loop_count,
+                            "loop_var": "ITER",
+                            "steps": [
+                                {
+                                    "id": "inner_gate",
+                                    "type": "if_variable",
+                                    "name": "READY",
+                                    "then": [
+                                        {
+                                            "id": "mark_iter",
+                                            "type": "set_variable",
+                                            "name": "LAST_ITER",
+                                            "value": "${ITER}",
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+
 def _assert_campaign_flow_result(
     result: dict[str, Any],
     scenario_names: list[str],
@@ -167,6 +206,62 @@ def _bench(label: str, scenario: dict[str, Any], *, iterations: int) -> list[flo
     p95 = percentile(samples_ms, 0.95)
     print(f"\n[flow-composition-bench] {label} n={iterations} avg={avg:.2f}ms p95={p95:.2f}ms")
     return samples_ms
+
+
+def test_step_path_builder_benchmark() -> None:
+    samples_ms: list[float] = []
+    for _ in range(30):
+        ctx: dict[str, Any] = {}
+        started = time.perf_counter()
+        for idx in range(1000):
+            ctx = push_step_path(
+                ctx,
+                step_id=f"node_{idx}",
+                loop_iter=idx,
+                step_type="loop",
+                step_index=idx,
+            )
+        samples_ms.append((time.perf_counter() - started) * 1000.0)
+        assert "node_999#999" in ctx["__scenario_trace__"]["step_path"]
+
+    print(
+        "\n[flow-composition-bench] trace step_path builder "
+        f"batches=30 batch_size=1000 avg={statistics.mean(samples_ms):.2f}ms "
+        f"p95={percentile(samples_ms, 0.95):.2f}ms"
+    )
+    assert_p95(
+        samples_ms,
+        perf_budget("SCENARIO_TRACE_CONTEXT_1000_PUSH_P95_MS_BUDGET", 25.0),
+        label="scenario_trace_context_1000_push",
+    )
+
+
+def test_traceability_loop_branch_benchmark() -> None:
+    loop_count = 40
+    samples = _bench(
+        f"traceability if -> loop({loop_count}) -> if -> set_variable",
+        _traceability_loop_branch_scenario(loop_count),
+        iterations=20,
+    )
+    with _quiet_runtime_output():
+        result = run_scenario_task(
+            _MockDevice(),
+            _traceability_loop_branch_scenario(loop_count),
+        )
+    leaf = (
+        result["step_results"][0]["sub_result"]["step_results"][0]
+        ["sub_results"][-1]["result"]["step_results"][0]
+        ["sub_result"]["step_results"][0]
+    )
+    assert leaf["step_path"] == "outer_gate.then/cycle#39/inner_gate.then/mark_iter"
+    assert leaf["trace"]["loop_iter"] == 39
+    assert leaf["trace"]["loop_id"] == "cycle"
+    assert leaf["trace"]["branch"] == "then"
+    assert_p95(
+        samples,
+        perf_budget("SCENARIO_TRACEABILITY_LOOP_BRANCH_P95_MS_BUDGET", 220.0),
+        label="scenario_traceability_loop_branch",
+    )
 
 
 def test_main_scenario_only_benchmark() -> None:

@@ -335,6 +335,11 @@ def _dump_action(
         action["max_depth"] = _int_context(context, max_depth_key, 50, 1, 100)
     elif context.get("hierarchy_max_depth") is not None:
         action["max_depth"] = _int_context(context, "hierarchy_max_depth", 50, 1, 100)
+    root_key = f"hierarchy_{normalized_profile}_root_in_active"
+    if context.get(root_key) is not None:
+        action["root_in_active"] = _bool_context(context, root_key, False)
+    elif context.get("hierarchy_root_in_active") is not None:
+        action["root_in_active"] = _bool_context(context, "hierarchy_root_in_active", False)
     if context.get("hierarchy_pretty") is not None:
         action["pretty"] = _bool_context(context, "hierarchy_pretty", False)
     action["profile"] = normalized_profile

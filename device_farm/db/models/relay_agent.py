@@ -16,6 +16,9 @@ class RelayAgent(TenantScopedModel, Base):
 
     id:       Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     relay_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    # Display name: set once from the activation code, then owned by the admin.
+    # The agent never writes it — hostname is a diagnostic field, not identity.
+    name:     Mapped[str] = mapped_column(String(255), default="", nullable=False)
     hostname: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     ip:       Mapped[str] = mapped_column(String(64),  default="", nullable=False)
     version:  Mapped[str] = mapped_column(String(32),  default="", nullable=False)

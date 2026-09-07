@@ -1,22 +1,43 @@
 export type SocialActionOption = {
   value: string;
-  label: string;
 };
+
+export type SocialActionFacets = Record<string, string | string[] | undefined>;
 
 const SOCIAL_ACTION_OPTIONS: Record<string, SocialActionOption[]> = {
   content_interaction: [
-    { value: 'like', label: 'Thích bài viết' },
-    { value: 'comment', label: 'Bình luận' },
-    { value: 'share', label: 'Chia sẻ' }
+    { value: 'like' },
+    { value: 'comment' },
+    { value: 'share' }
   ],
-  connection_request: [{ value: 'request', label: 'Gửi lời mời kết bạn' }],
-  community_membership: [{ value: 'join', label: 'Tham gia nhóm' }]
+  connection_request: [{ value: 'request' }],
+  community_membership: [{ value: 'join' }]
 };
 
-export function getSocialActionOptions(type: string): SocialActionOption[] {
-  return SOCIAL_ACTION_OPTIONS[type] ?? [];
+function facetList(value: string | string[] | undefined): string[] {
+  if (Array.isArray(value))
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  return String(value ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
-export function defaultSocialAction(type: string): string {
-  return getSocialActionOptions(type)[0]?.value ?? '';
+export function getSocialActionOptions(
+  type: string,
+  facets?: SocialActionFacets
+): SocialActionOption[] {
+  const fallback = SOCIAL_ACTION_OPTIONS[type] ?? [];
+  if (type !== 'content_interaction') return fallback;
+
+  const supportedValues = new Set(facetList(facets?.content_actions));
+  if (supportedValues.size === 0) return fallback;
+  return fallback.filter((option) => supportedValues.has(option.value));
+}
+
+export function defaultSocialAction(
+  type: string,
+  facets?: SocialActionFacets
+): string {
+  return getSocialActionOptions(type, facets)[0]?.value ?? '';
 }

@@ -307,6 +307,10 @@ export type WorkflowProgress = {
   current_step: number;
   total_steps: number;
   current_step_type: string;
+  current_step_id?: string | null;
+  current_step_path?: string | null;
+  current_loop_iter?: number | null;
+  reason_code?: string | null;
   loop_iteration: number | null;
   message: string;
   device_serial: string;
@@ -314,6 +318,33 @@ export type WorkflowProgress = {
   current_step_started_at?: string | null;
   current_step_elapsed_ms?: number;
   running_step?: boolean;
+  current_activity_id?: string | null;
+  current_step_activity_id?: string | null;
+  current_phase?: string | null;
+  side_effect_class?: string | null;
+  activity_attempt?: number;
+  activity_state?: string | null;
+  stalled_reason?: string | null;
+  stalled_after_ms?: number;
+  stalled_threshold_ms?: number | null;
+  activity_retrying?: boolean;
+};
+
+export type TemporalActivityEventSummary = {
+  event_type: string;
+  state: 'scheduled' | 'retrying' | 'completed' | 'failed' | 'stalled';
+  activity_id?: string | null;
+  step_activity_id?: string | null;
+  side_effect_class?: string | null;
+  activity_attempt?: number | null;
+  phase?: string | null;
+  duration_ms?: number | null;
+  stalled_reason?: string | null;
+  reason_code?: string | null;
+  message?: string | null;
+  occurred_at?: string | null;
+  ok?: boolean | null;
+  batch_size?: number | null;
 };
 
 export type StepLogEntry = {
@@ -330,9 +361,16 @@ export type StepLogEntry = {
   exit_code?: number | null;
   save_as?: string | null;
   output_truncated?: boolean;
+  step_path?: string | null;
+  loop_id?: string | null;
+  loop_iter?: number | null;
+  branch?: string | null;
+  reason_code?: string | null;
+  evidence?: Record<string, unknown>;
   details?: Record<string, unknown>;
   trace?: Record<string, unknown>;
   incidents?: IncidentEvent[];
+  temporal_activity_events?: TemporalActivityEventSummary[];
 };
 
 export type IncidentEvent = {

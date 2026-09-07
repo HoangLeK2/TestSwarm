@@ -82,6 +82,7 @@ def test_parse_budget_hour():
 @pytest.mark.asyncio
 async def test_login_rate_limit_blocks_after_budget(session_factory, monkeypatch):
     monkeypatch.setenv("SECRET_KEY", "test-secret-phase3")
+    monkeypatch.setattr("rate_limit.store.time.time", lambda: 1_700_000_000.0)
     clear_jwt_cache()
     app = _build_auth_app(session_factory)
     transport = ASGITransport(app=app)

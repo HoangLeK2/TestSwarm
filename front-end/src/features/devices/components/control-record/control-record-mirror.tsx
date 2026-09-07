@@ -33,7 +33,7 @@ type Props = {
   canTakeControl?: boolean;
   onTakeControl?: () => void;
   /** Mirror scale in multi-phone layouts. */
-  mirrorSize?: 'default' | 'multiCompact' | 'multiFocus';
+  mirrorSize?: 'default' | 'workbench' | 'multiCompact' | 'multiFocus';
   deviceOps?: DeviceOpsConfig;
   /** Receives a grabber for the on-screen frame (tap_image template cropping). */
   captureFrameRef?: MutableRefObject<(() => string | null) | null>;
@@ -157,7 +157,7 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
       : mirrorSize === 'multiCompact'
         ? 252
         : 286;
-  const compactPadding = mirrorSize !== 'default';
+  const compactPadding = mirrorSize !== 'default' && mirrorSize !== 'workbench';
   const compactOverlay = mirrorSize !== 'default';
 
   const manualControlBlocked = isManualControlBlocked(device);
@@ -184,7 +184,7 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
         className={
           compactPadding
             ? 'flex w-full min-w-0 flex-1 justify-center px-2 pt-2'
-            : 'flex w-full flex-1 justify-center px-3 pt-3'
+            : 'flex w-full flex-1 justify-center px-2 pt-2'
         }
       >
         <div className='mx-auto flex w-fit max-w-full flex-col items-stretch'>

@@ -23,8 +23,14 @@ from api.routes import organizations as organization_routes
 from api.routes import scenario_templates as scenario_template_routes
 
 
-def _user(role: str, org_id: str | None = "org-1"):
-    return SimpleNamespace(id=f"{role}-user", role=role, org_id=org_id, is_active=True)
+def _user(role: str, org_id: str | None = "org-1", org_role: str | None = None):
+    return SimpleNamespace(
+        id=f"{role}-user",
+        role=role,
+        org_id=org_id,
+        org_role=org_role,
+        is_active=True,
+    )
 
 
 class _PolicyResult:
@@ -98,11 +104,34 @@ async def test_casbin_rbac_cache_refreshes_when_revision_changes(monkeypatch):
     clear_rbac_cache()
 
 
-def test_casbin_rbac_domain_allows_admin_user_permissions():
+def test_casbin_rbac_domain_allows_admin_workspace_operations():
+    enforcer = build_enforcer_for_user(
+        _user("operator", org_role="admin"), domain="org-1"
+    )
+
+    assert enforcer.enforce("operator-user", "org-1", "organizations", "create")
+    assert enforcer.enforce("operator-user", "org-1", "organizations", "update")
+    assert enforcer.enforce("operator-user", "org-1", "organizations", "delete")
+    assert enforcer.enforce("operator-user", "org-1", "organizations", "manage")
+    assert enforcer.enforce("operator-user", "org-1", "relay-agents", "manage")
+    assert enforcer.enforce("operator-user", "org-1", "devices", "manage")
+    assert enforcer.enforce("operator-user", "org-1", "devices", "create")
+    assert enforcer.enforce("operator-user", "org-1", "devices", "execute")
+    assert enforcer.enforce("operator-user", "org-1", "analytics", "read")
+    assert not enforcer.enforce("operator-user", "org-1", "users", "read")
+    assert enforcer.enforce("operator-user", "org-1", "campaigns", "create")
+    assert enforcer.enforce("operator-user", "org-1", "campaigns", "execute")
+    assert enforcer.enforce("operator-user", "org-1", "accounts", "manage")
+    assert enforcer.enforce("operator-user", "org-1", "schedules", "execute")
+    assert enforcer.enforce("operator-user", "org-1", "device-groups", "manage")
+
+
+def test_casbin_rbac_domain_ignores_legacy_platform_admin_role():
     enforcer = build_enforcer_for_user(_user("admin"), domain="org-1")
 
-    assert enforcer.enforce("admin-user", "org-1", "users", "read")
-    assert enforcer.enforce("admin-user", "org-1", "users", "create")
+    assert enforcer.enforce("admin-user", "org-1", "organizations", "read")
+    assert not enforcer.enforce("admin-user", "org-1", "organizations", "manage")
+    assert not enforcer.enforce("admin-user", "org-1", "devices", "manage")
 
 
 def test_casbin_rbac_domain_allows_superadmin_all_permissions():
@@ -548,7 +577,11 @@ async def test_campaign_route_allows_org_member_read(monkeypatch):
 
     app.dependency_overrides[deps._get_current_user] = lambda: user
     app.dependency_overrides[deps._get_db] = fake_db
-    monkeypatch.setattr(campaign_routes.repo, "list_campaigns", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        campaign_routes,
+        "list_campaigns_for_org",
+        AsyncMock(return_value=[]),
+    )
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"

@@ -80,6 +80,16 @@ async def device_visible_to_user(
 ) -> bool:
     if device is None:
         return False
+    user_org = getattr(user, "org_id", None)
+    managed_by_org_id = getattr(device, "managed_by_org_id", None)
+    if is_superadmin(user):
+        return True
+    if user_org and managed_by_org_id and str(managed_by_org_id) == str(user_org):
+        role = str(getattr(user, "org_role", "") or "").strip().lower()
+        if role != "admin":
+            role = (await repo.get_organization_role_for_user(db, user.id, str(user_org))) or ""
+        if role == "admin":
+            return True
     return await resource_visible_to_user(
         db,
         user,

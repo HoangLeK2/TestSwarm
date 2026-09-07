@@ -35,6 +35,7 @@ type DeviceVarsFacebookTargetFormProps = {
   vars: Record<string, unknown>;
   disabled?: boolean;
   size?: 'default' | 'large';
+  fillHeight?: boolean;
   onChange: (vars: Record<string, unknown>) => void;
 };
 
@@ -61,6 +62,7 @@ export function DeviceVarsFacebookTargetForm({
   vars,
   disabled = false,
   size = 'default',
+  fillHeight = false,
   onChange
 }: DeviceVarsFacebookTargetFormProps) {
   const t = useTranslations('components.deviceVarsJson.targetForm');
@@ -125,7 +127,11 @@ export function DeviceVarsFacebookTargetForm({
     (total, type) => total + formState.selected[type].length,
     0
   );
-  const listHeightClass = size === 'large' ? 'h-[360px] xl:h-[420px]' : 'h-80';
+  const listHeightClass = fillHeight
+    ? 'min-h-64 flex-1 lg:min-h-0'
+    : size === 'large'
+      ? 'h-[360px] xl:h-[420px]'
+      : 'h-80';
 
   function updateSelection(
     type: DeviceVarsTargetType,
@@ -152,7 +158,12 @@ export function DeviceVarsFacebookTargetForm({
   }
 
   return (
-    <div className='flex min-h-0 min-w-0 max-w-full flex-col gap-3 overflow-hidden'>
+    <div
+      className={cn(
+        'flex min-h-0 min-w-0 max-w-full flex-col gap-3 overflow-hidden',
+        fillHeight && 'h-full'
+      )}
+    >
       <Tabs
         value={targetType}
         onValueChange={(value) => {

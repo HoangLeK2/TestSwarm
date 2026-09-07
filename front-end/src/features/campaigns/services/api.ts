@@ -39,6 +39,7 @@ import type {
   ContinuousCrawlProgress,
   ContinuousCrawlStartResponse
 } from '../lib/continuous-crawl-monitor';
+import type { NodeCapabilityRegistry } from '../lib/node-capabilities';
 
 export type CampaignEntityUpdate = Omit<
   GeneratedCampaignEntityUpdate,
@@ -101,6 +102,37 @@ export type CampaignDispatchPreviewOut = {
     platform: string;
     entity_type: string;
   }>;
+};
+
+export type ScenarioSchemaOut = {
+  step_types?: string[];
+  fields?: Record<string, unknown>;
+  node_capabilities?: NodeCapabilityRegistry;
+  [key: string]: unknown;
+};
+
+export type ScenarioDeviceCapabilitiesOut = {
+  serial: string;
+  capabilities: Record<string, boolean>;
+};
+
+export type ScenarioCapabilityPreflightOut = ScenarioDeviceCapabilitiesOut & {
+  preflight: {
+    ok: boolean;
+    issues: Array<{
+      path: string;
+      index: number;
+      step_type: string;
+      missing: string[];
+      risk: string;
+    }>;
+    warnings: Array<{
+      path: string;
+      index: number;
+      step_type: string;
+      unknown: string[];
+    }>;
+  };
 };
 
 /** Extended dispatch execution row (DF-T-04-010 runtime fields). */
@@ -527,6 +559,27 @@ export const continuousCrawlApi = {
 export const executionRuntimeApi = {
   get: () =>
     farmApi.get<ExecutionRuntimeOut>('/execution/runtime').then((r) => r.data)
+};
+
+export const scenarioSchemaApi = {
+  get: () =>
+    farmApi.get<ScenarioSchemaOut>('/scenario/schema').then((r) => r.data)
+};
+
+export const scenarioDeviceCapabilitiesApi = {
+  get: (serial: string) =>
+    farmApi
+      .get<ScenarioDeviceCapabilitiesOut>(
+        `/scenario/device-capabilities/${encodeURIComponent(serial)}`
+      )
+      .then((r) => r.data),
+  preflight: (serial: string, scenario: Record<string, unknown>) =>
+    farmApi
+      .post<ScenarioCapabilityPreflightOut>(
+        `/scenario/preflight/${encodeURIComponent(serial)}`,
+        { scenario }
+      )
+      .then((r) => r.data)
 };
 
 export const scenariosApi = {

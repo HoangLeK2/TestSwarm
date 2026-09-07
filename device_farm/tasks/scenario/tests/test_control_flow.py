@@ -365,9 +365,75 @@ def test_loop_stops_when_no_iteration_performs_an_action():
         handle_loop(sc, step, 0, result)
 
     assert result["ok"] is False, "an idle loop must fail loudly, not report success"
+    assert result["reason_code"] == "loop_stalled"
+    assert result["stopped_by"] == "stall"
     assert result["outcome"] == "stalled"
     assert result["stalled_after"] == 5
     assert run_nested.call_count == 5, "must stop at the threshold, not run on"
+
+
+def test_loop_invalid_count_returns_reason_code():
+    from tasks.scenario.steps.control_flow import handle_loop
+
+    sc = _make_sc()
+    step = {"type": "loop", "count": "bad", "steps": [{"type": "wait"}]}
+    result = {"index": 0, "type": "loop", "ok": True}
+
+    handle_loop(sc, step, 0, result)
+
+    assert result["ok"] is False
+    assert result["reason_code"] == "loop_invalid_count"
+    assert result["stopped_by"] == "config"
+
+
+def test_preview_step_path_spans_branch_and_loop_iteration():
+    from tasks.scenario.context import ScenarioContext
+    from tasks.scenario.executor import ScenarioExecutor
+    from unittest.mock import MagicMock
+
+    device = MagicMock()
+    device.serial = "test"
+    device.screen_width = 1080
+    device.screen_height = 1920
+    sc = ScenarioContext.from_args(
+        device,
+        {
+            "variables": {"READY": True},
+            "steps": [
+                {
+                    "id": "gate",
+                    "type": "if_variable",
+                    "name": "READY",
+                    "then": [
+                        {
+                            "id": "cycle",
+                            "type": "loop",
+                            "count": 1,
+                            "steps": [
+                                {
+                                    "id": "mark",
+                                    "type": "set_variable",
+                                    "name": "DONE",
+                                    "value": "1",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+
+    result = ScenarioExecutor(sc).run()
+
+    leaf = (
+        result["step_results"][0]["sub_result"]["step_results"][0]
+        ["sub_results"][0]["result"]["step_results"][0]
+    )
+    assert leaf["step_path"] == "gate.then/cycle#0/mark"
+    assert leaf["trace"]["loop_id"] == "cycle"
+    assert leaf["trace"]["loop_iter"] == 0
+    assert leaf["trace"]["branch"] == "then"
 
 
 def test_loop_without_stall_after_keeps_old_behaviour():

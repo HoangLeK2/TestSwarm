@@ -43,6 +43,30 @@ Consumers MUST treat delivery as **at-least-once** and dedupe on `event_id`.
 | `step.completed` | Step ok | `step_index`, `ok: true` |
 | `step.failed` | Step terminal fail | `reason_code`, `message` |
 
+### Step trace
+
+Step payloads may include `payload.trace` for audit and live monitor
+correlation. The trace is additive and consumers must tolerate missing fields on
+older events.
+
+| Field | Meaning |
+|---|---|
+| `step_path` | Slash-separated path from scenario root to the current authored step |
+| `loop_id` | Nearest loop/repeat step id |
+| `loop_iter` | Nearest loop/repeat iteration, zero-based |
+| `branch` | Nearest selected branch (`then`, `else`, `branchN`) |
+| `scenario_id`, `scenario_name` | Current sub-scenario after `run_scenario` expansion |
+
+Control-flow nodes emit boundary events only: one `step.started` on entry and
+one `step.completed` or `step.failed` on exit. They do not emit per-iteration
+events. Loop completion/failure payloads carry `iterations_run`, `stopped_by`,
+and `idle_streak` so long-running templates remain queryable without turning a
+9999-cycle loop into thousands of event rows.
+
+Control-flow failure `reason_code` values include `loop_stalled`,
+`loop_iteration_failed`, `loop_no_nested_steps`, `loop_invalid_count`,
+`branch_failed`, `condition_eval_failed`, and `subscenario_failed`.
+
 ## API
 
 | Method | Path | Purpose |

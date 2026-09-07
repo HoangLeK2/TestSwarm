@@ -9,7 +9,9 @@ import {
 
 const CURRENT_ORG_STORAGE_KEY = 'device-farm:current-organization-id';
 
-function resolveEnsureOrgId(): string | undefined {
+function resolveEnsureOrgId(ensureId?: string | null): string | undefined {
+  const fromOptions = ensureId?.trim();
+  if (fromOptions) return fromOptions;
   const fromUser = tokenStorage.getUser()?.defaultOrgId?.trim();
   if (fromUser) return fromUser;
   if (typeof window === 'undefined') return undefined;
@@ -24,14 +26,18 @@ export const organizationQueryKeys = {
 };
 
 /** Bootstrap org list for provider (includes stored current org via ensure_id). */
-export function useOrganizationsQuery() {
-  const ensureId = resolveEnsureOrgId();
+export function useOrganizationsQuery(options?: {
+  enabled?: boolean;
+  ensureId?: string | null;
+}) {
+  const ensureId = resolveEnsureOrgId(options?.ensureId);
 
   return useQuery({
     queryKey: organizationQueryKeys.list({ limit: 100, ensure_id: ensureId }),
     queryFn: () =>
       listOrganizations({ limit: 100, offset: 0, ensure_id: ensureId }),
     staleTime: 60_000,
+    enabled: options?.enabled ?? true,
     select: (data) => data.items ?? []
   });
 }

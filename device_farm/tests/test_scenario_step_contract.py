@@ -176,6 +176,34 @@ def test_scenario_model_accepts_use_source_pool_step() -> None:
     assert ScenarioModel.validate_dict(scenario) == []
 
 
+def test_scenario_model_accepts_verify_screen_template_key() -> None:
+    from api.schemas.scenario import ScenarioModel
+
+    assert (
+        ScenarioModel.validate_dict(
+            {
+                "steps": [
+                    {
+                        "type": "verify_screen",
+                        "template_key": "org/scenario/template.png",
+                        "ssim_threshold": 0.8,
+                    }
+                ]
+            }
+        )
+        == []
+    )
+
+
+def test_scenario_model_rejects_verify_screen_without_reference_image() -> None:
+    from api.schemas.scenario import ScenarioModel
+
+    errors = ScenarioModel.validate_dict({"steps": [{"type": "verify_screen"}]})
+
+    assert errors
+    assert "template_key or screenshot" in errors[0]
+
+
 def test_scenario_model_rejects_invalid_extract_profile() -> None:
     errors = ScenarioModel.validate_dict(
         {

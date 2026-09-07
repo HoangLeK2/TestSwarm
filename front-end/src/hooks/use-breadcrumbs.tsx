@@ -41,6 +41,42 @@ const routeMapping: Record<string, string[]> = {
     'navigation.dashboard',
     'navigation.relay_agents'
   ],
+  '/dashboard/admin': ['navigation.dashboard', 'navigation.admin_console'],
+  '/dashboard/admin/workspaces': [
+    'navigation.dashboard',
+    'navigation.admin_console',
+    'navigation.admin_workspaces'
+  ],
+  '/dashboard/admin/accounts': [
+    'navigation.dashboard',
+    'navigation.admin_console',
+    'navigation.admin_accounts'
+  ],
+  '/dashboard/admin/content': [
+    'navigation.dashboard',
+    'navigation.admin_console',
+    'navigation.admin_content'
+  ],
+  '/dashboard/admin/workspace-admins': [
+    'navigation.dashboard',
+    'navigation.admin_console',
+    'navigation.admin_workspace_admins'
+  ],
+  '/dashboard/admin/agents': [
+    'navigation.dashboard',
+    'navigation.admin_console',
+    'navigation.admin_agents'
+  ],
+  '/dashboard/admin/devices': [
+    'navigation.dashboard',
+    'navigation.admin_console',
+    'navigation.admin_devices'
+  ],
+  '/dashboard/admin/audit': [
+    'navigation.dashboard',
+    'navigation.admin_console',
+    'navigation.admin_audit'
+  ],
   '/dashboard/product': ['navigation.dashboard', 'navigation.products'],
   '/dashboard/profile': ['navigation.dashboard', 'navigation.profile'],
   '/dashboard/statistic': ['navigation.dashboard', 'navigation.statistic'],

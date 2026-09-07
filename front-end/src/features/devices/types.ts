@@ -23,6 +23,8 @@ export interface Device {
   media_stream_name?: string;
   media_stream_source?: string;
   media_stream_last_frame_unix_ms?: number;
+  /** Server-clock stamp of when the adapter's frame counter last moved. */
+  media_stream_frame_progress_unix_ms?: number;
   relay_scrcpy_enabled?: boolean;
   /** >0 when a Temporal scenario/campaign is actively driving this device */
   scenario_active?: number;
@@ -30,7 +32,17 @@ export interface Device {
   usage_state?: string;
   /** True after operator paused automation to take manual control. */
   manual_takeover_active?: boolean;
+  /** Campaign/scenario currently executing on this device, null when idle. */
+  active_run?: DeviceActiveRun | null;
   health?: DeviceHealth;
+}
+
+export interface DeviceActiveRun {
+  execution_id: string;
+  campaign_id?: string | null;
+  campaign_name?: string | null;
+  scenario_id?: string | null;
+  scenario_name?: string | null;
 }
 
 export type DeviceHealthStatus =
@@ -48,7 +60,8 @@ export interface DeviceHealth {
     reason?: string | null;
   };
   stream: {
-    status: 'ready' | 'starting' | 'unavailable' | 'error';
+    /** 'stale' = channel still claims to be up but no new frames are arriving. */
+    status: 'ready' | 'starting' | 'stale' | 'unavailable' | 'error';
     observed_at?: string | null;
     reason?: string | null;
   };

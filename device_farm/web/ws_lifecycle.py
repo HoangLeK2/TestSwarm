@@ -14,6 +14,7 @@ from api.auth.context import AuthError, decode_access_token
 from api.auth.rbac import build_enforcer_for_user_from_db, permission_domain
 from db import crud as repo
 from db.database import AsyncSessionLocal
+from tenancy.context import set_current_org_id
 from web.metrics import (
     lifecycle_ws_backpressure_total,
     lifecycle_ws_clients_connected,
@@ -35,9 +36,10 @@ async def authenticate_lifecycle_ws(ws: WebSocket) -> tuple[str, str]:
         user = await repo.get_user(db, ctx.user_id)
         if not user or not user.is_active:
             raise AuthError("user not found")
-        org_id = getattr(user, "org_id", None)
+        org_id = getattr(user, "org_id", None) or ctx.org_id
         if not org_id:
             raise AuthError("user has no organization")
+        set_current_org_id(org_id)
         user.org_role = await repo.get_organization_role_for_user(db, user.id, org_id)  # type: ignore[attr-defined]
         domain = permission_domain(user)
         enforcer = await build_enforcer_for_user_from_db(user, db, domain=domain)

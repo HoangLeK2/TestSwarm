@@ -104,9 +104,13 @@ class ExtractionCaptureService:
         step_index = execution_ctx.step_index if execution_ctx else None
         kind = execution_ctx.kind if execution_ctx else "screenshot"
         cache_key = (serial, step_index, kind)
-        cached = _cache_get(_screenshot_cache, cache_key)
-        if cached is not None:
-            return cached
+        # A failure screenshot must be the screen at the moment of failure. The
+        # 30s cache is right for pre/post (same screen, repeated reads) and wrong
+        # here: it hands back a frame from before the step that just broke.
+        if not kind.endswith("_fail"):
+            cached = _cache_get(_screenshot_cache, cache_key)
+            if cached is not None:
+                return cached
 
         if persist and (execution_ctx is None or not execution_ctx.execution_id):
             raise CaptureError(
@@ -141,7 +145,11 @@ class ExtractionCaptureService:
             captured_at=captured_at,
             artifact_id=artifact_id,
         )
-        _cache_put(_screenshot_cache, cache_key, handle)
+        # Not cached when it is never read: entries are only evicted by a later
+        # _cache_get on the same key, so caching fail frames would pin their PNG
+        # bytes in a long-running worker for good.
+        if not kind.endswith("_fail"):
+            _cache_put(_screenshot_cache, cache_key, handle)
         self._observe_capture("screenshot", persist, started)
         return handle
 

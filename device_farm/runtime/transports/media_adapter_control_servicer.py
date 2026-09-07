@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from typing import Callable, Optional
 
@@ -16,6 +17,12 @@ import grpc
 log = logging.getLogger("media_adapter_control")
 
 _servicer: Optional["MediaAdapterControlServicer"] = None
+
+
+def _suspensions():
+    from .agent_suspension import get_agent_suspension_registry
+
+    return get_agent_suspension_registry()
 
 
 def get_media_adapter_servicer() -> Optional["MediaAdapterControlServicer"]:
@@ -35,8 +42,14 @@ class MediaAdapterConnection:
         self.relay_id = ""
         self.serials: set[str] = set()
         self.streams: dict[str, dict] = {}
+        # Last set we reported as parked, so a steady state stays silent.
+        self.parked_serials: set[str] = set()
         self._q = send_q
         self._pending: dict[str, asyncio.Future] = {}
+
+    def close(self) -> None:
+        """End the sender loop; stream teardown then runs its normal path."""
+        self._q.put_nowait(None)
 
     async def send_command(self, ctrl_msg, request_id: str, timeout: float) -> dict:
         loop = asyncio.get_running_loop()
@@ -109,8 +122,11 @@ class MediaAdapterControlServicer:
                         r = msg.register
                         candidate_adapter_id = r.adapter_id or f"media-{uuid.uuid4().hex[:8]}"
                         if self._on_register:
+                            # relay_id stays as reported (often empty): a media
+                            # adapter authenticates but must never mint an agent
+                            # row — that is what used to create ghost agents.
                             accepted = await _call_register_callback(self._on_register, {
-                                "relay_id": r.relay_id or candidate_adapter_id,
+                                "relay_id": r.relay_id,
                                 "hostname": r.hostname,
                                 "ip": r.ip,
                                 "version": r.adapter_version,
@@ -128,7 +144,10 @@ class MediaAdapterControlServicer:
                         conn.relay_id = r.relay_id
                         conn.serials = set(r.serials)
                         self._conns[adapter_id] = conn
-                        self._index_serials(adapter_id, conn.serials)
+                        # Serials decide visibility here, not the connection: an
+                        # adapter may register before it knows its phones, so the
+                        # check has to run on every serial update, not just once.
+                        self._index_allowed_serials(adapter_id, conn.serials)
                         await send_q.put(relay_pb2.MediaAdapterCommand(
                             ack=relay_pb2.MediaAdapterAck(
                                 message=f"media adapter registered {len(r.serials)} serials"
@@ -145,12 +164,11 @@ class MediaAdapterControlServicer:
                         h = msg.heartbeat
                         self._unindex_serials(conn.serials)
                         conn.serials = set(h.serials)
-                        conn.streams = {
-                            s.serial: _stream_status_to_dict(s)
-                            for s in h.streams
-                            if s.serial
-                        }
-                        self._index_serials(conn.adapter_id, conn.serials)
+                        conn.streams = _merge_stream_progress(
+                            conn.streams,
+                            [s for s in h.streams if s.serial],
+                        )
+                        self._index_allowed_serials(conn.adapter_id, conn.serials)
                     elif kind == "session_result" and conn is not None:
                         conn.resolve(msg.session_result)
             finally:
@@ -199,6 +217,31 @@ class MediaAdapterControlServicer:
         for conn in self._conns.values():
             out.update({serial: dict(stream) for serial, stream in conn.streams.items()})
         return out
+
+    def kick_serials(self, serials: list[str]) -> int:
+        """Close every adapter connection serving one of these serials."""
+        wanted = {str(s).strip() for s in serials if str(s).strip()}
+        if not wanted:
+            return 0
+        adapter_ids = {
+            adapter_id
+            for serial, adapter_id in self._serial_index.items()
+            if serial in wanted
+        }
+        closed = 0
+        for adapter_id in adapter_ids:
+            conn = self._conns.pop(adapter_id, None)
+            if conn is None:
+                continue
+            self._unindex_serials(conn.serials)
+            try:
+                conn.close()
+                closed += 1
+            except Exception as exc:  # pragma: no cover - defensive
+                log.warning("media adapter kick failed adapter_id=%s: %s", adapter_id, exc)
+        if closed:
+            log.info("media adapters kicked by admin: %d for %d serials", closed, len(wanted))
+        return closed
 
     def stream_for_serial(self, serial: str) -> Optional[dict]:
         conn = self.conn_for_serial(serial)
@@ -293,6 +336,45 @@ class MediaAdapterControlServicer:
         for serial in serials:
             self._serial_index[serial] = adapter_id
 
+    def _index_allowed_serials(self, adapter_id: str, serials: set[str]) -> None:
+        """Index every serial except the ones an admin has switched off.
+
+        A parked serial is simply absent from the index, so `stream_for_serial`
+        and `online_serials_snapshot` cannot see it and the dashboard stops
+        synthesising a live phone out of the media plane alone.
+        """
+        registry = _suspensions()
+        parked: set[str] = set()
+        for serial in serials:
+            text = str(serial or "").strip()
+            if not text:
+                continue
+            if registry.is_serial_suspended(text):
+                self._serial_index.pop(text, None)
+                parked.add(text)
+                continue
+            self._serial_index[text] = adapter_id
+        conn = self._conns.get(adapter_id)
+        previous = conn.parked_serials if conn is not None else set()
+        if parked != previous:
+            # Heartbeats arrive every few seconds; only a change is news.
+            if parked:
+                log.info(
+                    "media adapter %s: parked %d serial(s) (agent disabled)",
+                    adapter_id,
+                    len(parked),
+                )
+            else:
+                log.info("media adapter %s: serials resumed", adapter_id)
+            if conn is not None:
+                conn.parked_serials = parked
+
+    def reindex_serials(self) -> None:
+        """Re-apply suspension rules to every connected adapter."""
+        for adapter_id, conn in list(self._conns.items()):
+            self._unindex_serials(conn.serials)
+            self._index_allowed_serials(adapter_id, conn.serials)
+
     def _unindex_serials(self, serials: set[str]) -> None:
         for serial in serials:
             self._serial_index.pop(serial, None)
@@ -333,6 +415,38 @@ def _stream_status_to_dict(status) -> dict:
     }
 
 
+def _merge_stream_progress(previous: dict[str, dict], statuses) -> dict[str, dict]:
+    """Stamp, on the server clock, when each stream's frame counter last moved.
+
+    `last_frame_unix_ms` comes from the adapter host, so comparing it to server
+    time measures clock skew as much as staleness. What survives skew is whether
+    the value *changed* between two heartbeats: a frozen pipeline keeps
+    reporting the same frame timestamp while the server clock moves on.
+    """
+    now_ms = int(time.time() * 1000)
+    merged: dict[str, dict] = {}
+    for status in statuses:
+        current = _stream_status_to_dict(status)
+        prior = previous.get(status.serial)
+        unchanged = (
+            prior is not None
+            and prior.get("last_frame_unix_ms") == current["last_frame_unix_ms"]
+            and _cap_progress(prior.get("frame_progress_unix_ms")) > 0
+        )
+        current["frame_progress_unix_ms"] = (
+            _cap_progress(prior.get("frame_progress_unix_ms")) if unchanged else now_ms
+        )
+        merged[status.serial] = current
+    return merged
+
+
+def _cap_progress(value) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _metadata_value(context, key: str) -> str:
     try:
         metadata = context.invocation_metadata() or ()
@@ -360,4 +474,7 @@ async def _call_register_callback(callback, payload: dict) -> bool:
     except Exception as exc:
         log.warning("media adapter register callback failed: %s", exc)
         return False
-    return result is not False
+    # The callback returns "" to refuse; None means "no opinion" (legacy).
+    if result is None:
+        return True
+    return bool(result)

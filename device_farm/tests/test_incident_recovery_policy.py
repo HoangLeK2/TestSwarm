@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from services.execution import recovery_runner
 from services.execution.incident_detection import ScreenSnapshot, detect_incident
 from services.execution.recovery_runner import maybe_recover_step
 from services.execution.recovery_policy import (
@@ -677,8 +678,125 @@ def test_parse_recovery_policy_defaults_and_clamps_for_loop_recovery():
 
     assert defaulted.max_total_attempts == 100
     assert defaulted.max_attempts_per_step == 2
+    assert defaulted.max_step_recovery_ms == 30_000
     assert clamped.max_total_attempts == 10_000
     assert clamped.max_attempts_per_step == 20
+    assert parse_recovery_policy(
+        {"enabled": True, "max_step_recovery_ms": 5_000_000}
+    ).max_step_recovery_ms == 600_000
+
+
+def test_recovery_playbooks_stop_at_the_step_time_ceiling(monkeypatch):
+    """Attempt counters bound how many playbooks run, not how long.
+
+    Each playbook is a full nested scenario; three of them that each wait out
+    an 8s selector timeout is how a failed step reached 103s.
+    """
+    class Device:
+        current_package = "com.facebook.katana"
+        current_activity = "MainActivity"
+
+        def hierarchy_xml(self, force_refresh=False):
+            return '<node text="Unexpected custom screen outside default list" />'
+
+    calls = []
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(
+        recovery_runner, "time", SimpleNamespace(monotonic=lambda: clock["now"])
+    )
+
+    def run_nested(sc, steps, **kwargs):
+        calls.append(kwargs.get("call_stack_add"))
+        clock["now"] += 20.0  # this playbook burned 20 seconds and failed
+        return {"success": False, "steps_executed": 1, "failed_message": "no luck"}
+
+    monkeypatch.setattr("tasks.scenario.executor.run_nested_scenario", run_nested)
+
+    sc = SimpleNamespace(
+        scenario={
+            "recovery_policy": {
+                "enabled": True,
+                "max_step_recovery_ms": 30_000,
+                "max_attempts_per_step": 10,  # counters must not be what stops us
+                "rules": [
+                    {"scope": {}, "scenario_id": f"recovery-{n}", "outcome": "retry_step"}
+                    for n in (1, 2, 3)
+                ],
+            },
+            "_scenario_registry": {
+                "by_id": {
+                    f"recovery-{n}": {
+                        "steps": [{"type": "tap_selector", "selector": "dismiss"}],
+                        "variables": {},
+                    }
+                    for n in (1, 2, 3)
+                }
+            },
+        },
+        ctx={},
+        device=Device(),
+        serial="SN1",
+    )
+
+    decision = maybe_recover_step(sc, {"type": "fb_comment"}, 0, {"ok": False})
+
+    # Two playbooks fit inside 30s; the third never starts.
+    assert calls == ["recovery-1", "recovery-2"]
+    assert clock["now"] - 1000.0 == 40.0
+    assert decision.handled is True
+    assert decision.fail_message is not None
+
+
+def test_recovery_time_ceiling_can_be_disabled(monkeypatch):
+    class Device:
+        current_package = "com.facebook.katana"
+        current_activity = "MainActivity"
+
+        def hierarchy_xml(self, force_refresh=False):
+            return '<node text="Unexpected custom screen outside default list" />'
+
+    calls = []
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(
+        recovery_runner, "time", SimpleNamespace(monotonic=lambda: clock["now"])
+    )
+
+    def run_nested(sc, steps, **kwargs):
+        calls.append(kwargs.get("call_stack_add"))
+        clock["now"] += 20.0
+        return {"success": False, "steps_executed": 1, "failed_message": "no luck"}
+
+    monkeypatch.setattr("tasks.scenario.executor.run_nested_scenario", run_nested)
+
+    sc = SimpleNamespace(
+        scenario={
+            "recovery_policy": {
+                "enabled": True,
+                "max_step_recovery_ms": 0,
+                "max_attempts_per_step": 10,
+                "rules": [
+                    {"scope": {}, "scenario_id": f"recovery-{n}", "outcome": "retry_step"}
+                    for n in (1, 2, 3)
+                ],
+            },
+            "_scenario_registry": {
+                "by_id": {
+                    f"recovery-{n}": {
+                        "steps": [{"type": "tap_selector", "selector": "dismiss"}],
+                        "variables": {},
+                    }
+                    for n in (1, 2, 3)
+                }
+            },
+        },
+        ctx={},
+        device=Device(),
+        serial="SN1",
+    )
+
+    maybe_recover_step(sc, {"type": "fb_comment"}, 0, {"ok": False})
+
+    assert calls == ["recovery-1", "recovery-2", "recovery-3"]
 
 
 def test_recovery_playbook_skips_when_step_scope_does_not_match(monkeypatch):

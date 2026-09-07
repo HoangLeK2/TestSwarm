@@ -42,6 +42,9 @@ export function formatFarmApiError(err: unknown, fallback: string): string {
     if (code === 'INVALID_CREDENTIALS') return 'Sai thông tin đăng nhập';
     if (code === 'ACCOUNT_LOCKED') return 'Tài khoản tạm khóa. Thử lại sau.';
     if (code === 'ORG_DISABLED') return 'Tổ chức đã bị vô hiệu hóa.';
+    if (code === 'PASSWORD_CHANGE_REQUIRED') {
+      return 'Bạn cần đổi mật khẩu tạm thời trước khi tiếp tục.';
+    }
     if (code === 'ACCOUNT_NOT_BOUND') {
       const hint = (d as { hint?: string }).hint;
       return hint

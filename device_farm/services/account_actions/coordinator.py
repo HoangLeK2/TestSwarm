@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from sqlalchemy import select
@@ -15,6 +16,8 @@ from services.account_actions.service import (
     transition_action,
 )
 from tenancy.context import tenant_context
+
+log = logging.getLogger(__name__)
 
 
 def resolve_action_identity(
@@ -356,9 +359,125 @@ async def _finalize_action(
             raise RuntimeError("Account action finalization reached an invalid state")
         return {
             "action_id": str(row.id),
+            # Carried so callers holding only the finalize result can still
+            # address the row later — the failure screenshot is attached after
+            # the step handler has returned and the claim is out of scope.
+            "org_id": org_id,
             "status": row.status,
             "attempt_no": attempt_no,
         }
+
+
+async def _record_applied_actions(
+    db: Any,
+    *,
+    identity: dict[str, str | None],
+    action_type: str,
+    platform: str,
+    entries: list[dict[str, Any]],
+    reason: str,
+    observe: bool,
+    reserved_action_id: str | None,
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for offset, entry in enumerate(entries):
+        target = entry.get("target") or {}
+        # A savepoint per entry. Sharing one session is the whole point here, but
+        # sharing one transaction would mean a single bad row rolls back the
+        # entire batch — the per-target sessions this replaced kept the ones that
+        # had already succeeded, and the actions are on the phone either way.
+        try:
+            async with db.begin_nested():
+                if observe:
+                    out.append(
+                        await _observe_action(
+                            db,
+                            identity=identity,
+                            action_type=action_type,
+                            platform=platform,
+                            target=target,
+                            outcome="applied",
+                        )
+                    )
+                    continue
+                claim = await _prepare_action(
+                    db,
+                    identity=identity,
+                    action_type=action_type,
+                    platform=platform,
+                    target=target,
+                    action_id=reserved_action_id if offset == 0 else None,
+                )
+                if claim.get("claimed") is False:
+                    out.append(claim)
+                    continue
+                out.append(
+                    await _finalize_action(
+                        db,
+                        claim=claim,
+                        succeeded=True,
+                        terminal=True,
+                        reason=reason,
+                        result=entry.get("result") or {},
+                    )
+                )
+        except Exception as exc:
+            log.warning(
+                "account action batch entry %d failed target=%s: %s",
+                offset,
+                target.get("target_id"),
+                exc,
+            )
+            out.append(
+                {
+                    "error": str(exc),
+                    "target_id": target.get("target_id"),
+                    "recorded": False,
+                }
+            )
+    return out
+
+
+def record_applied_actions(
+    *,
+    identity: dict[str, str | None],
+    action_type: str,
+    platform: str,
+    entries: list[dict[str, Any]],
+    reason: str,
+    observe: bool = False,
+    reserved_action_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Record a batch of already-performed actions in one database session.
+
+    Callers used to loop over targets calling prepare_action + finalize_action,
+    and each of those opens its own session — which builds and disposes a whole
+    SQLAlchemy engine, so a batch of 20 people paid for 40 Postgres connections.
+    Every write here happens after the taps, so there is nothing to interleave
+    and one session covers the lot.
+
+    ``entries`` is ``[{"target": {...}, "result": {...}}, ...]`` in the order the
+    actions were performed; ``reserved_action_id`` claims the first entry.
+    """
+    from db.database import activity_session, run_activity_coro_blocking
+
+    if not entries:
+        return []
+
+    async def record() -> list[dict[str, Any]]:
+        async with activity_session() as db:
+            return await _record_applied_actions(
+                db,
+                identity=identity,
+                action_type=action_type,
+                platform=platform,
+                entries=entries,
+                reason=reason,
+                observe=observe,
+                reserved_action_id=reserved_action_id,
+            )
+
+    return run_activity_coro_blocking(record())
 
 
 def finalize_action(

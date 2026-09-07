@@ -4,7 +4,8 @@ import { useQuery } from '@tanstack/react-query';
 import { useCallback, useMemo } from 'react';
 import {
   socialExtApi,
-  type PlatformCapability
+  type PlatformCapability,
+  type PlatformCapabilitySupport
 } from '../services/social-ext-api';
 
 const PLATFORM_LABELS: Record<string, string> = {
@@ -17,6 +18,35 @@ const PLATFORM_LABELS: Record<string, string> = {
 
 export function platformLabel(name: string): string {
   return PLATFORM_LABELS[name] ?? name;
+}
+
+function capabilityIdsForStep(
+  platform: PlatformCapability,
+  stepType: string
+): string[] {
+  return Object.entries(platform.capability_schemas ?? {})
+    .filter(([, schema]) => schema.step_types.includes(stepType))
+    .map(([id]) => id);
+}
+
+function supportForStep(
+  platform: PlatformCapability,
+  stepType: string
+): PlatformCapabilitySupport | undefined {
+  for (const capabilityId of capabilityIdsForStep(platform, stepType)) {
+    const support = platform.capabilities?.[capabilityId];
+    if (support) return support;
+  }
+  return undefined;
+}
+
+function isExecutableSupport(
+  platform: PlatformCapability,
+  support?: PlatformCapabilitySupport
+): boolean {
+  if (!support) return false;
+  if (support.status && support.status !== 'active') return false;
+  return platform.coverage.toLowerCase().includes('active');
 }
 
 /**
@@ -41,12 +71,20 @@ export function usePlatformCapabilities() {
   /** Platforms that implement `stepType`, plus those that do not (for greying out). */
   const optionsForStep = useCallback(
     (stepType: string) =>
-      platforms.map((p) => ({
-        value: p.name,
-        label: platformLabel(p.name),
-        supported: p.step_types.includes(stepType),
-        coverage: p.coverage
-      })),
+      platforms.map((p) => {
+        const support = supportForStep(p, stepType);
+        return {
+          value: p.name,
+          label: platformLabel(p.name),
+          supported:
+            p.step_types.includes(stepType) && isExecutableSupport(p, support),
+          coverage: p.coverage,
+          capabilityIds: capabilityIdsForStep(p, stepType),
+          executionMode: support?.execution_mode,
+          facets: support?.facets ?? {},
+          genericRecipes: support?.generic_recipes ?? []
+        };
+      }),
     [platforms]
   );
 
@@ -56,8 +94,14 @@ export function usePlatformCapabilities() {
       platforms.map((p) => ({
         value: p.name,
         label: platformLabel(p.name),
-        supported: p.entities.includes(entity),
-        coverage: p.coverage
+        supported:
+          p.entities.includes(entity) &&
+          p.coverage.toLowerCase().includes('active'),
+        coverage: p.coverage,
+        capabilityIds: [],
+        executionMode: undefined,
+        facets: {},
+        genericRecipes: []
       })),
     [platforms]
   );

@@ -127,6 +127,11 @@ class DeviceActionInput:
     depth: int = 0
     # Shared runtime context (posts, comment parent anchors, loop vars, …).
     context: dict[str, Any] = field(default_factory=dict)
+    # Temporal scheduling metadata. Optional for backwards compatibility with
+    # older workflow histories and direct unit tests.
+    activity_id: str | None = None
+    activity_attempt: int = 1
+    side_effect_class: str | None = None
 
 
 @dataclass
@@ -148,6 +153,9 @@ class DeviceActionBatchInput:
     campaign_id: str | None = None
     depth: int = 0
     context: dict[str, Any] = field(default_factory=dict)
+    activity_id: str | None = None
+    step_activity_ids: list[str] = field(default_factory=list)
+    side_effect_class: str | None = None
 
 
 @dataclass
@@ -199,6 +207,14 @@ class WorkflowProgress:
     current_step: int = 0
     total_steps: int = 0
     current_step_type: str = ""
+    current_step_id: str | None = None
+    current_step_path: str | None = None
+    current_loop_iter: int | None = None
+    current_activity_id: str | None = None
+    current_step_activity_id: str | None = None
+    current_phase: str | None = None
+    side_effect_class: str | None = None
+    activity_attempt: int = 0
     loop_iteration: int = -1
     message: str = ""
     device_serial: str = ""

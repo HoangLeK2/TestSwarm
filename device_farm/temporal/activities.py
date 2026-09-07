@@ -247,9 +247,17 @@ def _merge_runtime_context(
     return merged
 
 
-def _build_activity_mini_scenario(step: dict[str, Any], inp: Any) -> dict[str, Any]:
-    """Build 1-step mini-scenario with Epic 04 capture defaults."""
-    mini_scenario: dict[str, Any] = {"steps": [step]}
+def _build_activity_mini_scenario(
+    step: dict[str, Any], inp: Any, *, step_index: int = 0
+) -> dict[str, Any]:
+    """Build 1-step mini-scenario with Epic 04 capture defaults.
+
+    ``step_index`` is the step's position in the real scenario. Inside the
+    mini-scenario the step always sits at 0, so without carrying the offset every
+    capture across the whole run shared one identity: the same screenshot cache
+    key, the same ``step-0/`` object prefix, and the same step number in the UI.
+    """
+    mini_scenario: dict[str, Any] = {"steps": [step], "_step_index_offset": int(step_index)}
     exec_id = getattr(inp, "execution_id", None) or getattr(inp, "run_id", None)
     if exec_id:
         mini_scenario["execution_id"] = exec_id
@@ -578,10 +586,66 @@ def set_temporal_config(cfg) -> None:
     _temporal_config = cfg
 
 
-def _safe_activity_heartbeat(detail: str = "") -> None:
+def _safe_activity_heartbeat(detail: Any = "") -> None:
     """Best-effort Temporal heartbeat; never raises."""
     with contextlib.suppress(Exception):
         activity.heartbeat(detail or "running")
+
+
+def _activity_step_heartbeat(
+    inp: DeviceActionInput,
+    *,
+    step_type: str,
+    phase: str,
+) -> dict[str, Any] | str:
+    if not inp.activity_id:
+        return f"step:{inp.step_index}:{step_type}"
+    return {
+        "activity_id": inp.activity_id,
+        "execution_id": inp.execution_id,
+        "campaign_id": inp.campaign_id,
+        "device_serial": inp.device_serial,
+        "step_index": inp.step_index,
+        "step_type": step_type,
+        "attempt": inp.activity_attempt,
+        "phase": phase,
+        "side_effect_class": inp.side_effect_class,
+    }
+
+
+def _activity_batch_heartbeat(
+    inp: DeviceActionBatchInput,
+    *,
+    phase: str,
+    position: int = 0,
+    step: dict[str, Any] | None = None,
+    step_index: int | None = None,
+) -> dict[str, Any] | str:
+    if not inp.activity_id:
+        return f"batch:{position}/{len(inp.steps)}"
+    resolved_step_index = (
+        step_index
+        if step_index is not None
+        else inp.step_indices[position] if position < len(inp.step_indices) else None
+    )
+    step_activity_id = (
+        inp.step_activity_ids[position]
+        if position < len(inp.step_activity_ids)
+        else None
+    )
+    return {
+        "activity_id": inp.activity_id,
+        "step_activity_id": step_activity_id,
+        "execution_id": inp.execution_id or inp.run_id,
+        "campaign_id": inp.campaign_id,
+        "device_serial": inp.device_serial,
+        "step_index": resolved_step_index,
+        "step_type": str((step or {}).get("type") or ""),
+        "position": position,
+        "count": len(inp.steps),
+        "phase": phase,
+        "side_effect_class": inp.side_effect_class,
+    }
 
 
 def _is_cancellation_exc(exc: BaseException) -> bool:
@@ -923,7 +987,11 @@ async def _emit_step_events_for_activity(
                 return
             campaign_id = getattr(inp, "campaign_id", None) or camp_id
         else:
-            execution, org_id, campaign_id = event_context
+            if len(event_context) == 2:
+                org_id, campaign_id = event_context
+                execution = None
+            else:
+                execution, org_id, campaign_id = event_context
         trace_context = _build_activity_trace_context(
             inp,
             org_id=org_id,
@@ -1109,7 +1177,9 @@ class DeviceActivities:
         step_type = step.get("type", "")
         idx = inp.step_index
 
-        activity.heartbeat(f"step:{idx}:{step_type}")
+        _safe_activity_heartbeat(
+            _activity_step_heartbeat(inp, step_type=str(step_type or ""), phase="started")
+        )
 
         try:
             # Import here to avoid circular imports at module level
@@ -1119,7 +1189,7 @@ class DeviceActivities:
             # Build a 1-step scenario and run it through the ORIGINAL executor.
             # Merge scenario-level config (visual_anchor, implicit_wait, etc.)
             # so each mini-scenario inherits the parent's settings.
-            mini_scenario = _build_activity_mini_scenario(step, inp)
+            mini_scenario = _build_activity_mini_scenario(step, inp, step_index=idx)
 
             # Create VariableContext with all variable layers
             resolved_campaign_vars = dict(inp.campaign_vars)
@@ -1297,7 +1367,7 @@ class DeviceActivities:
             device_serial=inp.device_serial,
         )
         device = _get_device(inp.device_serial)
-        _safe_activity_heartbeat(f"batch:0/{len(inp.steps)}")
+        _safe_activity_heartbeat(_activity_batch_heartbeat(inp, phase="started"))
 
         from tasks.scenario_task import run_scenario_task
         from common.variable_resolver import VariableContext
@@ -1342,8 +1412,13 @@ class DeviceActivities:
 
         batch_pos = 0
         while batch_pos < len(inp.steps):
-            _safe_activity_heartbeat(f"batch:{batch_pos}/{len(inp.steps)}")
+            _safe_activity_heartbeat(
+                _activity_batch_heartbeat(inp, phase="running", position=batch_pos)
+            )
             if activity.is_cancelled():
+                _safe_activity_heartbeat(
+                    _activity_batch_heartbeat(inp, phase="cancelled", position=batch_pos)
+                )
                 return await _finish(
                     results=results,
                     first_failure_index=-1,
@@ -1351,6 +1426,9 @@ class DeviceActivities:
                     context=batch_context,
                 )
             if await flag_probe.cancelled():
+                _safe_activity_heartbeat(
+                    _activity_batch_heartbeat(inp, phase="cancelled", position=batch_pos)
+                )
                 return await _finish(
                     results=results,
                     first_failure_index=-1,
@@ -1360,6 +1438,9 @@ class DeviceActivities:
             with contextlib.suppress(Exception):
                 device.ensure_u2_healthy(ping_timeout=2.0)
             if await flag_probe.paused():
+                _safe_activity_heartbeat(
+                    _activity_batch_heartbeat(inp, phase="paused", position=batch_pos)
+                )
                 return await _finish(
                     results=results,
                     first_failure_index=-1,
@@ -1376,6 +1457,9 @@ class DeviceActivities:
             )
             if touch_actions:
                 try:
+                    _safe_activity_heartbeat(
+                        _activity_batch_heartbeat(inp, phase="u2_batch", position=batch_pos)
+                    )
                     u2_batch_started = time.monotonic()
                     batch_u2_results = await _to_thread_with_heartbeat(
                         device.u2_batch,
@@ -1413,6 +1497,9 @@ class DeviceActivities:
                         and not await flag_probe.cancelled(force=True)
                         and await flag_probe.paused(force=True)
                     ):
+                        _safe_activity_heartbeat(
+                            _activity_batch_heartbeat(inp, phase="paused", position=batch_pos)
+                        )
                         return await _finish(
                             results=results,
                             first_failure_index=-1,
@@ -1460,7 +1547,16 @@ class DeviceActivities:
                                 "trace": sr.get("trace"),
                             },
                         }
-                        _safe_activity_heartbeat(f"batch:{batch_pos + rel}:emit_started")
+                        heartbeat_pos = batch_pos + rel
+                        _safe_activity_heartbeat(
+                            _activity_batch_heartbeat(
+                                inp,
+                                phase="emit_started",
+                                position=heartbeat_pos,
+                                step=touch_step,
+                                step_index=touch_idx,
+                            )
+                        )
                         await _emit_step_events_for_activity(
                             inp,
                             step=touch_step,
@@ -1468,7 +1564,15 @@ class DeviceActivities:
                             phase="started",
                             event_context_cache=event_context_cache,
                         )
-                        _safe_activity_heartbeat(f"batch:{batch_pos + rel}:emit_finished")
+                        _safe_activity_heartbeat(
+                            _activity_batch_heartbeat(
+                                inp,
+                                phase="emit_finished",
+                                position=heartbeat_pos,
+                                step=touch_step,
+                                step_index=touch_idx,
+                            )
+                        )
                         await _emit_step_events_for_activity(
                             inp,
                             step=touch_step,
@@ -1486,6 +1590,9 @@ class DeviceActivities:
                     if first_failure_index != -1:
                         break
                     if cancel_event.is_set() and await flag_probe.paused(force=True):
+                        _safe_activity_heartbeat(
+                            _activity_batch_heartbeat(inp, phase="paused", position=batch_pos)
+                        )
                         return await _finish(
                             results=results,
                             first_failure_index=-1,
@@ -1493,6 +1600,9 @@ class DeviceActivities:
                             context=batch_context,
                         )
                     if cancel_event.is_set() or await flag_probe.cancelled(force=cancel_event.is_set()):
+                        _safe_activity_heartbeat(
+                            _activity_batch_heartbeat(inp, phase="cancelled", position=batch_pos)
+                        )
                         return await _finish(
                             results=results,
                             first_failure_index=-1,
@@ -1500,6 +1610,9 @@ class DeviceActivities:
                             context=batch_context,
                         )
                     if await flag_probe.paused():
+                        _safe_activity_heartbeat(
+                            _activity_batch_heartbeat(inp, phase="paused", position=batch_pos)
+                        )
                         return await _finish(
                             results=results,
                             first_failure_index=-1,
@@ -1541,7 +1654,16 @@ class DeviceActivities:
                                 "message": "",
                                 "details": {"trace": sr.get("trace")},
                             }
-                            _safe_activity_heartbeat(f"batch:{batch_pos + rel}:emit_started")
+                            heartbeat_pos = batch_pos + rel
+                            _safe_activity_heartbeat(
+                                _activity_batch_heartbeat(
+                                    inp,
+                                    phase="emit_started",
+                                    position=heartbeat_pos,
+                                    step=touch_step,
+                                    step_index=touch_idx,
+                                )
+                            )
                             await _emit_step_events_for_activity(
                                 inp,
                                 step=touch_step,
@@ -1549,7 +1671,15 @@ class DeviceActivities:
                                 phase="started",
                                 event_context_cache=event_context_cache,
                             )
-                            _safe_activity_heartbeat(f"batch:{batch_pos + rel}:emit_finished")
+                            _safe_activity_heartbeat(
+                                _activity_batch_heartbeat(
+                                    inp,
+                                    phase="emit_finished",
+                                    position=heartbeat_pos,
+                                    step=touch_step,
+                                    step_index=touch_idx,
+                                )
+                            )
                             await _emit_step_events_for_activity(
                                 inp,
                                 step=touch_step,
@@ -1560,6 +1690,9 @@ class DeviceActivities:
                             )
                             results.append(entry)
                         if await flag_probe.paused(force=True):
+                            _safe_activity_heartbeat(
+                                _activity_batch_heartbeat(inp, phase="paused", position=batch_pos)
+                            )
                             return await _finish(
                                 results=results,
                                 first_failure_index=-1,
@@ -1567,6 +1700,13 @@ class DeviceActivities:
                                 context=batch_context,
                             )
                         if await flag_probe.cancelled(force=True):
+                            _safe_activity_heartbeat(
+                                _activity_batch_heartbeat(
+                                    inp,
+                                    phase="cancelled",
+                                    position=batch_pos,
+                                )
+                            )
                             return await _finish(
                                 results=results,
                                 first_failure_index=-1,
@@ -1583,6 +1723,9 @@ class DeviceActivities:
                         log.info(
                             "[%s] batch activity cooperatively cancelled at step#%d (%s) pos=%d/%d",
                             inp.device_serial, step_idx, step_type, batch_pos, len(inp.steps),
+                        )
+                        _safe_activity_heartbeat(
+                            _activity_batch_heartbeat(inp, phase="cancelled", position=batch_pos)
                         )
                         return await _finish(
                             results=results,
@@ -1644,7 +1787,16 @@ class DeviceActivities:
                             "message": message,
                             "details": {"trace": sr.get("trace")},
                         }
-                        _safe_activity_heartbeat(f"batch:{batch_pos + rel}:emit_started")
+                        heartbeat_pos = batch_pos + rel
+                        _safe_activity_heartbeat(
+                            _activity_batch_heartbeat(
+                                inp,
+                                phase="emit_started",
+                                position=heartbeat_pos,
+                                step=touch_step,
+                                step_index=touch_idx,
+                            )
+                        )
                         await _emit_step_events_for_activity(
                             inp,
                             step=touch_step,
@@ -1652,7 +1804,15 @@ class DeviceActivities:
                             phase="started",
                             event_context_cache=event_context_cache,
                         )
-                        _safe_activity_heartbeat(f"batch:{batch_pos + rel}:emit_finished")
+                        _safe_activity_heartbeat(
+                            _activity_batch_heartbeat(
+                                inp,
+                                phase="emit_finished",
+                                position=heartbeat_pos,
+                                step=touch_step,
+                                step_index=touch_idx,
+                            )
+                        )
                         await _emit_step_events_for_activity(
                             inp,
                             step=touch_step,
@@ -1670,10 +1830,18 @@ class DeviceActivities:
             step_type = step.get("type", "")
             step = _prepare_activity_step(step)
             step_type = step.get("type", "")
-            mini_scenario = _build_activity_mini_scenario(step, inp)
+            mini_scenario = _build_activity_mini_scenario(step, inp, step_index=step_idx)
 
             try:
-                _safe_activity_heartbeat(f"batch:{batch_pos}:emit_started")
+                _safe_activity_heartbeat(
+                    _activity_batch_heartbeat(
+                        inp,
+                        phase="emit_started",
+                        position=batch_pos,
+                        step=step,
+                        step_index=step_idx,
+                    )
+                )
                 await _emit_step_events_for_activity(
                     inp,
                     step=step,
@@ -1693,6 +1861,15 @@ class DeviceActivities:
                     execution_id=execution_id,
                     campaign_id=inp.campaign_id,
                     device_serial=inp.device_serial,
+                )
+                _safe_activity_heartbeat(
+                    _activity_batch_heartbeat(
+                        inp,
+                        phase="run_scenario_task",
+                        position=batch_pos,
+                        step=step,
+                        step_index=step_idx,
+                    )
                 )
                 activity_step_duration_ms = round(
                     (time.monotonic() - activity_step_started) * 1000.0,
@@ -1736,7 +1913,15 @@ class DeviceActivities:
                         },
                     }
                     results.append(entry)
-                    _safe_activity_heartbeat(f"batch:{batch_pos}:emit_finished")
+                    _safe_activity_heartbeat(
+                        _activity_batch_heartbeat(
+                            inp,
+                            phase="emit_finished",
+                            position=batch_pos,
+                            step=step,
+                            step_index=step_idx,
+                        )
+                    )
                     await _emit_step_events_for_activity(
                         inp,
                         step=step,
@@ -1769,7 +1954,15 @@ class DeviceActivities:
                         "details": {k: v for k, v in sr.items()
                                     if k not in ("index", "type", "ok", "message")},
                     }
-                    _safe_activity_heartbeat(f"batch:{batch_pos}:emit_finished")
+                    _safe_activity_heartbeat(
+                        _activity_batch_heartbeat(
+                            inp,
+                            phase="emit_finished",
+                            position=batch_pos,
+                            step=step,
+                            step_index=step_idx,
+                        )
+                    )
                     await _emit_step_events_for_activity(
                         inp,
                         step=step,
@@ -1795,7 +1988,15 @@ class DeviceActivities:
                         step_result=entry,
                     )
                     entry["details"]["trace"] = entry.get("trace")
-                    _safe_activity_heartbeat(f"batch:{batch_pos}:emit_finished")
+                    _safe_activity_heartbeat(
+                        _activity_batch_heartbeat(
+                            inp,
+                            phase="emit_finished",
+                            position=batch_pos,
+                            step=step,
+                            step_index=step_idx,
+                        )
+                    )
                     await _emit_step_events_for_activity(
                         inp,
                         step=step,
@@ -2359,6 +2560,93 @@ class DeviceActivities:
                 )
             await db.commit()
         return len(step_results)
+
+    @activity.defn
+    async def emit_control_flow_event(self, inp: dict) -> None:
+        """Emit one boundary event for workflow-owned control-flow steps."""
+        execution_id = str(inp.get("execution_id") or "")
+        if not execution_id:
+            return
+
+        from db.database import activity_session
+        from services.execution.activity_events import emit_control_flow_step_event
+        from services.execution.event_publisher import resolve_execution_event_context
+        from tenancy.context import tenant_context
+
+        async with activity_session() as db:
+            _execution, org_id, campaign_id = await resolve_execution_event_context(
+                db,
+                execution_id,
+            )
+            if not org_id:
+                return
+            campaign_id = inp.get("campaign_id") or campaign_id
+            with tenant_context(org_id):
+                await emit_control_flow_step_event(
+                    db,
+                    execution_id=execution_id,
+                    org_id=org_id,
+                    campaign_id=campaign_id,
+                    event_type=str(inp.get("event_type") or ""),
+                    step_id=str(inp.get("step_id") or inp.get("step_index") or ""),
+                    step_index=int(inp.get("step_index") or 0),
+                    step_type=str(inp.get("step_type") or ""),
+                    depth=int(inp.get("depth") or 0),
+                    trace_context=(
+                        inp.get("trace")
+                        if isinstance(inp.get("trace"), dict)
+                        else None
+                    ),
+                    payload=(
+                        inp.get("payload")
+                        if isinstance(inp.get("payload"), dict)
+                        else {}
+                    ),
+                )
+
+    @activity.defn
+    async def emit_temporal_activity_event(self, inp: dict) -> None:
+        """Emit one boundary event for a Temporal activity schedule/result."""
+        execution_id = str(inp.get("execution_id") or "")
+        if not execution_id:
+            return
+
+        from db.database import activity_session
+        from services.execution.activity_events import emit_temporal_activity_event
+        from services.execution.event_publisher import resolve_execution_event_context
+        from tenancy.context import tenant_context
+
+        async with activity_session() as db:
+            _execution, org_id, campaign_id = await resolve_execution_event_context(
+                db,
+                execution_id,
+            )
+            if not org_id:
+                return
+            campaign_id = inp.get("campaign_id") or campaign_id
+            with tenant_context(org_id):
+                await emit_temporal_activity_event(
+                    db,
+                    execution_id=execution_id,
+                    org_id=org_id,
+                    campaign_id=campaign_id,
+                    event_type=str(inp.get("event_type") or ""),
+                    step_id=str(inp.get("step_id") or inp.get("step_index") or ""),
+                    step_index=int(inp.get("step_index") or 0),
+                    step_type=str(inp.get("step_type") or ""),
+                    depth=int(inp.get("depth") or 0),
+                    trace_context=(
+                        inp.get("trace")
+                        if isinstance(inp.get("trace"), dict)
+                        else None
+                    ),
+                    payload=(
+                        inp.get("payload")
+                        if isinstance(inp.get("payload"), dict)
+                        else {}
+                    ),
+                )
+            await db.commit()
 
     @activity.defn
     async def finalize_campaign(self, inp: dict) -> None:

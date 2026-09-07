@@ -345,7 +345,7 @@ func TestDeviceSafeProfileKeepsCallerBitrateForNote10(t *testing.T) {
 	}
 }
 
-func TestDeviceSafeProfileMatchesNote10EmulatorName(t *testing.T) {
+func TestDeviceSafeProfileSkipsAndroidEmulatorName(t *testing.T) {
 	req := StartRequest{
 		Serial:     "SERIAL",
 		MaxFPS:     15,
@@ -357,14 +357,11 @@ func TestDeviceSafeProfileMatchesNote10EmulatorName(t *testing.T) {
 
 	got := applyDeviceSafeProfile(req, "sdk_gphone64_arm64 galaxy_note10_plus Google")
 
-	// The profile is defined by what it refuses to send: both encoder hints and
-	// every codec option. Each of those, on its own, aborts the encoder on real
-	// SM-N975F hardware.
-	if !got.SkipMaxSize || !got.SkipMaxFPS {
-		t.Fatalf("emulator Note 10+ profile not applied: %+v", got)
+	if got != req {
+		t.Fatalf("emulator must not use Note10 safe profile: got %+v want %+v", got, req)
 	}
-	if codecOptionsForLevel(got.CodecLevel, got.LowLatency) != "" {
-		t.Fatalf("profile sent a codec option to a device that aborts on them: %+v", got)
+	if needsDeviceSafeProfile("sdk_gphone64_arm64 galaxy_note10_plus Google") {
+		t.Fatal("emulator signature was classified as fragile Note10 hardware")
 	}
 }
 

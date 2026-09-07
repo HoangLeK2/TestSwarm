@@ -1,8 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Crop as CropIcon,
+  AlertTriangle,
+  CheckCircle2,
   Monitor,
   MousePointerClick,
   Move,
@@ -17,6 +19,7 @@ import {
 } from '@/components/variable-insert-menu';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
 import { getVariableDisplayMetadata } from '@/lib/variable-display-metadata';
 import type { VariableDisplayMetadata } from '@/lib/variable-display-metadata';
 import { cn } from '@/lib/utils';
@@ -36,6 +39,7 @@ import { AppAutomationStepFields } from './app-automation-fields';
 import { ScrollDownStepFields } from './scroll-down-fields';
 import { FallbackRatioFields, SelectorFields } from './selector-fields';
 import { PlatformSelect } from './platform-select';
+import { usePlatformCapabilities } from '../../hooks/use-platform-capabilities';
 import { SessionGateAccountBinder } from './session-gate-account-binder';
 import { PLATFORM_AWARE_STEP_TYPES } from './platform-aware-steps';
 import {
@@ -60,7 +64,30 @@ import {
   getSocialActionOptions
 } from './social-action-options';
 import { TapImageFields } from './tap-image-fields';
+import { VerifyScreenFields } from './verify-screen-fields';
 import type { VariablePreviewValues } from './variable-preview';
+import {
+  evaluateNodeCapabilityStatus,
+  nodeCapabilityBadgeLabel,
+  type DeviceCapabilityMap,
+  type NodeCapabilityRegistry,
+  type NodeCapabilityStatus
+} from '../../lib/node-capabilities';
+import {
+  analyzeStepConfiguration,
+  type StepConfigurationStatus
+} from '../../lib/step-configuration-status';
+import type {
+  StepVariableLineage,
+  StepVariableLineageIssue
+} from '../../lib/step-variable-lineage';
+import { scenarioLintIssueSeverity } from '../../lib/scenario-lint-preflight';
+import {
+  stepVariableLineageQuickFixes,
+  type StepVariableLineageQuickFix
+} from '../../lib/step-variable-lineage-quick-fix';
+
+type SetupTabValue = 'action' | 'screen' | 'data-save' | 'settings';
 
 interface Props {
   step: FlowStep;
@@ -94,6 +121,16 @@ interface Props {
   campaignScenarios?: RunScenarioCampaignOption[];
   runtimeContext?: SessionGateRuntimeContext;
   variablePreviewValues?: VariablePreviewValues;
+  /** Backend scenario schema registry keyed by step type. */
+  nodeCapabilities?: NodeCapabilityRegistry;
+  /** Runtime facts for the currently previewed phone. Unknown keys stay informational. */
+  deviceCapabilities?: DeviceCapabilityMap;
+  /** Static variable read/write analysis for this step in the smart step tree. */
+  variableLineage?: StepVariableLineage;
+  /** Insert a support step immediately before the currently edited step. */
+  onInsertStepBefore?: (step: FlowStep) => void;
+  /** Select another step from the same smart step tree by lineage path key. */
+  onSelectVariableLineagePathKey?: (pathKey: string) => void;
 }
 
 export type SessionGateRuntimeContext = {
@@ -594,10 +631,378 @@ function SessionGateFact({
   );
 }
 
+function NodeCapabilitySummary({
+  status,
+  evidence,
+  inspectorHints,
+  description,
+  t
+}: {
+  status: NodeCapabilityStatus;
+  evidence: string[];
+  inspectorHints: string[];
+  description?: string;
+  t: (key: string, values?: Record<string, unknown>) => string;
+}) {
+  const blocked = status.missing.length > 0;
+  const unknown = !blocked && status.unknown.length > 0;
+  const Icon = blocked ? AlertTriangle : unknown ? Info : CheckCircle2;
+  const tone = blocked
+    ? 'border-destructive/40 bg-destructive/5 text-destructive'
+    : unknown
+      ? 'border-amber-500/35 bg-amber-50/70 text-amber-800 dark:bg-amber-950/20 dark:text-amber-200'
+      : 'border-emerald-500/30 bg-emerald-50/70 text-emerald-800 dark:bg-emerald-950/20 dark:text-emerald-200';
+  const title = blocked
+    ? t('missingTitle')
+    : unknown
+      ? t('unknownTitle')
+      : t('readyTitle');
+  const details = blocked
+    ? status.missing
+    : unknown
+      ? status.unknown
+      : status.required;
+
+  return (
+    <StepPanelSection
+      title={t('sectionTitle')}
+      badge={
+        <Badge variant='outline' className='h-5 rounded-md px-1.5 text-[10px]'>
+          {status.risk}
+        </Badge>
+      }
+      className='space-y-2'
+    >
+      <div className={cn('rounded-md border px-2.5 py-2', tone)}>
+        <div className='flex min-w-0 items-center gap-2'>
+          <Icon className='size-3.5 shrink-0' aria-hidden />
+          <span className='min-w-0 truncate text-xs font-medium'>{title}</span>
+        </div>
+        <p className='mt-1 break-words text-[10px] leading-relaxed opacity-90'>
+          {nodeCapabilityBadgeLabel(status)}
+        </p>
+      </div>
+      {description ? (
+        <p className='text-[11px] leading-relaxed text-muted-foreground'>
+          {description}
+        </p>
+      ) : null}
+      {details.length > 0 ? (
+        <div className='flex flex-wrap gap-1'>
+          {details.map((key) => (
+            <Badge
+              key={key}
+              variant={blocked ? 'destructive' : 'secondary'}
+              className='max-w-full rounded-md px-1.5 py-0 text-[10px] font-normal'
+              title={key}
+            >
+              <span className='max-w-[14rem] truncate'>{key}</span>
+            </Badge>
+          ))}
+        </div>
+      ) : (
+        <p className='text-[10px] text-muted-foreground'>
+          {t('noRequirements')}
+        </p>
+      )}
+      {(evidence.length > 0 || inspectorHints.length > 0) && (
+        <div className='grid gap-1.5 text-[10px] text-muted-foreground'>
+          {evidence.length > 0 && (
+            <p>
+              <span className='font-medium text-foreground'>
+                {t('evidenceLabel')}
+              </span>{' '}
+              {evidence.join(', ')}
+            </p>
+          )}
+          {inspectorHints.length > 0 && (
+            <p>
+              <span className='font-medium text-foreground'>
+                {t('inspectorLabel')}
+              </span>{' '}
+              {inspectorHints.join(', ')}
+            </p>
+          )}
+        </div>
+      )}
+    </StepPanelSection>
+  );
+}
+
+function StepConfigurationSummary({
+  status,
+  t
+}: {
+  status: StepConfigurationStatus;
+  t: (key: string, values?: Record<string, unknown>) => string;
+}) {
+  if (status.state === 'complete') return null;
+
+  const blocked = status.state === 'missing';
+  const Icon = blocked ? AlertTriangle : Info;
+  const tone = blocked
+    ? 'border-destructive/40 bg-destructive/5 text-destructive'
+    : 'border-amber-500/35 bg-amber-50/70 text-amber-800 dark:bg-amber-950/20 dark:text-amber-200';
+  const title = blocked ? t('missingTitle') : t('warningTitle');
+
+  return (
+    <StepPanelSection
+      title={t('sectionTitle')}
+      badge={
+        <Badge variant='outline' className='h-5 rounded-md px-1.5 text-[10px]'>
+          {t(blocked ? 'badgeMissing' : 'badgeWarning', {
+            count: status.issues.length
+          })}
+        </Badge>
+      }
+      className='space-y-2'
+    >
+      <div className={cn('rounded-md border px-2.5 py-2', tone)}>
+        <div className='flex min-w-0 items-center gap-2'>
+          <Icon className='size-3.5 shrink-0' aria-hidden />
+          <span className='min-w-0 truncate text-xs font-medium'>{title}</span>
+        </div>
+        <p className='mt-1 break-words text-[10px] leading-relaxed opacity-90'>
+          {t(blocked ? 'missingDescription' : 'warningDescription')}
+        </p>
+      </div>
+      <div className='flex flex-wrap gap-1'>
+        {status.issues.map((issue) => (
+          <Badge
+            key={`${issue.code}:${issue.labelKey}:${issue.values?.number ?? ''}`}
+            variant={issue.severity === 'missing' ? 'destructive' : 'secondary'}
+            className='max-w-full rounded-md px-1.5 py-0 text-[10px] font-normal'
+          >
+            <span className='max-w-[16rem] truncate'>
+              {t(`fields.${issue.labelKey}`, issue.values)}
+            </span>
+          </Badge>
+        ))}
+      </div>
+    </StepPanelSection>
+  );
+}
+
+function VariableLineageSummary({
+  lineage,
+  step,
+  availableVariables,
+  onApplyQuickFix,
+  canInsertStepBefore,
+  canSelectProducer,
+  t
+}: {
+  lineage?: StepVariableLineage;
+  step: FlowStep;
+  availableVariables: string[];
+  onApplyQuickFix: (fix: StepVariableLineageQuickFix) => void;
+  canInsertStepBefore: boolean;
+  canSelectProducer: boolean;
+  t: (key: string, values?: Record<string, unknown>) => string;
+}) {
+  const criticalIssueCount =
+    lineage?.issues.filter(
+      (issue) => scenarioLintIssueSeverity(issue) === 'critical'
+    ).length ?? 0;
+
+  if (
+    !lineage ||
+    (lineage.references.length === 0 &&
+      lineage.produced.length === 0 &&
+      lineage.issues.length === 0)
+  ) {
+    return null;
+  }
+
+  return (
+    <StepPanelSection
+      title={t('sectionTitle')}
+      badge={
+        lineage.issues.length > 0 ? (
+          <Badge
+            variant={criticalIssueCount > 0 ? 'destructive' : 'outline'}
+            className='h-5 rounded-md px-1.5 text-[10px]'
+          >
+            {criticalIssueCount > 0
+              ? t('badgeCritical', {
+                  count: lineage.issues.length,
+                  critical: criticalIssueCount
+                })
+              : t('badgeWarning', { count: lineage.issues.length })}
+          </Badge>
+        ) : undefined
+      }
+      className='space-y-2'
+    >
+      {lineage.issues.length > 0 && (
+        <div className='space-y-1.5'>
+          {lineage.issues.map((issue) => (
+            <VariableLineageIssueRow
+              key={`${issue.kind}:${issue.variable}:${issue.source}`}
+              issue={issue}
+              step={step}
+              availableVariables={availableVariables}
+              onApplyQuickFix={onApplyQuickFix}
+              canInsertStepBefore={canInsertStepBefore}
+              canSelectProducer={canSelectProducer}
+              t={t}
+            />
+          ))}
+        </div>
+      )}
+      <VariableNameList
+        label={t('referencesLabel')}
+        emptyLabel={t('noneReferences')}
+        names={lineage.references.map((reference) => reference.name)}
+      />
+      <VariableNameList
+        label={t('producedLabel')}
+        emptyLabel={t('noneProduced')}
+        names={lineage.produced.map((production) => production.name)}
+      />
+    </StepPanelSection>
+  );
+}
+
+function VariableLineageIssueRow({
+  issue,
+  step,
+  availableVariables,
+  onApplyQuickFix,
+  canInsertStepBefore,
+  canSelectProducer,
+  t
+}: {
+  issue: StepVariableLineageIssue;
+  step: FlowStep;
+  availableVariables: string[];
+  onApplyQuickFix: (fix: StepVariableLineageQuickFix) => void;
+  canInsertStepBefore: boolean;
+  canSelectProducer: boolean;
+  t: (key: string, values?: Record<string, unknown>) => string;
+}) {
+  const critical = scenarioLintIssueSeverity(issue) === 'critical';
+  const fixes = stepVariableLineageQuickFixes(
+    issue,
+    step,
+    availableVariables
+  ).filter((fix) => {
+    if (fix.kind === 'insert_step_before') return canInsertStepBefore;
+    if (fix.kind === 'select_producer') return canSelectProducer;
+    return true;
+  });
+
+  return (
+    <div
+      className={cn(
+        'rounded-md border px-2.5 py-2',
+        critical
+          ? 'border-destructive/40 bg-destructive/5 text-destructive'
+          : 'border-amber-500/35 bg-amber-50/70 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200'
+      )}
+    >
+      <div className='flex min-w-0 items-center gap-2'>
+        <AlertTriangle className='size-3.5 shrink-0' aria-hidden />
+        <span className='min-w-0 truncate text-xs font-medium'>
+          {t(`issues.${issue.kind}`, {
+            variable: issue.variable,
+            source: issue.source
+          })}
+        </span>
+      </div>
+      {issue.producerPathKey ? (
+        <div
+          className={cn(
+            'mt-1 truncate pl-5 text-[10px]',
+            critical
+              ? 'text-destructive/80'
+              : 'text-amber-800/80 dark:text-amber-100/75'
+          )}
+        >
+          {t('producerHint', {
+            path: issue.producerPathKey,
+            stepType: issue.producerStepType ?? issue.producerPathKey
+          })}
+        </div>
+      ) : null}
+      {fixes.length > 0 ? (
+        <div className='mt-2 flex min-w-0 flex-wrap gap-1.5 pl-5'>
+          {fixes.map((fix) =>
+            fix.kind === 'guidance' ? (
+              <span
+                key={fix.id}
+                className={cn(
+                  'inline-flex min-w-0 items-center rounded-md bg-background/70 px-2 py-1 text-[10px] leading-snug',
+                  critical
+                    ? 'text-destructive'
+                    : 'text-amber-900 dark:text-amber-100'
+                )}
+                title={t(fix.descriptionKey)}
+              >
+                {t(fix.labelKey)}
+              </span>
+            ) : (
+              <Button
+                key={fix.id}
+                type='button'
+                variant='outline'
+                size='sm'
+                className='h-6 min-w-0 rounded-md px-2 text-[10px]'
+                title={t(fix.descriptionKey)}
+                onClick={() => onApplyQuickFix(fix)}
+              >
+                {t(fix.labelKey)}
+              </Button>
+            )
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function VariableNameList({
+  label,
+  emptyLabel,
+  names
+}: {
+  label: string;
+  emptyLabel: string;
+  names: string[];
+}) {
+  const uniqueNames = Array.from(new Set(names)).sort((a, b) =>
+    a.localeCompare(b)
+  );
+
+  return (
+    <div className='space-y-1'>
+      <p className='text-[10px] font-medium uppercase tracking-wide text-muted-foreground'>
+        {label}
+      </p>
+      {uniqueNames.length > 0 ? (
+        <div className='flex flex-wrap gap-1'>
+          {uniqueNames.map((name) => (
+            <Badge
+              key={name}
+              variant='secondary'
+              className='max-w-full rounded-md px-1.5 py-0 font-mono text-[10px] font-normal'
+              title={name}
+            >
+              <span className='max-w-[14rem] truncate'>{name}</span>
+            </Badge>
+          ))}
+        </div>
+      ) : (
+        <p className='text-[10px] text-muted-foreground'>{emptyLabel}</p>
+      )}
+    </div>
+  );
+}
+
 export function StepDetailPanel({
   step: stepProp,
   onChange,
-  onClose: _onClose,
+  onClose,
   availableVariables = [],
   onRequestPickSelector,
   onRequestPickTapCoords,
@@ -606,7 +1011,12 @@ export function StepDetailPanel({
   onRequestPickRegion,
   campaignScenarios = [],
   runtimeContext,
-  variablePreviewValues
+  variablePreviewValues,
+  nodeCapabilities,
+  deviceCapabilities,
+  variableLineage,
+  onInsertStepBefore,
+  onSelectVariableLineagePathKey
 }: Props) {
   const locale = useLocale();
   const t = useTranslations('campaignsFeature.stepEditor');
@@ -617,6 +1027,18 @@ export function StepDetailPanel({
   const tIfVar = useTranslations('campaignsFeature.stepEditor.ifVariable');
   const tTarget = useTranslations('campaignsFeature.stepEditor.selectTarget');
   const tOcr = useTranslations('campaignsFeature.stepEditor.ocr');
+  const tCap = useTranslations('campaignsFeature.stepEditor.nodeCapability');
+  const tSetup = useTranslations('campaignsFeature.stepEditor.setupFlow');
+  const tConfig = useTranslations(
+    'campaignsFeature.stepEditor.configurationStatus'
+  );
+  const tLineage = useTranslations(
+    'campaignsFeature.stepEditor.variableLineage'
+  );
+  const tSocialActions = useTranslations(
+    'campaignsFeature.stepEditor.socialActions'
+  );
+  const { optionsForStep } = usePlatformCapabilities();
   const variableInfoT = useVariableInfoTranslator();
   const fallbackText = (value: string, key: string, vi: string, en: string) =>
     value.endsWith(`.${key}`) ? (locale.startsWith('vi') ? vi : en) : value;
@@ -714,6 +1136,22 @@ export function StepDetailPanel({
     },
     [onChange]
   );
+  const applyVariableLineageQuickFix = useCallback(
+    (fix: StepVariableLineageQuickFix) => {
+      if (fix.kind === 'patch_step') {
+        update(fix.patch);
+        return;
+      }
+      if (fix.kind === 'insert_step_before') {
+        onInsertStepBefore?.(fix.step);
+        return;
+      }
+      if (fix.kind === 'select_producer') {
+        onSelectVariableLineagePathKey?.(fix.producerPathKey);
+      }
+    },
+    [onInsertStepBefore, onSelectVariableLineagePathKey, update]
+  );
   const isVarRef = (v: string) => /^\$\{[^}]+\}$/.test(v);
   const parseNumOrVar = (raw: string, fallback: number): number | string => {
     const v = raw.trim();
@@ -737,47 +1175,189 @@ export function StepDetailPanel({
       ? 'ratio'
       : 'absolute';
   const isExtractStep = step.type === 'extract';
+  const primarySetupTab: SetupTabValue = isExtractStep ? 'screen' : 'action';
+  const [setupTab, setSetupTab] = useState<SetupTabValue>(primarySetupTab);
+  useEffect(() => {
+    setSetupTab(primarySetupTab);
+  }, [primarySetupTab, stepIdentity]);
+  const nodeCapability = nodeCapabilities?.[step.type];
+  const nodeCapabilityStatus = nodeCapability
+    ? evaluateNodeCapabilityStatus(nodeCapability, deviceCapabilities)
+    : null;
+  const configurationStatus = analyzeStepConfiguration(step);
+  const socialPlatformOptions = useMemo(
+    () => optionsForStep(step.type),
+    [optionsForStep, step.type]
+  );
+  const selectedSocialPlatform =
+    typeof step.platform === 'string' && step.platform !== 'auto'
+      ? socialPlatformOptions.find((option) => option.value === step.platform)
+      : socialPlatformOptions.find((option) => option.supported);
+  const selectedSocialPlatformLabel =
+    selectedSocialPlatform?.label ??
+    (typeof step.platform === 'string' && step.platform !== 'auto'
+      ? step.platform
+      : 'Auto');
+  const selectedSocialPlatformSupported =
+    selectedSocialPlatform?.supported ?? false;
+  const socialActionOptions = getSocialActionOptions(
+    step.type,
+    selectedSocialPlatform?.facets
+  );
+  const currentSocialAction =
+    step.action ??
+    defaultSocialAction(step.type, selectedSocialPlatform?.facets);
+  const currentSocialActionSupported =
+    !currentSocialAction ||
+    socialActionOptions.some((option) => option.value === currentSocialAction);
+  const renderedSocialActionOptions = currentSocialActionSupported
+    ? socialActionOptions
+    : [{ value: currentSocialAction }, ...socialActionOptions];
+  const showContentCommentText =
+    step.type === 'content_interaction' && currentSocialAction === 'comment';
+  const isSocialActionStep = [
+    'content_interaction',
+    'connection_request',
+    'community_membership'
+  ].includes(step.type);
+  const missingCommentText =
+    showContentCommentText && !String(step.comment_text ?? '').trim();
+  const socialSetupState = !selectedSocialPlatformSupported
+    ? 'unsupported'
+    : !currentSocialActionSupported || missingCommentText
+      ? 'needs_setup'
+      : 'ready';
+  const socialSetupBadgeClassName =
+    socialSetupState === 'ready'
+      ? 'border-emerald-500/40 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200'
+      : socialSetupState === 'unsupported'
+        ? 'border-destructive/40 bg-destructive/5 text-destructive'
+        : 'border-amber-500/40 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-200';
+  const socialActionLabel = socialActionOptions.some(
+    (known) => known.value === currentSocialAction
+  )
+    ? tSocialActions(
+        currentSocialAction as Parameters<typeof tSocialActions>[0]
+      )
+    : currentSocialAction || '—';
+  const setupTabs: Array<{
+    value: SetupTabValue;
+    label: string;
+    description: string;
+  }> = [
+    {
+      value: primarySetupTab,
+      label: isExtractStep ? t('tabs.screen') : tSetup('configure'),
+      description: isExtractStep
+        ? tSetup('screenDescription')
+        : tSetup('configureDescription')
+    },
+    ...(isExtractStep
+      ? [
+          {
+            value: 'data-save' as const,
+            label: tSetup('dataSave'),
+            description: tSetup('dataSaveDescription')
+          }
+        ]
+      : []),
+    {
+      value: 'settings',
+      label: tSetup('errorHandling'),
+      description: tSetup('errorDescription')
+    }
+  ];
+  const currentSetupTab = setupTabs.some((tab) => tab.value === setupTab)
+    ? setupTab
+    : primarySetupTab;
+  const currentSetupIndex = Math.max(
+    0,
+    setupTabs.findIndex((tab) => tab.value === currentSetupTab)
+  );
+  const nextSetupTab = setupTabs[currentSetupIndex + 1];
+  const handleDoneAndClose = useCallback(() => {
+    if (pendingCommitRef.current) {
+      onChangeRef.current(pendingCommitRef.current);
+      pendingCommitRef.current = null;
+    }
+    onClose();
+  }, [onClose]);
   return (
-    <div className='flex flex-col bg-card'>
+    <div className='flex h-full min-h-0 flex-col bg-card'>
       <StepPanelHeader
         step={step}
         variablePreviewValues={variablePreviewValues}
       />
 
-      <div className='max-h-[70vh] space-y-4 overflow-y-auto p-3 sm:p-4'>
+      <div className='min-h-0 flex-1 space-y-4 overflow-y-auto p-3 sm:p-4'>
+        {nodeCapability && nodeCapabilityStatus ? (
+          <NodeCapabilitySummary
+            status={nodeCapabilityStatus}
+            evidence={nodeCapability.recorder_evidence ?? []}
+            inspectorHints={nodeCapability.inspector_hints ?? []}
+            description={nodeCapability.description}
+            t={(key, values) => tCap(key as never, values as never)}
+          />
+        ) : null}
+
+        <StepConfigurationSummary
+          status={configurationStatus}
+          t={(key, values) => tConfig(key as never, values as never)}
+        />
+
+        <VariableLineageSummary
+          lineage={variableLineage}
+          step={step}
+          availableVariables={availableVariables}
+          onApplyQuickFix={applyVariableLineageQuickFix}
+          canInsertStepBefore={Boolean(onInsertStepBefore)}
+          canSelectProducer={Boolean(onSelectVariableLineagePathKey)}
+          t={(key, values) => tLineage(key as never, values as never)}
+        />
+
         <StepPanelMetaFields step={step} commitStep={commitStep} t={t} />
 
         <Tabs
-          defaultValue={isExtractStep ? 'screen' : 'action'}
+          value={currentSetupTab}
+          onValueChange={(value) => setSetupTab(value as SetupTabValue)}
           className='space-y-3'
         >
-          <TabsList
-            className={
-              isExtractStep
-                ? 'grid h-9 w-full grid-cols-3'
-                : 'grid h-9 w-full grid-cols-2'
-            }
-          >
-            <TabsTrigger
-              value={isExtractStep ? 'screen' : 'action'}
-              className='text-xs'
+          <div className='rounded-md border bg-muted/10 p-2'>
+            <div className='mb-2 flex items-center justify-between gap-2'>
+              <p className='truncate text-xs font-semibold text-foreground'>
+                {tSetup('title')}
+              </p>
+              <span className='shrink-0 text-[10px] font-medium text-muted-foreground'>
+                {currentSetupIndex + 1}/{setupTabs.length}
+              </span>
+            </div>
+            <TabsList
+              className={cn(
+                'grid h-8 w-full gap-1 bg-muted/45 p-1',
+                setupTabs.length === 3 ? 'grid-cols-3' : 'grid-cols-2'
+              )}
             >
-              {isExtractStep ? t('tabs.screen') : t('tabs.action')}
-            </TabsTrigger>
-            {isExtractStep ? (
-              <TabsTrigger value='data-save' className='text-xs'>
-                {t('tabs.dataSave')}
-              </TabsTrigger>
-            ) : null}
-            <TabsTrigger value='settings' className='text-xs'>
-              {t('tabs.settings')}
-            </TabsTrigger>
-          </TabsList>
+              {setupTabs.map((tab, index) => (
+                <TabsTrigger
+                  key={tab.value}
+                  value={tab.value}
+                  className='h-6 min-w-0 gap-1 rounded px-1.5 text-[11px] shadow-none data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm'
+                >
+                  <span className='flex size-4 shrink-0 items-center justify-center rounded-full bg-background text-[9px] font-semibold text-muted-foreground data-[state=active]:text-foreground'>
+                    {index + 1}
+                  </span>
+                  <span className='min-w-0 truncate font-medium'>
+                    {tab.label}
+                  </span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+            <p className='mt-2 line-clamp-2 text-[10px] leading-snug text-muted-foreground'>
+              {setupTabs[currentSetupIndex]?.description}
+            </p>
+          </div>
 
-          <TabsContent
-            value={isExtractStep ? 'screen' : 'action'}
-            className='mt-0 space-y-3'
-          >
+          <TabsContent value={primarySetupTab} className='mt-0 space-y-3'>
             <StepPanelSection title={tSec('stepConfig')}>
               {step.type === 'tap' && (
                 <>
@@ -1099,6 +1679,135 @@ export function StepDetailPanel({
                       />
                     </F>
                   )}
+                </>
+              )}
+
+              {step.type === 'tap_xml_match' && (
+                <>
+                  <StepPanelHint>{t('tapXmlMatch.hint')}</StepPanelHint>
+                  <div className='grid grid-cols-1 gap-2 sm:grid-cols-2'>
+                    <F label={t('tapXmlMatch.attributeLabel')}>
+                      <select
+                        className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
+                        value={step.attr ?? step.by ?? 'content-desc'}
+                        onChange={(e) =>
+                          update({ attr: e.target.value, by: undefined })
+                        }
+                      >
+                        <option value='content-desc'>
+                          {t('tapXmlMatch.attrContentDesc')}
+                        </option>
+                        <option value='text'>
+                          {t('tapXmlMatch.attrText')}
+                        </option>
+                        <option value='resource-id'>
+                          {t('tapXmlMatch.attrResourceId')}
+                        </option>
+                        <option value='class'>
+                          {t('tapXmlMatch.attrClass')}
+                        </option>
+                      </select>
+                    </F>
+                    <F label={t('tapXmlMatch.matchModeLabel')}>
+                      <select
+                        className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
+                        value={step.equals != null ? 'equals' : 'contains'}
+                        onChange={(e) => {
+                          const currentValue = String(
+                            step.contains ?? step.equals ?? step.value ?? ''
+                          );
+                          update(
+                            e.target.value === 'equals'
+                              ? {
+                                  equals: currentValue,
+                                  contains: undefined,
+                                  value: undefined
+                                }
+                              : {
+                                  contains: currentValue,
+                                  equals: undefined,
+                                  value: undefined
+                                }
+                          );
+                        }}
+                      >
+                        <option value='contains'>
+                          {t('tapXmlMatch.matchContains')}
+                        </option>
+                        <option value='equals'>
+                          {t('tapXmlMatch.matchEquals')}
+                        </option>
+                      </select>
+                    </F>
+                  </div>
+                  <F label={t('tapXmlMatch.valueLabel')}>
+                    <div className={valueInsertRowClassName()}>
+                      <VariableTextInput
+                        availableVariables={availableVariables}
+                        t={t}
+                        className='h-8 font-mono text-xs'
+                        value={String(
+                          step.contains ?? step.equals ?? step.value ?? ''
+                        )}
+                        placeholder={t('tapXmlMatch.valuePlaceholder', {
+                          varToken: SCENARIO_VAR_TOKENS.VAR
+                        })}
+                        onValueChange={(value) =>
+                          update(
+                            step.equals != null
+                              ? {
+                                  equals: value,
+                                  contains: undefined,
+                                  value: undefined
+                                }
+                              : {
+                                  contains: value,
+                                  equals: undefined,
+                                  value: undefined
+                                }
+                          )
+                        }
+                      />
+                    </div>
+                  </F>
+                  <StepPanelToggle
+                    label={t('tapXmlMatch.clickableLabel')}
+                    description={t('tapXmlMatch.clickableDescription')}
+                    checked={step.clickable ?? true}
+                    onCheckedChange={(checked) =>
+                      update({ clickable: checked })
+                    }
+                  />
+                  <div className='grid grid-cols-2 gap-2'>
+                    <F label={tField('timeoutSeconds')}>
+                      <Input
+                        type='number'
+                        min={0.1}
+                        step={0.1}
+                        className='h-8 text-xs'
+                        value={step.timeout ?? 6}
+                        onChange={(e) =>
+                          update({
+                            timeout: Math.max(0.1, Number(e.target.value) || 6)
+                          })
+                        }
+                      />
+                    </F>
+                    <F label={tField('pollSeconds')}>
+                      <Input
+                        type='number'
+                        min={0.05}
+                        step={0.05}
+                        className='h-8 text-xs'
+                        value={step.poll ?? 0.25}
+                        onChange={(e) =>
+                          update({
+                            poll: Math.max(0.05, Number(e.target.value) || 0.25)
+                          })
+                        }
+                      />
+                    </F>
+                  </div>
                 </>
               )}
 
@@ -1527,75 +2236,11 @@ export function StepDetailPanel({
               )}
 
               {step.type === 'verify_screen' && (
-                <>
-                  <F label={tField('screenshotInput')}>
-                    <textarea
-                      className='min-h-[92px] w-full rounded border bg-background px-2 py-1.5 font-mono text-xs'
-                      value={step.screenshot ?? ''}
-                      onChange={(e) => update({ screenshot: e.target.value })}
-                    />
-                  </F>
-                  <div className='grid grid-cols-3 gap-2'>
-                    <F label='ssim_threshold'>
-                      <Input
-                        type='number'
-                        min={0}
-                        max={1}
-                        step={0.01}
-                        className='h-8 text-xs'
-                        value={step.ssim_threshold ?? 0.75}
-                        onChange={(e) =>
-                          update({
-                            ssim_threshold: Number(e.target.value) || 0.75
-                          })
-                        }
-                      />
-                    </F>
-                    <F label='timeout'>
-                      <Input
-                        type='number'
-                        min={0.1}
-                        step={0.1}
-                        className='h-8 text-xs'
-                        value={step.timeout ?? 8}
-                        onChange={(e) =>
-                          update({
-                            timeout: Math.max(
-                              0.1,
-                              Number(e.target.value) || 0.1
-                            )
-                          })
-                        }
-                      />
-                    </F>
-                    <F label='poll'>
-                      <Input
-                        type='number'
-                        min={0.1}
-                        step={0.1}
-                        className='h-8 text-xs'
-                        value={step.poll ?? 0.5}
-                        onChange={(e) =>
-                          update({
-                            poll: Math.max(0.1, Number(e.target.value) || 0.1)
-                          })
-                        }
-                      />
-                    </F>
-                  </div>
-                  <F label={tField('openedProfileVar')}>
-                    <Input
-                      className='h-8 font-mono text-xs'
-                      value={step.save_opened_as ?? 'AUTHOR_PROFILE_OPENED'}
-                      onChange={(e) =>
-                        update({
-                          save_opened_as:
-                            e.target.value || 'AUTHOR_PROFILE_OPENED'
-                        })
-                      }
-                    />
-                  </F>
-                </>
+                <VerifyScreenFields
+                  step={step}
+                  update={update}
+                  onRequestCropImage={onRequestCropImage}
+                />
               )}
 
               {step.type === 'dismiss_popup' && (
@@ -2177,98 +2822,244 @@ export function StepDetailPanel({
                 </>
               )}
 
-              {[
-                'content_interaction',
-                'connection_request',
-                'community_membership'
-              ].includes(step.type) && (
+              {isSocialActionStep && (
                 <>
-                  <StepPanelHint>{tField('connectHint')}</StepPanelHint>
-                  <F label={tField('action')}>
-                    <select
-                      className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
-                      value={step.action ?? defaultSocialAction(step.type)}
-                      onChange={(e) => update({ action: e.target.value })}
-                    >
-                      {getSocialActionOptions(step.type).map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </F>
-                  <div className='grid grid-cols-3 gap-2'>
-                    <F label={tField('findButtonSeconds')}>
-                      <Input
-                        type='number'
-                        min={0.1}
-                        max={60}
-                        step={0.1}
-                        className='h-8 text-xs'
-                        value={step.timeout ?? 6}
-                        onChange={(e) =>
-                          update({
-                            timeout: Math.max(0.1, Number(e.target.value) || 6)
-                          })
-                        }
-                      />
-                    </F>
-                    <F label={tField('pollSeconds')}>
-                      <Input
-                        type='number'
-                        min={0.05}
-                        max={10}
-                        step={0.05}
-                        className='h-8 text-xs'
-                        value={step.poll ?? 0.4}
-                        onChange={(e) =>
-                          update({
-                            poll: Math.max(0.05, Number(e.target.value) || 0.4)
-                          })
-                        }
-                      />
-                    </F>
-                    <F label={tField('verifySeconds')}>
-                      <Input
-                        type='number'
-                        min={0.1}
-                        max={60}
-                        step={0.1}
-                        className='h-8 text-xs'
-                        value={step.verify_timeout ?? 5}
-                        onChange={(e) =>
-                          update({
-                            verify_timeout: Math.max(
-                              0.1,
-                              Number(e.target.value) || 5
+                  <StepPanelSection
+                    title={tField('capabilitySetup')}
+                    badge={
+                      <Badge
+                        variant='outline'
+                        className={cn(
+                          'h-5 rounded-md px-1.5 text-[10px]',
+                          socialSetupBadgeClassName
+                        )}
+                      >
+                        {tField(socialSetupState)}
+                      </Badge>
+                    }
+                    className='space-y-3 border-primary/20 bg-primary/5'
+                  >
+                    <StepPanelHint>
+                      {tField('capabilitySetupHint')}
+                    </StepPanelHint>
+                    <div className='grid gap-2 sm:grid-cols-3'>
+                      <div className='rounded-md border bg-background/80 p-2.5'>
+                        <div className='mb-1 flex items-center justify-between gap-2'>
+                          <span className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>
+                            1 · {tField('runTarget')}
+                          </span>
+                          <Badge
+                            variant='secondary'
+                            className='max-w-24 truncate'
+                          >
+                            {selectedSocialPlatformLabel}
+                          </Badge>
+                        </div>
+                        <p className='text-[11px] leading-relaxed text-muted-foreground'>
+                          {selectedSocialPlatform?.coverage ??
+                            tField('selectProviderAbove')}
+                        </p>
+                      </div>
+                      <div className='rounded-md border bg-background/80 p-2.5'>
+                        <div className='mb-1 flex items-center justify-between gap-2'>
+                          <span className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>
+                            2 · {tField('target')}
+                          </span>
+                          <Badge
+                            variant='outline'
+                            className='max-w-24 truncate'
+                          >
+                            {step.require_verified_target
+                              ? tField('verified')
+                              : tField('currentScreen')}
+                          </Badge>
+                        </div>
+                        <p className='truncate font-mono text-[11px] text-muted-foreground'>
+                          {step.require_verified_target ??
+                            tField('currentScreenTarget')}
+                        </p>
+                      </div>
+                      <div className='rounded-md border bg-background/80 p-2.5'>
+                        <div className='mb-1 flex items-center justify-between gap-2'>
+                          <span className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>
+                            3 · {tField('action')}
+                          </span>
+                          <Badge
+                            variant={
+                              currentSocialActionSupported
+                                ? 'secondary'
+                                : 'destructive'
+                            }
+                            className='max-w-24 truncate'
+                          >
+                            {socialActionLabel}
+                          </Badge>
+                        </div>
+                        <p className='text-[11px] leading-relaxed text-muted-foreground'>
+                          {showContentCommentText
+                            ? missingCommentText
+                              ? tField('commentTextRequired')
+                              : tField('commentTextReady')
+                            : tField('providerActionResolved')}
+                        </p>
+                      </div>
+                    </div>
+                    {!selectedSocialPlatformSupported && (
+                      <p className='rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-[11px] leading-relaxed text-destructive'>
+                        {tField('unsupportedProviderHint')}
+                      </p>
+                    )}
+                  </StepPanelSection>
+
+                  <StepPanelSection title={tField('actionContent')}>
+                    <F label={tField('action')}>
+                      <select
+                        className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
+                        value={currentSocialAction}
+                        onChange={(e) => update({ action: e.target.value })}
+                        disabled={renderedSocialActionOptions.length <= 1}
+                      >
+                        {renderedSocialActionOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {socialActionOptions.some(
+                              (known) => known.value === option.value
                             )
+                              ? tSocialActions(
+                                  option.value as Parameters<
+                                    typeof tSocialActions
+                                  >[0]
+                                )
+                              : option.value}
+                          </option>
+                        ))}
+                      </select>
+                      {renderedSocialActionOptions.length <= 1 && (
+                        <p className='mt-1 text-[11px] text-muted-foreground'>
+                          {tField('singleProviderActionHint')}
+                        </p>
+                      )}
+                      {!currentSocialActionSupported && (
+                        <p className='mt-1 text-[11px] text-destructive'>
+                          {tField('unsupportedActionHint')}
+                        </p>
+                      )}
+                    </F>
+                    {showContentCommentText && (
+                      <F label={tField('commentText')}>
+                        <VariableTextInput
+                          availableVariables={availableVariables}
+                          t={t}
+                          className={cn(
+                            'h-8 text-xs',
+                            missingCommentText &&
+                              'border-amber-500 focus-visible:ring-amber-500'
+                          )}
+                          value={step.comment_text ?? ''}
+                          placeholder='${COMMENT_TEXT}'
+                          onValueChange={(value) =>
+                            update({ comment_text: value || undefined })
+                          }
+                        />
+                        {missingCommentText && (
+                          <p className='mt-1 text-[11px] text-amber-700 dark:text-amber-200'>
+                            {tField('commentTextRequired')}
+                          </p>
+                        )}
+                      </F>
+                    )}
+                  </StepPanelSection>
+
+                  <StepPanelSection
+                    title={tField('advancedBehavior')}
+                    badge={
+                      <Badge
+                        variant='outline'
+                        className='h-5 rounded-md px-1.5 text-[10px]'
+                      >
+                        {tField('advanced')}
+                      </Badge>
+                    }
+                    className='bg-muted/10'
+                  >
+                    <div className='grid grid-cols-3 gap-2'>
+                      <F label={tField('findButtonSeconds')}>
+                        <Input
+                          type='number'
+                          min={0.1}
+                          max={60}
+                          step={0.1}
+                          className='h-8 text-xs'
+                          value={step.timeout ?? 6}
+                          onChange={(e) =>
+                            update({
+                              timeout: Math.max(
+                                0.1,
+                                Number(e.target.value) || 6
+                              )
+                            })
+                          }
+                        />
+                      </F>
+                      <F label={tField('pollSeconds')}>
+                        <Input
+                          type='number'
+                          min={0.05}
+                          max={10}
+                          step={0.05}
+                          className='h-8 text-xs'
+                          value={step.poll ?? 0.4}
+                          onChange={(e) =>
+                            update({
+                              poll: Math.max(
+                                0.05,
+                                Number(e.target.value) || 0.4
+                              )
+                            })
+                          }
+                        />
+                      </F>
+                      <F label={tField('verifySeconds')}>
+                        <Input
+                          type='number'
+                          min={0.1}
+                          max={60}
+                          step={0.1}
+                          className='h-8 text-xs'
+                          value={step.verify_timeout ?? 5}
+                          onChange={(e) =>
+                            update({
+                              verify_timeout: Math.max(
+                                0.1,
+                                Number(e.target.value) || 5
+                              )
+                            })
+                          }
+                        />
+                      </F>
+                    </div>
+                    <F label={tField('saveResultToVar')}>
+                      <Input
+                        className='h-8 font-mono text-xs'
+                        value={step.save_as ?? ''}
+                        placeholder='SOCIAL_ACTION_RESULT'
+                        onChange={(e) =>
+                          update({ save_as: e.target.value || undefined })
+                        }
+                      />
+                    </F>
+                    <F label={tField('requireVerifiedTarget')}>
+                      <Input
+                        className='h-8 font-mono text-xs'
+                        value={step.require_verified_target ?? ''}
+                        placeholder='_people_target'
+                        onChange={(e) =>
+                          update({
+                            require_verified_target: e.target.value || undefined
                           })
                         }
                       />
                     </F>
-                  </div>
-                  <F label={tField('saveResultToVar')}>
-                    <Input
-                      className='h-8 font-mono text-xs'
-                      value={step.save_as ?? ''}
-                      placeholder='SOCIAL_ACTION_RESULT'
-                      onChange={(e) =>
-                        update({ save_as: e.target.value || undefined })
-                      }
-                    />
-                  </F>
-                  <F label={tField('requireVerifiedTarget')}>
-                    <Input
-                      className='h-8 font-mono text-xs'
-                      value={step.require_verified_target ?? ''}
-                      placeholder='_people_target'
-                      onChange={(e) =>
-                        update({
-                          require_verified_target: e.target.value || undefined
-                        })
-                      }
-                    />
-                  </F>
+                  </StepPanelSection>
                 </>
               )}
 
@@ -3809,6 +4600,40 @@ export function StepDetailPanel({
             <StepRetryPolicySection step={step} update={update} />
           </TabsContent>
         </Tabs>
+      </div>
+
+      <div className='shrink-0 border-t border-border/70 bg-background/95 p-2.5 backdrop-blur'>
+        <div className='space-y-2'>
+          <p className='text-[10px] leading-snug text-muted-foreground'>
+            {nextSetupTab ? tSetup('footerNextHint') : tSetup('footerDoneHint')}
+          </p>
+          <div
+            className={cn(
+              'grid gap-2',
+              nextSetupTab ? 'grid-cols-2' : 'grid-cols-1'
+            )}
+          >
+            {nextSetupTab ? (
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                className='h-8 min-w-0 text-xs'
+                onClick={() => setSetupTab(nextSetupTab.value)}
+              >
+                {tSetup('next')}
+              </Button>
+            ) : null}
+            <Button
+              type='button'
+              size='sm'
+              className='h-8 min-w-0 text-xs'
+              onClick={handleDoneAndClose}
+            >
+              {tSetup('done')}
+            </Button>
+          </div>
+        </div>
       </div>
     </div>
   );

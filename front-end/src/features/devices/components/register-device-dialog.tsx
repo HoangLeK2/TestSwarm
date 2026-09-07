@@ -39,7 +39,7 @@ import {
   Smartphone
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { invalidateDeviceFleetQueries } from '@/features/devices/hooks/use-devices';
 import {
   devicesApi,
@@ -62,10 +62,13 @@ type Step = 'form' | 'confirm' | 'qr' | 'connected';
 
 const POLL_INTERVAL_MS = 2000;
 const DEVICE_PICKER_LIMIT = 8;
+const ALLOCATED_DEVICE_PICKER_FETCH_LIMIT = 50;
 
 type RelayDeviceChoice = {
   id: string;
-  relayId: string;
+  kind: 'allocated' | 'relay';
+  relayId?: string;
+  deviceId?: string;
   relayLabel: string;
   serial: string;
   deviceName?: string;
@@ -107,6 +110,34 @@ export function RegisterDeviceDialog({
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const qrOpenedAtRef = useRef<number>(0);
 
+  const { data: allocatedDevices = [] } = useQuery<DeviceOut[]>({
+    queryKey: ['devices', 'allocated', deviceSearch],
+    queryFn: () =>
+      devicesApi.listAllocated({
+        q: deviceSearch,
+        limit: ALLOCATED_DEVICE_PICKER_FETCH_LIMIT
+      }),
+    enabled: open,
+    staleTime: 15_000
+  });
+
+  const allocatedDeviceChoices = useMemo<RelayDeviceChoice[]>(
+    () =>
+      allocatedDevices.map((device) => ({
+        id: `allocated::${device.id}`,
+        kind: 'allocated',
+        deviceId: device.id,
+        relayId: device.managed_by_relay_id ?? undefined,
+        relayLabel: t('allocatedSource'),
+        serial: device.relay_serial || device.adb_serial || device.serial,
+        deviceName:
+          device.name ||
+          [device.brand, device.model].filter(Boolean).join(' ') ||
+          device.serial
+      })),
+    [allocatedDevices, t]
+  );
+
   const relayDeviceChoices = useMemo<RelayDeviceChoice[]>(() => {
     const choices: RelayDeviceChoice[] = [];
     for (const agent of relayAgents) {
@@ -121,8 +152,9 @@ export function RegisterDeviceDialog({
           continue;
         choices.push({
           id: `${agent.relay_id}::${serial}`,
+          kind: 'relay',
           relayId: agent.relay_id,
-          relayLabel: agent.hostname || agent.relay_id,
+          relayLabel: agent.name || agent.relay_id,
           serial,
           deviceName: agent.device_names?.[serial]
         });
@@ -130,21 +162,27 @@ export function RegisterDeviceDialog({
     }
     return choices;
   }, [relayAgents, registeredSerials]);
-  const hasRelayChoices = relayDeviceChoices.length > 0;
+  const deviceChoices = useMemo(
+    () => [...allocatedDeviceChoices, ...relayDeviceChoices],
+    [allocatedDeviceChoices, relayDeviceChoices]
+  );
+  const hasDeviceChoices = deviceChoices.length > 0;
   const selectedRelayDevice = useMemo(
-    () =>
-      relayDeviceChoices.find((choice) => choice.id === selectedRelayDeviceId),
-    [relayDeviceChoices, selectedRelayDeviceId]
+    () => deviceChoices.find((choice) => choice.id === selectedRelayDeviceId),
+    [deviceChoices, selectedRelayDeviceId]
   );
   const filteredRelayDeviceChoices = useMemo(() => {
     const query = normalizeDeviceSearch(deviceSearch);
-    if (!query) return relayDeviceChoices;
-    return relayDeviceChoices.filter((choice) => {
+    if (!query) return deviceChoices;
+    return deviceChoices.filter((choice) => {
       const name = normalizeDeviceSearch(choice.deviceName || '');
       const serial = normalizeDeviceSearch(choice.serial);
-      return name.includes(query) || serial.includes(query);
+      const relay = normalizeDeviceSearch(choice.relayLabel);
+      return (
+        name.includes(query) || serial.includes(query) || relay.includes(query)
+      );
     });
-  }, [relayDeviceChoices, deviceSearch]);
+  }, [deviceChoices, deviceSearch]);
   const visibleRelayDeviceChoices = filteredRelayDeviceChoices.slice(
     0,
     DEVICE_PICKER_LIMIT
@@ -177,15 +215,13 @@ export function RegisterDeviceDialog({
 
   useEffect(() => {
     if (
-      relayDeviceChoices.length > 0 &&
+      deviceChoices.length > 0 &&
       (!selectedRelayDeviceId ||
-        !relayDeviceChoices.some(
-          (choice) => choice.id === selectedRelayDeviceId
-        ))
+        !deviceChoices.some((choice) => choice.id === selectedRelayDeviceId))
     ) {
-      setSelectedRelayDeviceId(relayDeviceChoices[0].id);
+      setSelectedRelayDeviceId(deviceChoices[0].id);
     }
-  }, [relayDeviceChoices, selectedRelayDeviceId]);
+  }, [deviceChoices, selectedRelayDeviceId]);
 
   useEffect(() => {
     if (step !== 'qr' || !registeredDevice?.device_key) {
@@ -229,7 +265,7 @@ export function RegisterDeviceDialog({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const choice = relayDeviceChoices.find(
+    const choice = deviceChoices.find(
       (item) => item.id === selectedRelayDeviceId
     );
     if (!choice) {
@@ -238,14 +274,18 @@ export function RegisterDeviceDialog({
     }
     setLoading(true);
     try {
-      const device = await relayAgentsApi.registerDevice(
-        choice.relayId,
-        choice.serial
-      );
+      const device =
+        choice.kind === 'allocated' && choice.deviceId
+          ? await devicesApi.claimAllocated(choice.deviceId)
+          : await relayAgentsApi.registerDevice(
+              choice.relayId || '',
+              choice.serial
+            );
       setRegisteredDevice(device);
       qrOpenedAtRef.current = Date.now();
       setStep('qr');
       invalidateDeviceFleetQueries(qc);
+      qc.invalidateQueries({ queryKey: ['devices', 'allocated'] });
       qc.invalidateQueries({ queryKey: ['relay-agents'] });
     } catch {
       toast.error(t('errorRegister'));
@@ -270,11 +310,15 @@ export function RegisterDeviceDialog({
     if (!registeredDevice?.relay_id) return;
     setPushingUrl(true);
     try {
-      const res = await relayAgentsApi.pushConnectUrl(
-        registeredDevice.relay_id,
-        registeredDevice.serial,
-        { wsBaseUrl: getDeviceAgentWsBase() }
-      );
+      const res = registeredDevice.managed_by_relay_id
+        ? await devicesApi.connectManagedAgent(registeredDevice.id, {
+            wsBaseUrl: getDeviceAgentWsBase()
+          })
+        : await relayAgentsApi.pushConnectUrl(
+            registeredDevice.relay_id,
+            registeredDevice.serial,
+            { wsBaseUrl: getDeviceAgentWsBase() }
+          );
       if (!res.ok) {
         toast.error(res.error || t('errorPushToPhone'));
         return;
@@ -332,7 +376,7 @@ export function RegisterDeviceDialog({
                     variant='outline'
                     role='combobox'
                     aria-expanded={devicePickerOpen}
-                    disabled={relayDeviceChoices.length === 0}
+                    disabled={deviceChoices.length === 0}
                     className='h-9 w-full justify-between px-3 font-normal'
                   >
                     {selectedRelayDevice ? (
@@ -414,7 +458,7 @@ export function RegisterDeviceDialog({
                   </Command>
                 </PopoverContent>
               </Popover>
-              {relayDeviceChoices.length === 0 && (
+              {deviceChoices.length === 0 && (
                 <p className='text-xs text-muted-foreground'>
                   {t('noAvailableDevices')}
                 </p>
@@ -423,7 +467,7 @@ export function RegisterDeviceDialog({
             <Button
               type='submit'
               className='w-full'
-              disabled={loading || !hasRelayChoices}
+              disabled={loading || !hasDeviceChoices}
             >
               {loading ? t('submitting') : t('submit')}
             </Button>

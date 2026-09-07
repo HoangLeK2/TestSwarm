@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ActivityLogItem } from '../services/api.ts';
 import {
+  formatActivityStatus,
   resolveActivityActionLabel,
   resolveDedicatedActivityTitle,
   resolveDomainActivityDescription
@@ -106,6 +107,16 @@ test('resolveDedicatedActivityTitle for schedule.run.terminal', () => {
       t2
     ),
     'Scheduled run finished (Completed)'
+  );
+});
+
+test('formatActivityStatus falls back from fully qualified missing i18n key', () => {
+  assert.equal(
+    formatActivityStatus(
+      'unknown_status',
+      (key) => `analyticsFeature.activity.${key}`
+    ),
+    'unknown status'
   );
 });
 

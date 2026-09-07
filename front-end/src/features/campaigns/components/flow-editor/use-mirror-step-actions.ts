@@ -62,7 +62,8 @@ export function useMirrorStepActions(
             ...step,
             template_key: pick.templateKey,
             template_screen_w: pick.screenW,
-            template_screen_h: pick.screenH
+            template_screen_h: pick.screenH,
+            screenshot: undefined
           }))
         : undefined,
       pickRegion: requestRegion

@@ -45,6 +45,7 @@ import { tokenStorage } from '@/lib/token-storage';
 import {
   isDevicePreviewStreamEligible,
   isGridH264Enabled,
+  isPreviewFrameStale,
   nextSnapshotRetryDelayMs,
   selectDeviceTilePreviewMode,
   type WebCodecsSupport
@@ -213,10 +214,12 @@ function PreviewLoadingSurface({
 
 function DashboardWebRtcPreview({
   device,
-  active
+  active,
+  frameStale
 }: {
   device: Device;
   active: boolean;
+  frameStale: boolean;
 }) {
   const t = useTranslations('devicesFarm');
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -269,6 +272,10 @@ function DashboardWebRtcPreview({
     return clearRetryTimer;
   }, [clearRetryTimer, device.serial]);
 
+  // A frozen <video> keeps its last decoded frame forever — hide it once the
+  // server reports the media plane stopped moving.
+  const frameVisible = hasFrame && !frameStale;
+
   return (
     <>
       <video
@@ -278,18 +285,18 @@ function DashboardWebRtcPreview({
         autoPlay
         className={cn(
           'pointer-events-none absolute inset-0 h-full w-full object-contain object-center transition-opacity duration-300',
-          hasFrame ? 'opacity-100' : 'opacity-0'
+          frameVisible ? 'opacity-100' : 'opacity-0'
         )}
       />
       <div
         className={cn(
           'absolute inset-0 z-10 transition-opacity duration-300',
-          hasFrame ? 'pointer-events-none opacity-0' : 'opacity-100'
+          frameVisible ? 'pointer-events-none opacity-0' : 'opacity-100'
         )}
         aria-live='polite'
-        aria-hidden={hasFrame}
+        aria-hidden={frameVisible}
       >
-        {!webrtc.failed || webrtc.connecting ? (
+        {!frameStale && (!webrtc.failed || webrtc.connecting) ? (
           <PreviewLoadingSurface label={t('streamWaitingFirstFrame')} />
         ) : (
           <PreviewLoadingSurface
@@ -316,6 +323,9 @@ function DeviceTilePreviewInner({
   const isActive = isVisibleDeviceFarmActiveDevice(device);
   const health = device.health;
   const commandReady = health ? health.command.status === 'ready' : isActive;
+  // The runtime snapshot can still read READY after the agent dies; health is
+  // the server's own verdict, so the offline badge follows it when present.
+  const agentOffline = health ? health.agent.status === 'offline' : !isActive;
   const previewStreamEligible = isDevicePreviewStreamEligible(device, isActive);
 
   const previewZoneRef = useRef<HTMLDivElement>(null);
@@ -372,8 +382,15 @@ function DeviceTilePreviewInner({
     null
   );
   const [loadingElapsedSec, setLoadingElapsedSec] = useState(0);
+  const [snapshotFailures, setSnapshotFailures] = useState(0);
   const [previewWarmupState, setPreviewWarmupState] =
     useState<PreviewWarmupState>('idle');
+
+  /** The painted frame outlives its source: drop it when the source dies. */
+  const frameStale = isPreviewFrameStale({
+    streamStatus: health?.stream.status,
+    consecutiveSnapshotFailures: snapshotFailures
+  });
 
   useEffect(() => {
     if (GRID_PREVIEW_EAGER) return;
@@ -421,7 +438,8 @@ function DeviceTilePreviewInner({
   }, [device.serial, previewAttempt, tabActive, shouldUseSnapshotPreview]);
 
   const showPreviewImg =
-    shouldUseSnapshotPreview && Boolean(displayedPreviewUrl);
+    shouldUseSnapshotPreview && Boolean(displayedPreviewUrl) && !frameStale;
+  const frameVisible = hasFrame && !frameStale;
 
   /** Compact grid preview — readable enough for scanning without dominating the dashboard. */
   const previewMockupScreenWidth = 198;
@@ -437,9 +455,7 @@ function DeviceTilePreviewInner({
     previewStreamEligible &&
     loadStream &&
     !shouldUseWebRtcPreview &&
-    !isPreviewQueued &&
-    !hasFrame &&
-    loadingElapsedSec >= 12;
+    (frameStale || (!isPreviewQueued && !hasFrame && loadingElapsedSec >= 12));
 
   useEffect(() => {
     if (!GRID_PREVIEW_H264) {
@@ -459,6 +475,7 @@ function DeviceTilePreviewInner({
     setDisplayedPreviewUrl(null);
     setPreviewAttempt(0);
     snapshotFailureCountRef.current = 0;
+    setSnapshotFailures(0);
     setPreviewWarmupState('idle');
   }, [device.serial]);
 
@@ -551,6 +568,7 @@ function DeviceTilePreviewInner({
     image.onload = () => {
       if (cancelled) return;
       snapshotFailureCountRef.current = 0;
+      setSnapshotFailures(0);
       setDisplayedPreviewUrl(previewUrl);
       setHasFrame(true);
       scheduleRefresh(DASHBOARD_PREVIEW_REFRESH_MS);
@@ -558,6 +576,7 @@ function DeviceTilePreviewInner({
     image.onerror = () => {
       if (cancelled) return;
       snapshotFailureCountRef.current += 1;
+      setSnapshotFailures(snapshotFailureCountRef.current);
       scheduleRefresh(
         nextSnapshotRetryDelayMs({
           consecutiveFailureCount: snapshotFailureCountRef.current,
@@ -610,7 +629,7 @@ function DeviceTilePreviewInner({
                 <p className='truncate text-sm font-semibold leading-5 text-foreground'>
                   {device.brand} {device.model}
                 </p>
-                {!isActive ? (
+                {!isActive || agentOffline ? (
                   <Badge
                     variant='outline'
                     className='shrink-0 border-red-500/30 bg-red-500/10 text-[10px] text-red-700 dark:text-red-300'
@@ -657,8 +676,10 @@ function DeviceTilePreviewInner({
             ) : (
               <Button
                 size='sm'
+                variant='secondary'
                 className='h-8 min-w-0 flex-1 px-3 text-xs font-semibold'
                 disabled
+                aria-disabled='true'
               >
                 {t('controlDevice')}
               </Button>
@@ -729,6 +750,7 @@ function DeviceTilePreviewInner({
                   <DashboardWebRtcPreview
                     device={device}
                     active={shouldUseWebRtcPreview}
+                    frameStale={frameStale}
                   />
                 )}
                 {showPreviewImg && (
@@ -751,7 +773,9 @@ function DeviceTilePreviewInner({
                     aria-hidden='true'
                     className={cn(
                       'pointer-events-none absolute inset-0 h-full w-full object-contain object-center transition-opacity duration-500',
-                      hasFrame && !showPreviewImg ? 'opacity-100' : 'opacity-0'
+                      frameVisible && !showPreviewImg
+                        ? 'opacity-100'
+                        : 'opacity-0'
                     )}
                   />
                 )}
@@ -772,10 +796,12 @@ function DeviceTilePreviewInner({
                   <div
                     className={cn(
                       'absolute inset-0 z-10 transition-opacity duration-500',
-                      hasFrame ? 'pointer-events-none opacity-0' : 'opacity-100'
+                      frameVisible
+                        ? 'pointer-events-none opacity-0'
+                        : 'opacity-100'
                     )}
                     aria-live='polite'
-                    aria-hidden={hasFrame}
+                    aria-hidden={frameVisible}
                   >
                     {!isUnresponsive ? (
                       <PreviewLoadingSurface

@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from jose import jwt
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from auth.secret_versioning import JwtKeyMaterial
 from db.crud.device import create_device
 from db.models import Organization, OrganizationMember, User
 from db.models.enums import DeviceFsmEvent, DeviceFsmState
@@ -32,13 +33,21 @@ USER_DENIED = "user-lifecycle-denied"
 
 def _token(user_id: str) -> str:
     exp = datetime.now(timezone.utc) + timedelta(minutes=30)
-    return jwt.encode({"sub": user_id, "type": "access", "exp": exp}, _SECRET, algorithm=_ALG)
+    org_id = ORG_A if user_id in {USER_A, USER_DENIED} else ORG_B
+    return jwt.encode(
+        {"sub": user_id, "type": "access", "org_id": org_id, "exp": exp},
+        _SECRET,
+        algorithm=_ALG,
+    )
 
 
 @pytest.fixture
 def jwt_patch():
     with (
-        patch("api.auth.context.jwt_secret_key", return_value=_SECRET),
+        patch(
+            "api.auth.context.all_verify_materials",
+            return_value=[JwtKeyMaterial(kid="v1", secret=_SECRET)],
+        ),
         patch("api.auth.context.jwt_algorithm", return_value=_ALG),
     ):
         yield

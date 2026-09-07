@@ -114,6 +114,20 @@ def _account_event_base(user: CurrentUser):
 
 
 def _account_action_base(user: CurrentUser):
+    """Scope the ledger by its own org_id when there is one.
+
+    Tenancy used to run through a join on `accounts`, which kept
+    account_actions.org_id out of the WHERE clause entirely — so no index on the
+    table could serve this feed and the default view fell back to a sequential
+    scan. The table is tenant-scoped and carries org_id itself.
+
+    It is also the more truthful predicate for an audit trail: an action belongs
+    to the org it ran under, not to whichever org owns the account today. Only
+    the org-less caller still needs the join, since it filters on the owner.
+    """
+    org_id = getattr(user, "org_id", None)
+    if org_id:
+        return select(AccountAction).where(AccountAction.org_id == org_id)
     return (
         select(AccountAction)
         .join(Account, Account.id == AccountAction.account_id)
@@ -142,7 +156,9 @@ def _apply_account_action_filters(
     device_serial: str | None,
 ):
     if account_id:
-        stmt = stmt.where(Account.id == account_id)
+        # AccountAction.account_id, not Account.id: the org-scoped base no longer
+        # joins `accounts`, and this column is the same value anyway.
+        stmt = stmt.where(AccountAction.account_id == account_id)
     if device_serial:
         # Used to return false() — the ledger had no device column, so filtering
         # by device silently dropped every account action. Rows written before

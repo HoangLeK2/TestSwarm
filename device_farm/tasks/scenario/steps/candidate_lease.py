@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from services.platform_readiness import DEFAULT_PLATFORM
-from services.social_ext import supports_step
 from tasks.scenario.steps import register_step
+from tasks.scenario.steps.platform_resolution import resolve_supported_step_platform
 
 if TYPE_CHECKING:
     from tasks.scenario.context import ScenarioContext
@@ -21,17 +20,8 @@ def handle_lease_connection_candidate(
     idx: int,
     result: dict[str, Any],
 ) -> None:
-    platform = str(step.get("platform") or DEFAULT_PLATFORM).strip().casefold()
-    if not supports_step(platform, _STEP_TYPE):
-        result.update(
-            {
-                "ok": False,
-                "outcome": "unsupported_platform",
-                "message": (
-                    f"{_STEP_TYPE}: platform {platform!r} does not implement this step"
-                ),
-            }
-        )
+    platform = resolve_supported_step_platform(sc, step, _STEP_TYPE, result)
+    if platform is None:
         return
 
     from services.account_actions import resolve_action_identity

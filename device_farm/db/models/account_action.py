@@ -17,11 +17,14 @@ class AccountAction(TenantScopedModel, Base):
         UniqueConstraint("org_id", "action_key", name="uq_account_actions_org_key"),
         Index("idx_account_actions_account_time", "org_id", "account_id", "created_at", "id"),
         Index("idx_account_actions_execution_time", "org_id", "execution_id", "created_at", "id"),
-        # device_serial leads, not org_id: the activity feed scopes tenancy by
-        # joining `accounts`, so there is no predicate on account_actions.org_id
-        # and an org-leading index would never be used. Sorted by updated_at
-        # because that is the column the feed union orders on.
+        # Two feed indexes, both sorted by updated_at because that is what the
+        # feed union orders on. The device-leading one serves "what did this
+        # phone do"; the org-leading one serves the unfiltered feed, which used
+        # to have no usable index at all because tenancy went through a join on
+        # `accounts` and left org_id out of the WHERE clause (fixed in
+        # api/routes/analytics.py, migration 119).
         Index("idx_account_actions_device_time", "device_serial", "updated_at", "id"),
+        Index("idx_account_actions_org_time", "org_id", "updated_at", "id"),
         Index("idx_account_actions_active", "status", "last_transition_at", "id"),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)

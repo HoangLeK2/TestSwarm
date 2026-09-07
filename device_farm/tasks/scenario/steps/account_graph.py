@@ -14,9 +14,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from services.platform_readiness import DEFAULT_PLATFORM
-from services.social_ext import supports_step
 from tasks.scenario.steps import register_step
+from tasks.scenario.steps.platform_resolution import resolve_supported_step_platform
 from tasks.scenario.steps.social_actions import _u2_flow_with_recovery
 
 if TYPE_CHECKING:
@@ -41,17 +40,8 @@ def handle_social_sync_connections(
     idx: int,
     result: dict[str, Any],
 ) -> None:
-    platform = str(step.get("platform") or DEFAULT_PLATFORM).strip().casefold()
-    if not supports_step(platform, _STEP_TYPE):
-        result.update(
-            {
-                "ok": False,
-                "outcome": "unsupported_platform",
-                "message": (
-                    f"{_STEP_TYPE}: platform {platform!r} does not implement this step"
-                ),
-            }
-        )
+    platform = resolve_supported_step_platform(sc, step, _STEP_TYPE, result)
+    if platform is None:
         return
 
     metric = str(step.get("metric") or "friends").strip().casefold()

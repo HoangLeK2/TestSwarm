@@ -520,6 +520,64 @@ async def test_step_failed_event_includes_nested_extra_data_diagnostic(session_f
 
 
 @pytest.mark.asyncio
+async def test_step_failed_event_includes_runtime_evidence_payload(session_factory):
+    exec_id = await _seed_campaign_execution(session_factory)
+    async with session_factory() as db:
+        with tenant_context("org-1"):
+            await emit_step_finished(
+                db,
+                execution_id=exec_id,
+                org_id="org-1",
+                campaign_id="camp-1",
+                step={"type": "extract_text_ocr", "id": "ocr-1"},
+                step_index=1,
+                depth=0,
+                step_result={
+                    "ok": False,
+                    "message": "OCR unavailable",
+                    "reason_code": "node_capability_preflight_failed",
+                    "failure_class": "device_capability",
+                    "retry_hint": "select_device_with_ocr",
+                    "operator_summary": "Device lacks OCR/Tesseract",
+                    "device_serial": "phone-001",
+                    "scenario_name": "OCR scenario",
+                    "node_capability_preflight": {
+                        "ok": False,
+                        "issues": [
+                            {
+                                "path": "steps[1]",
+                                "index": 1,
+                                "step_type": "extract_text_ocr",
+                                "missing": ["has_ocr", "has_tesseract"],
+                                "risk": "high",
+                            }
+                        ],
+                        "warnings": [],
+                    },
+                    "password": "must-not-leak",
+                },
+            )
+        await db.commit()
+
+    async with session_factory() as db:
+        from db.crud.execution_events import list_execution_events
+
+        rows = await list_execution_events(db, exec_id)
+
+    evidence = rows[0].payload["evidence"]
+    assert rows[0].event_type == STEP_FAILED
+    assert evidence["reason_code"] == "node_capability_preflight_failed"
+    assert evidence["failure_class"] == "device_capability"
+    assert evidence["retry_hint"] == "select_device_with_ocr"
+    assert evidence["operator_summary"] == "Device lacks OCR/Tesseract"
+    assert evidence["device_serial"] == "phone-001"
+    assert evidence["scenario_name"] == "OCR scenario"
+    assert evidence["step_path"] == "steps[1]"
+    assert evidence["missing_capabilities"] == ["has_ocr", "has_tesseract"]
+    assert "password" not in evidence
+
+
+@pytest.mark.asyncio
 async def test_resolve_execution_org_id_without_tenant_context(session_factory):
     """Temporal activities resolve org via execution/campaign without request tenant context."""
     exec_id = await _seed_campaign_execution(session_factory)

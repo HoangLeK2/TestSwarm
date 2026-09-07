@@ -865,7 +865,12 @@ def create_app(
                 _control_callbacks = None
                 if config.database.enabled:
                     try:
-                        from runtime.transports.agent_control_servicer import get_control_servicer
+                        from runtime.transports.agent_control_servicer import (
+                            get_control_servicer,
+                        )
+                        from runtime.transports.agent_suspension import (
+                            get_agent_suspension_registry as _suspension_registry,
+                        )
                         from db import crud as _ctrl_repo
                         from db.database import AsyncSessionLocal as _AslCtrl
                         from tenancy.context import tenant_context
@@ -876,10 +881,12 @@ def create_app(
                                 return raw in {"1", "true", "yes", "on"}
                             return True
 
-                        async def _on_ctrl_register(payload: dict) -> bool:
+                        async def _on_ctrl_register(payload: dict) -> str:
+                            """Return the relay_id the agent must use ("" = refused)."""
                             async with _AslCtrl() as _db:
                                 try:
                                     org_id: str | None = None
+                                    token_id = ""
                                     enrollment_token = str(payload.pop("enrollment_token", "") or "").strip()
                                     if not enrollment_token:
                                         if _relay_ownership_required():
@@ -887,7 +894,7 @@ def create_app(
                                                 "relay register rejected: missing enrollment token relay_id=%s",
                                                 payload.get("relay_id", ""),
                                             )
-                                            return False
+                                            return ""
                                         org_id = await _ctrl_repo.lookup_relay_agent_org_id(
                                             _db, str(payload.get("relay_id", ""))
                                         )
@@ -897,7 +904,7 @@ def create_app(
                                                 "(enrollment token required for new relays)",
                                                 payload.get("relay_id", ""),
                                             )
-                                            return False
+                                            return ""
                                     else:
                                         identity = await _ctrl_repo.lookup_relay_token_enrollment(
                                             _db, enrollment_token
@@ -907,25 +914,67 @@ def create_app(
                                                 "relay register rejected: invalid enrollment token relay_id=%s",
                                                 payload.get("relay_id", ""),
                                             )
-                                            return False
+                                            return ""
                                         org_id, user_id, token_id = identity
                                         payload["user_id"] = user_id
                                         payload["enrollment_token_id"] = token_id
 
                                     with tenant_context(org_id):
+                                        token_name = ""
                                         if enrollment_token:
-                                            await _ctrl_repo.resolve_relay_agent_token(
+                                            _token = await _ctrl_repo.resolve_relay_agent_token(
                                                 _db, enrollment_token
                                             )
+                                            token_name = str(getattr(_token, "name", "") or "").strip()
+                                            resolved = await _ctrl_repo.resolve_relay_identity(
+                                                _db,
+                                                org_id=org_id,
+                                                token_id=token_id,
+                                                proposed_relay_id=str(payload.get("relay_id", "")),
+                                            )
+                                            if not resolved:
+                                                await _db.rollback()
+                                                return ""
+                                            payload["relay_id"] = resolved
+                                        resolved_relay_id = str(payload.get("relay_id", ""))
+                                        if await _ctrl_repo.relay_agent_is_disabled(
+                                            _db, resolved_relay_id
+                                        ):
+                                            # Accept the connection and let the
+                                            # servicer park it: refusing made the
+                                            # agent reconnect forever, and every
+                                            # attempt cost log lines on both sides
+                                            # and delayed re-enabling.
+                                            _suspension_registry().suspend(
+                                                resolved_relay_id,
+                                                payload.get("serials") or [],
+                                            )
+                                            await _db.rollback()
+                                            return resolved_relay_id
                                         await _ctrl_repo.upsert_relay_agent(
-                                            _db, org_id=org_id, **payload
+                                            _db, org_id=org_id, name=token_name, **payload
                                         )
                                         await _db.commit()
-                                    return True
+                                    return str(payload.get("relay_id", ""))
                                 except Exception as _exc:
                                     await _db.rollback()
                                     log.warning("relay upsert failed: %s", _exc)
-                                    return False
+                                    return ""
+
+                        async def _on_media_register(payload: dict) -> str:
+                            """Media adapters authenticate but never own an agent row.
+
+                            Suspension is enforced per serial inside the servicer,
+                            not here: an adapter often registers before it knows
+                            its phones, so a register-time verdict was both wrong
+                            and a reconnect loop.
+                            """
+                            token = str(payload.get("enrollment_token", "") or "").strip()
+                            if not token:
+                                return "" if _relay_ownership_required() else "media"
+                            async with _AslCtrl() as _db:
+                                identity = await _ctrl_repo.lookup_relay_token_enrollment(_db, token)
+                            return "media" if identity is not None else ""
 
                         async def _on_ctrl_heartbeat(payload: dict) -> None:
                             relay_id = str(payload.get("relay_id", ""))
@@ -958,11 +1007,24 @@ def create_app(
                             _on_ctrl_register,
                             _on_ctrl_heartbeat,
                             _on_ctrl_offline,
+                            _on_media_register,
                         )
                         _ctrl_svc = get_control_servicer()
                         if _ctrl_svc is not None:
-                            _ctrl_svc.set_persistence_callbacks(*_control_callbacks)
+                            _ctrl_svc.set_persistence_callbacks(*_control_callbacks[:3])
                             log.info("AgentControlServicer persistence callbacks wired")
+
+                        # The suspension registry lives in memory, so a restart
+                        # would otherwise let every disabled agent back in.
+                        try:
+                            async with _AslCtrl() as _db:
+                                _suspension_registry().replace(
+                                    await _ctrl_repo.disabled_relay_entries(_db)
+                                )
+                        except Exception as _susp_exc:
+                            log.warning(
+                                "could not load agent suspension registry: %s", _susp_exc
+                            )
                     except Exception as _cb_exc:
                         log.warning("Could not wire control servicer callbacks: %s", _cb_exc)
 

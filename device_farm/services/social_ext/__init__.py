@@ -3,8 +3,11 @@
 from services.social_ext.contract import (
     CONNECTION_KINDS,
     DEFAULT_CONNECTION_KIND,
+    SOCIAL_CAPABILITY_SCHEMAS,
     SOCIAL_ENTITIES,
     SOCIAL_STEP_TYPES,
+    PlatformCapabilitySupport,
+    SocialCapabilitySchema,
 )
 from services.social_ext.registry import (
     SocialPlatformRegistry,
@@ -17,9 +20,12 @@ from services.social_ext.registry import (
 __all__ = [
     "CONNECTION_KINDS",
     "DEFAULT_CONNECTION_KIND",
+    "SOCIAL_CAPABILITY_SCHEMAS",
     "SOCIAL_ENTITIES",
     "SOCIAL_STEP_TYPES",
+    "PlatformCapabilitySupport",
     "SocialPlatformRegistry",
+    "SocialCapabilitySchema",
     "connection_kind",
     "get_social_platform_registry",
     "supports_entity",

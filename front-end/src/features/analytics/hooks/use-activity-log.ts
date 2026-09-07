@@ -8,32 +8,48 @@ export type ActivityLogQuery = {
   action?: string;
   device_serial?: string;
   account_id?: string;
+  workspaceId?: string;
   offset?: number;
   limit?: number;
 };
 
 export const activityLogKeys = {
-  list: (orgId: string | null, query: ActivityLogQuery) =>
-    ['analytics', 'activity', orgId, query] as const
+  list: (orgId: string | null, query: ActivityLogQuery, adminMode = false) =>
+    ['analytics', 'activity', adminMode ? 'admin' : orgId, query] as const
 };
 
-export function useActivityLog(query: ActivityLogQuery = {}) {
+export function useActivityLog(
+  query: ActivityLogQuery = {},
+  options: { adminMode?: boolean } = {}
+) {
   const { currentOrg } = useOrganization();
+  const adminMode = Boolean(options.adminMode);
   const orgId = currentOrg?.id ?? null;
   const limit = query.limit ?? 50;
   const offset = query.offset ?? 0;
 
   return useQuery({
-    queryKey: activityLogKeys.list(orgId, { ...query, limit, offset }),
+    queryKey: activityLogKeys.list(
+      orgId,
+      { ...query, limit, offset },
+      adminMode
+    ),
     queryFn: () =>
-      analyticsApi.activity({
-        action: query.action,
-        device_serial: query.device_serial,
-        account_id: query.account_id,
-        offset,
-        limit
-      }),
-    enabled: Boolean(orgId),
+      adminMode
+        ? analyticsApi.adminActivity({
+            action: query.action,
+            workspaceId: query.workspaceId,
+            offset,
+            limit
+          })
+        : analyticsApi.activity({
+            action: query.action,
+            device_serial: query.device_serial,
+            account_id: query.account_id,
+            offset,
+            limit
+          }),
+    enabled: adminMode || Boolean(orgId),
     refetchInterval: offset === 0 ? 5_000 : false,
     staleTime: 2_000
   });

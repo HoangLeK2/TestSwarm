@@ -158,6 +158,10 @@ _DEAD_SESSION_MARKERS = (
     "502 bad gateway",     # specific to atx-agent proxy; avoid generic "gateway"
     "504 gateway",         #   which would match app-under-test HTTP errors
     "read timeout",
+    "empty reply from server",
+    "remote end closed connection without response",
+    "server disconnected without sending a response",
+    "connection closed without response",
     "connection refused",
     "connection reset",
     "connection aborted",
@@ -965,14 +969,21 @@ def _op_wait_exists_spec(dev: Any, act: dict) -> bool:
     return bool(sel.wait(timeout=min(timeout, MAX_FLOW_TIMEOUT)))
 
 
-def _op_dump(dev: Any, act: dict) -> str:
+def _dump_kwargs_from_action(act: dict) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "compressed": bool(act.get("compressed", False)),
     }
     if "pretty" in act:
         kwargs["pretty"] = bool(act.get("pretty", False))
+    if "root_in_active" in act and act.get("root_in_active") is not None:
+        kwargs["root_in_active"] = bool(act.get("root_in_active", False))
     if act.get("max_depth") is not None:
         kwargs["max_depth"] = int(act["max_depth"])
+    return kwargs
+
+
+def _op_dump(dev: Any, act: dict) -> str:
+    kwargs = _dump_kwargs_from_action(act)
     return dev.dump_hierarchy(**kwargs)
 
 
@@ -5536,7 +5547,7 @@ class U2Executor:
         pool: U2SessionPool,
         loop: asyncio.AbstractEventLoop,
         *,
-        http_dump: Optional[Callable[[str, float, bool], str]] = None,
+        http_dump: Optional[Callable[..., str]] = None,
         http_rpc: Optional[U2HttpRpc] = None,
     ) -> None:
         self._pool = pool
@@ -5550,9 +5561,15 @@ class U2Executor:
             min(U2_EXECUTOR_BACKGROUND_CONCURRENCY, U2_EXECUTOR_CONCURRENCY)
         )
         self._background_waiting = 0
-        self._dump_cache: dict[tuple[str, bool, int], tuple[float, str]] = {}
-        self._xml_index_cache: dict[tuple[str, bool, int], tuple[float, str, _XmlNodeIndex]] = {}
-        self._dump_inflight: dict[tuple[str, bool, int, bool], asyncio.Task[dict]] = {}
+        self._dump_cache: dict[tuple[str, bool, bool, int | None, bool, int], tuple[float, str]] = {}
+        self._xml_index_cache: dict[
+            tuple[str, bool, bool, int | None, bool, int],
+            tuple[float, str, _XmlNodeIndex],
+        ] = {}
+        self._dump_inflight: dict[
+            tuple[str, bool, bool, int | None, bool, int, bool],
+            asyncio.Task[dict],
+        ] = {}
         self._dump_inflight_lock = asyncio.Lock()
         self._xml_poll_inflight: dict[tuple[Any, ...], asyncio.Task[dict]] = {}
         self._xml_poll_inflight_lock = asyncio.Lock()
@@ -5848,10 +5865,18 @@ class U2Executor:
         else:
             self._breaker[serial] = (failures, 0.0)
 
-    def _single_dump_cache_key(self, serial: str, act: dict) -> tuple[str, bool, int]:
+    def _single_dump_cache_key(
+        self,
+        serial: str,
+        act: dict,
+    ) -> tuple[str, bool, bool, int | None, bool, int]:
+        kwargs = _dump_kwargs_from_action(act)
         return (
             serial,
-            bool(act.get("compressed", False)),
+            bool(kwargs.get("compressed", False)),
+            bool(kwargs.get("root_in_active", False)),
+            kwargs.get("max_depth") if isinstance(kwargs.get("max_depth"), int) else None,
+            bool(kwargs.get("pretty", False)),
             self.ui_generation(serial),
         )
 
@@ -5860,7 +5885,7 @@ class U2Executor:
         serial: str,
         act: dict,
         priority: str | int | None,
-    ) -> tuple[str, bool, int, bool]:
+    ) -> tuple[str, bool, bool, int | None, bool, int, bool]:
         cache_key = self._single_dump_cache_key(serial, act)
         return (*cache_key, self._is_visible_priority(priority))
 
@@ -5869,9 +5894,39 @@ class U2Executor:
             return U2_VISIBLE_HIERARCHY_CACHE_TTL_MS
         return U2_HIERARCHY_CACHE_TTL_MS
 
+    def _call_http_dump(self, serial: str, timeout: float, act: dict) -> str:
+        if self._http_dump is None:
+            return ""
+        kwargs = _dump_kwargs_from_action(act)
+        compressed = bool(kwargs.pop("compressed", False))
+        if not kwargs:
+            return self._http_dump(serial, timeout, compressed)
+        try:
+            signature = inspect.signature(self._http_dump)
+        except (TypeError, ValueError):
+            signature = None
+        accepts_kwargs = (
+            signature is not None
+            and any(
+                param.kind == inspect.Parameter.VAR_KEYWORD
+                for param in signature.parameters.values()
+            )
+        )
+        supported = accepts_kwargs or (
+            signature is not None
+            and all(name in signature.parameters for name in kwargs)
+        )
+        if not supported:
+            logger.debug(
+                "u2_batch: http dump callback lacks extended hierarchy kwargs; "
+                "fallback to u2 dump_hierarchy"
+            )
+            return ""
+        return self._http_dump(serial, timeout, compressed, **kwargs)
+
     def _cached_single_dump(
         self,
-        key: tuple[str, bool, int],
+        key: tuple[str, bool, bool, int | None, bool, int],
         *,
         priority: str | int | None,
     ) -> str | None:
@@ -5892,7 +5947,7 @@ class U2Executor:
 
     def _store_single_dump_cache(
         self,
-        key: tuple[str, bool, int],
+        key: tuple[str, bool, bool, int | None, bool, int],
         value: str,
         *,
         priority: str | int | None,
@@ -5911,7 +5966,7 @@ class U2Executor:
 
     def _xml_index_from_dump(
         self,
-        key: tuple[str, bool, int],
+        key: tuple[str, bool, bool, int | None, bool, int],
         xml: str,
         *,
         priority: str | int | None,
@@ -6932,14 +6987,13 @@ class U2Executor:
                 deadline_ms=self._single_dump_deadline_ms(deadline_ms, priority=priority),
             ):
                 timeout = float(act.get("timeout") or act.get("timeout_s") or 5.0)
-                compressed = bool(act.get("compressed", False))
                 fn = _OP_TABLE["dump_hierarchy"]
                 try:
                     value = ""
                     if self._http_dump is not None:
                         self._bump("dump_http_direct")
                         value = await self._run_sync(
-                            lambda: self._http_dump(serial, timeout, compressed)
+                            lambda: self._call_http_dump(serial, timeout, act)
                         )
                         if value:
                             self._mark_direct_http_healthy(serial)
@@ -7445,8 +7499,7 @@ class U2Executor:
                         value = self._run_u2_swipe_batch(serial, action)
                     elif op == "dump_hierarchy" and self._http_dump is not None:
                         timeout = float(action.get("timeout") or action.get("timeout_s") or 5.0)
-                        compressed = bool(action.get("compressed", False))
-                        value = self._http_dump(serial, timeout, compressed)
+                        value = self._call_http_dump(serial, timeout, action)
                         if value:
                             self._mark_direct_http_healthy(serial)
                         if not value:

@@ -550,7 +550,7 @@ class TestPopupDismissOrder:
             "fallback": {"rx": 0.5, "ry": 0.5},
         }
 
-        with patch("tasks.scenario_task._auto_dismiss_popup") as mock_dismiss:
+        with patch("tasks.scenario.steps.interaction._auto_dismiss_popup") as mock_dismiss:
             results = self._run_tap_step(device, step)
 
         assert results[0]["ok"] is True
@@ -567,7 +567,7 @@ class TestPopupDismissOrder:
             "fallback": {},  # no fallback coords either
         }
 
-        with patch("tasks.scenario_task._auto_dismiss_popup", return_value=False) as mock_dismiss:
+        with patch("tasks.scenario.steps.interaction._auto_dismiss_popup", return_value=False) as mock_dismiss:
             results = self._run_tap_step(device, step)
 
         mock_dismiss.assert_called_once()
@@ -590,8 +590,8 @@ class TestPopupDismissOrder:
             "fallback": {"rx": 0.5, "ry": 0.5},
         }
 
-        with patch("tasks.scenario_task._execute_tap", side_effect=fake_execute_tap), \
-             patch("tasks.scenario_task._auto_dismiss_popup", return_value=True):
+        with patch("tasks.scenario.steps.interaction._execute_tap", side_effect=fake_execute_tap), \
+             patch("tasks.scenario.steps.interaction._auto_dismiss_popup", return_value=True):
             results = self._run_tap_step(device, step)
 
         assert call_count["n"] == 2  # tried twice: initial + retry after dismiss
@@ -602,7 +602,7 @@ class TestPopupDismissOrder:
         device = _MockDevice()
         step = {"type": "tap_ratio", "x": 0.5, "y": 0.5}
 
-        with patch("tasks.scenario_task._auto_dismiss_popup") as mock_dismiss:
+        with patch("tasks.scenario.steps.interaction._auto_dismiss_popup") as mock_dismiss:
             self._run_tap_step(device, step)
 
         mock_dismiss.assert_not_called()
@@ -610,15 +610,21 @@ class TestPopupDismissOrder:
     def test_no_dismiss_of_intended_target(self):
         """Element with text matching popup pattern is NOT dismissed when tap succeeds."""
         # "OK" is in _POPUP_DISMISS_PATTERNS — should NOT be auto-dismissed when it's the target
-        u2 = _MockU2(present={("text", "OK")})
-        device = _MockDevice(u2=u2)
+        device = _MockDevice()
         step = {
             "type": "tap",
             "selector": {"by": "text", "value": "OK"},
-            "fallback": {"rx": 0.5, "ry": 0.5},
+            "fallback": {"rx": 0.185, "ry": 0.117},
         }
 
-        with patch("tasks.scenario_task._auto_dismiss_popup") as mock_dismiss:
+        with patch(
+            "tasks.scenario.steps.interaction._execute_tap",
+            return_value=(
+                True,
+                "selector text='OK' tapped",
+                {"left": 100, "top": 200, "right": 300, "bottom": 250},
+            ),
+        ), patch("tasks.scenario.steps.interaction._auto_dismiss_popup") as mock_dismiss:
             results = self._run_tap_step(device, step)
 
         assert results[0]["ok"] is True
@@ -746,7 +752,7 @@ class TestSSIMLogLevel:
             "runtime.visual_anchor._b64_to_bytes",
             return_value=b"\xff\xd8\xff",
         ):
-            with caplog.at_level(logging.DEBUG, logger="tasks.scenario_task"):
+            with caplog.at_level(logging.DEBUG, logger="tasks.scenario.steps.interaction"):
                 run_scenario_task(device, {"steps": [step]})
 
         # Must have logged the mismatch

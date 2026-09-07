@@ -170,6 +170,7 @@ async def test_list_relay_agents_dedupes_same_hostname_rows():
     def _row(rid: str, status: str, hb_offset: int):
         row = MagicMock()
         row.relay_id = rid
+        row.name = ""
         row.hostname = "Les-MacBook-Pro.local"
         row.ip = "172.16.0.182"
         row.version = "test"
@@ -213,6 +214,7 @@ async def test_list_relay_agents_uses_org_scope_and_cached_caps():
 
     fake_row = MagicMock()
     fake_row.relay_id = "relay-x"
+    fake_row.name = ""
     fake_row.hostname = "agent-host"
     fake_row.ip = "192.168.1.10"
     fake_row.version = "test"
@@ -266,6 +268,7 @@ async def test_list_relay_agents_includes_registered_device_agent_connection_sta
 
     fake_row = MagicMock()
     fake_row.relay_id = "relay-x"
+    fake_row.name = ""
     fake_row.hostname = "agent-host"
     fake_row.ip = "192.168.1.10"
     fake_row.version = "test"
@@ -315,6 +318,7 @@ async def test_list_relay_agents_hides_serials_when_control_channel_offline():
 
     fake_row = MagicMock()
     fake_row.relay_id = "relay-x"
+    fake_row.name = ""
     fake_row.hostname = "agent-host"
     fake_row.ip = "192.168.1.10"
     fake_row.version = "test"

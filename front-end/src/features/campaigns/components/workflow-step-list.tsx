@@ -10,6 +10,7 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import {
+  Activity,
   AlertCircle,
   CheckCircle2,
   Circle,
@@ -25,11 +26,20 @@ import { useCampaignFlowI18n } from './flow-editor/flow-i18n';
 import { humanizeSessionGateMessage } from '../lib/session-gate-message';
 import { useExecutionEventStream } from '../hooks/use-execution-event-stream';
 import { useWorkflowProgress, useWorkflowSteps } from '../hooks/use-campaigns';
+import { ExecutionTraceChips } from './execution-trace-chips';
 import {
   foldEventsToProgress,
   foldEventsToStepLog,
   deviceSerialFromWorkflowId
 } from '../lib/execution-event-utils';
+import {
+  emptyExecutionTrace,
+  executionTraceFromLog,
+  executionTraceFromRecord,
+  mergeExecutionTrace,
+  normalizeTracePathForMatch,
+  type ExecutionTraceSummary
+} from '../lib/execution-trace';
 import {
   buildWorkflowStepRows,
   deriveWorkflowCursor,
@@ -44,7 +54,11 @@ import {
   watcherLabel
 } from '../lib/app-automation-monitor';
 import type { ExecutionEventOut } from '../../device-farm/services/generated/DeviceFarmApi';
-import type { StepLogEntry, WorkflowInfo } from '../types';
+import type {
+  StepLogEntry,
+  TemporalActivityEventSummary,
+  WorkflowInfo
+} from '../types';
 import type { FlowStep } from './scenario-steps/types';
 
 // ── Parse workflow ID ─────────────────────────────────────────────────────────
@@ -205,6 +219,209 @@ function detailRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object'
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => stringValue(item)).filter((item) => item.length > 0)
+    : [];
+}
+
+function runtimeEvidence(logEntry?: StepLogEntry): Record<string, unknown> {
+  const details = detailRecord(logEntry?.details);
+  return detailRecord(logEntry?.evidence ?? details.evidence);
+}
+
+function preflightIssueFromEvidence(
+  evidence: Record<string, unknown>
+): Record<string, unknown> {
+  const preflight = detailRecord(evidence.node_capability_preflight);
+  const issues = Array.isArray(preflight.issues) ? preflight.issues : [];
+  return detailRecord(issues[0]);
+}
+
+function RuntimeEvidencePanel({ logEntry }: { logEntry?: StepLogEntry }) {
+  const t = useTranslations('campaignsFeature.list');
+  const evidence = runtimeEvidence(logEntry);
+  const issue = preflightIssueFromEvidence(evidence);
+  const missing = stringList(evidence.missing_capabilities).length
+    ? stringList(evidence.missing_capabilities)
+    : stringList(issue.missing);
+  const reason =
+    stringValue(evidence.reason_code) || stringValue(logEntry?.reason_code);
+  const rows = (
+    [
+      ['monitorEvidenceReason', reason],
+      ['monitorEvidenceClass', stringValue(evidence.failure_class)],
+      ['monitorEvidenceRetry', stringValue(evidence.retry_hint)],
+      ['monitorEvidenceOperator', stringValue(evidence.operator_summary)],
+      [
+        'monitorEvidenceDevice',
+        stringValue(evidence.device_serial) || stringValue(evidence.device_id)
+      ],
+      [
+        'monitorEvidenceScenario',
+        stringValue(evidence.scenario_name) || stringValue(evidence.scenario_id)
+      ],
+      [
+        'monitorEvidenceAccount',
+        stringValue(evidence.account_label) || stringValue(evidence.account_id)
+      ],
+      [
+        'monitorEvidenceStepPath',
+        stringValue(evidence.step_path) || stringValue(issue.path)
+      ]
+    ] as Array<[string, string]>
+  ).filter((row) => Boolean(row[1]));
+  const shouldShow =
+    reason ||
+    evidence.node_capability_preflight ||
+    missing.length > 0 ||
+    stringValue(evidence.failure_class) ||
+    stringValue(evidence.retry_hint) ||
+    stringValue(evidence.operator_summary);
+  if (!shouldShow) return null;
+
+  return (
+    <div className='mt-1.5 rounded-md border border-destructive/20 bg-destructive/5 px-2 py-1.5 text-[10px] text-destructive/90'>
+      <div className='mb-1 font-semibold'>{t('monitorEvidenceTitle')}</div>
+      <div className='flex flex-wrap gap-1'>
+        {rows.map(([labelKey, value]) => (
+          <span
+            key={labelKey}
+            className='max-w-full truncate rounded bg-background/70 px-1.5 py-0.5'
+            title={value}
+          >
+            {t(labelKey)}: {value}
+          </span>
+        ))}
+        {missing.length > 0 ? (
+          <span
+            className='max-w-full truncate rounded bg-background/70 px-1.5 py-0.5'
+            title={missing.join(', ')}
+          >
+            {t('monitorEvidenceMissing')}: {missing.join(', ')}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function temporalActivityEventLabelKey(
+  event: TemporalActivityEventSummary
+): string {
+  if (event.state === 'scheduled') return 'monitorTemporalActivityScheduled';
+  if (event.state === 'retrying') return 'monitorTemporalActivityRetrying';
+  if (event.state === 'completed') return 'monitorTemporalActivityCompleted';
+  if (event.state === 'failed') return 'monitorTemporalActivityFailed';
+  return 'monitorTemporalActivityStalled';
+}
+
+function temporalActivityEventClass(
+  event: TemporalActivityEventSummary
+): string {
+  if (event.state === 'completed') {
+    return 'border-green-500/25 bg-green-500/10 text-green-700 dark:text-green-300';
+  }
+  if (event.state === 'failed') {
+    return 'border-destructive/25 bg-destructive/10 text-destructive';
+  }
+  if (event.state === 'stalled' || event.state === 'retrying') {
+    return 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300';
+  }
+  return 'border-primary/20 bg-primary/5 text-primary';
+}
+
+function temporalDurationLabel(durationMs?: number | null): string | null {
+  if (durationMs == null || !Number.isFinite(durationMs) || durationMs < 0) {
+    return null;
+  }
+  if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
+  const seconds = durationMs / 1000;
+  return `${seconds >= 10 ? Math.round(seconds) : seconds.toFixed(1)}s`;
+}
+
+function TemporalActivityEventsPanel({
+  events
+}: {
+  events?: TemporalActivityEventSummary[];
+}) {
+  const t = useTranslations('campaignsFeature.list');
+  if (!events?.length) return null;
+
+  const visible = events.slice(-4);
+  const hiddenCount = Math.max(events.length - visible.length, 0);
+
+  return (
+    <div className='mt-1.5 flex flex-wrap items-center gap-1 text-[10px]'>
+      <span className='inline-flex items-center gap-1 rounded border border-border/60 bg-muted/35 px-1.5 py-0.5 font-medium text-muted-foreground'>
+        <Activity size={10} />
+        {t('monitorTemporalActivityEvent')}
+      </span>
+      {hiddenCount > 0 ? (
+        <span className='rounded bg-muted px-1.5 py-0.5 text-muted-foreground'>
+          {t('monitorTemporalActivityOlder', { count: hiddenCount })}
+        </span>
+      ) : null}
+      {visible.map((event, eventIndex) => {
+        const label = t(temporalActivityEventLabelKey(event));
+        const activityId = event.step_activity_id ?? event.activity_id ?? null;
+        const duration = temporalDurationLabel(event.duration_ms);
+        const reason = event.stalled_reason ?? event.reason_code ?? null;
+        const title = [
+          label,
+          event.activity_id,
+          event.phase,
+          event.side_effect_class,
+          duration,
+          reason
+        ]
+          .filter(Boolean)
+          .join(' · ');
+
+        return (
+          <span
+            key={`${event.event_type}-${event.activity_id ?? eventIndex}-${
+              event.activity_attempt ?? ''
+            }-${event.occurred_at ?? ''}`}
+            className={cn(
+              'inline-flex max-w-full items-center gap-1 rounded border px-1.5 py-0.5',
+              temporalActivityEventClass(event)
+            )}
+            title={title}
+          >
+            <span className='shrink-0 font-medium'>{label}</span>
+            {activityId ? (
+              <span className='min-w-0 max-w-[150px] truncate font-mono'>
+                {shortDisplayId(activityId)}
+              </span>
+            ) : null}
+            {event.activity_attempt != null && event.activity_attempt > 1 ? (
+              <span className='shrink-0'>
+                {t('monitorWfActivityAttemptShort', {
+                  n: event.activity_attempt
+                })}
+              </span>
+            ) : null}
+            {event.side_effect_class ? (
+              <span className='min-w-0 max-w-[120px] truncate'>
+                {event.side_effect_class}
+              </span>
+            ) : null}
+            {duration ? <span className='shrink-0'>{duration}</span> : null}
+            {reason ? (
+              <span className='min-w-0 max-w-[140px] truncate'>{reason}</span>
+            ) : null}
+          </span>
+        );
+      })}
+    </div>
+  );
 }
 
 function AppAutomationTracePanel({ logEntry }: { logEntry?: StepLogEntry }) {
@@ -386,6 +603,7 @@ export function StepRow({
   isCurrentlyRunning,
   currentStepType,
   currentMessage,
+  currentTrace,
   loopIter,
   isPending: _isPending,
   status,
@@ -400,6 +618,7 @@ export function StepRow({
   isCurrentlyRunning: boolean;
   currentStepType: string;
   currentMessage: string;
+  currentTrace: ExecutionTraceSummary;
   loopIter: number | null;
   isPending: boolean;
   status: WorkflowStepRowStatus;
@@ -463,6 +682,10 @@ export function StepRow({
       ? proofDetails.iterations
       : null;
   const incidents = logEntry?.incidents ?? [];
+  const trace = mergeExecutionTrace(
+    executionTraceFromLog(logEntry),
+    isCurrentlyRunning ? currentTrace : null
+  );
   const badgeState = isCurrentlyRunning
     ? 'running'
     : isFailed
@@ -580,6 +803,15 @@ export function StepRow({
               {t('monitorStepRowLoopRound', { n: loopIter + 1 })}
             </div>
           )}
+          <ExecutionTraceChips
+            trace={trace}
+            className='mt-1'
+            maxPathClassName='max-w-[260px] sm:max-w-[360px]'
+          />
+          <RuntimeEvidencePanel logEntry={logEntry} />
+          <TemporalActivityEventsPanel
+            events={logEntry?.temporal_activity_events}
+          />
           {isFailed && msg && (
             <div
               className='truncate text-[10px] text-destructive/80'
@@ -686,6 +918,10 @@ interface WorkflowStepListProps {
     current_step: number;
     total_steps: number;
     current_step_type: string;
+    current_step_id?: string | null;
+    current_step_path?: string | null;
+    current_loop_iter?: number | null;
+    reason_code?: string | null;
     message: string;
     loop_iteration: number | null;
   };
@@ -865,9 +1101,12 @@ export function WorkflowStepList({
     derivedCursor.currentStepType || progressSource?.current_step_type || '';
   const rawMessage = derivedCursor.message || progressSource?.message || '';
   const message = humanizeSessionGateMessage(rawMessage, tGate) ?? rawMessage;
+  const progressTrace = progressSource
+    ? executionTraceFromRecord(progressSource as Record<string, unknown>)
+    : emptyExecutionTrace();
   const loopIter =
-    progressSource?.loop_iteration != null && progressSource.loop_iteration >= 0
-      ? progressSource.loop_iteration
+    progressTrace.loopIter != null && progressTrace.loopIter >= 0
+      ? progressTrace.loopIter
       : null;
   const rows = buildWorkflowStepRows({
     scenarioSteps: scenarioDefs,
@@ -934,6 +1173,16 @@ export function WorkflowStepList({
           <div className='overflow-y-auto py-1' style={{ maxHeight }}>
             {rows.map((row, rowIndex) => {
               const isCurrentlyRunning = row.status === 'running';
+              const rowStepId = String(
+                (row.step as FlowStep & { id?: unknown; _id?: unknown }).id ??
+                  (row.step as FlowStep & { _id?: unknown })._id ??
+                  ''
+              );
+              const rowMatchesProgressTrace =
+                normalizeTracePathForMatch(row.tracePath) ===
+                  normalizeTracePathForMatch(progressTrace.stepPath) ||
+                (progressTrace.stepId != null &&
+                  rowStepId === progressTrace.stepId);
               return (
                 <StepRow
                   key={row.pathKey}
@@ -943,6 +1192,11 @@ export function WorkflowStepList({
                   isCurrentlyRunning={isCurrentlyRunning}
                   currentStepType={stepType}
                   currentMessage={message}
+                  currentTrace={
+                    isCurrentlyRunning && rowMatchesProgressTrace
+                      ? progressTrace
+                      : emptyExecutionTrace()
+                  }
                   loopIter={loopIter}
                   isPending={row.status === 'pending'}
                   status={row.status}

@@ -3,6 +3,7 @@
  * Regenerate: `pnpm gen:api:sync` (backend `uv run export-openapi` first).
  */
 import { getDeviceFarmApi } from '@/features/device-farm/services/client';
+import { farmApi } from '@/lib/farm-api';
 import type {
   ActivityLogListOut,
   ActivityLogOut,
@@ -69,6 +70,18 @@ export const analyticsApi = {
           ReturnType<typeof df>['listActivityApiAnalyticsActivityGet']
         >[0]
       )
+    ).data,
+
+  adminActivity: async (query?: {
+    action?: string;
+    workspaceId?: string;
+    offset?: number;
+    limit?: number;
+  }) =>
+    (
+      await farmApi.get<ActivityLogListOut>('/admin/audit-log', {
+        params: query
+      })
     ).data,
 
   summary: async (windowDays = 7) =>

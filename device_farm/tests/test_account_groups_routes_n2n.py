@@ -16,6 +16,7 @@ from api.routes.account_groups import router as account_groups_router
 from db.database import Base
 from db.models.account_group import AccountGroup, AccountGroupMember  # noqa: F401
 from tenancy.context import set_current_org_id
+from tests.tenancy_test_support import seed_casbin_policy_tables
 
 
 @pytest_asyncio.fixture
@@ -23,6 +24,7 @@ async def engine():
     eng = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await seed_casbin_policy_tables(conn)
     yield eng
     await eng.dispose()
 

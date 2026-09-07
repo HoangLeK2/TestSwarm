@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useTranslations } from 'next-intl';
-import { Mail, UserPlus } from 'lucide-react';
+import { Mail } from 'lucide-react';
 import { Link, useRouter } from '@/i18n/navigation';
 import { ROUTES } from '@/config/routes';
 import { Button } from '@/components/ui/button';
@@ -173,7 +173,6 @@ export function AcceptInviteClient() {
     currentEmail !== invitedEmail;
 
   const signInHref = `${ROUTES.AUTH.SIGN_IN}?email=${encodeURIComponent(preview.email)}`;
-  const signUpHref = `${ROUTES.AUTH.SIGN_UP}?email=${encodeURIComponent(preview.email)}`;
 
   if (isWrongAccount) {
     return (
@@ -203,12 +202,7 @@ export function AcceptInviteClient() {
         >
           {t('switchAccount')}
         </Button>
-        <InviteActions
-          preview={preview}
-          signInHref={signInHref}
-          signUpHref={signUpHref}
-          t={t}
-        />
+        <InviteActions preview={preview} signInHref={signInHref} t={t} />
       </InviteShell>
     );
   }
@@ -217,12 +211,7 @@ export function AcceptInviteClient() {
     return (
       <InviteShell>
         <p className='text-center text-sm text-destructive'>{loadError}</p>
-        <InviteActions
-          preview={preview}
-          signInHref={signInHref}
-          signUpHref={signUpHref}
-          t={t}
-        />
+        <InviteActions preview={preview} signInHref={signInHref} t={t} />
       </InviteShell>
     );
   }
@@ -242,12 +231,7 @@ export function AcceptInviteClient() {
       <p className='text-center text-sm text-muted-foreground'>
         {preview.existingUser ? t('existingUserHint') : t('newUserHint')}
       </p>
-      <InviteActions
-        preview={preview}
-        signInHref={signInHref}
-        signUpHref={signUpHref}
-        t={t}
-      />
+      <InviteActions preview={preview} signInHref={signInHref} t={t} />
       {accepting ? (
         <p className='text-center text-xs text-muted-foreground'>
           {t('accepting')}
@@ -260,23 +244,15 @@ export function AcceptInviteClient() {
 function InviteActions({
   preview,
   signInHref,
-  signUpHref,
   t
 }: {
   preview: OrganizationInvitationPreview;
   signInHref: string;
-  signUpHref: string;
   t: (key: string) => string;
 }) {
   if (!preview.existingUser) {
     return (
       <div className='flex flex-col gap-2'>
-        <Button asChild size='lg' className='w-full'>
-          <Link href={signUpHref}>
-            <UserPlus className='mr-2 size-4' />
-            {t('signUp')}
-          </Link>
-        </Button>
         <Button asChild variant='outline' size='lg' className='w-full'>
           <Link href={signInHref}>{t('signIn')}</Link>
         </Button>

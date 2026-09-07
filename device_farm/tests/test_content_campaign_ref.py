@@ -39,6 +39,7 @@ async def test_resolve_persist_campaign_id_prefers_execution(session):
     execution = Execution(
         id="exec-1",
         run_type="campaign_device",
+        org_id="org-1",
         campaign_id="camp-1",
         status="running",
         created_at=now,
@@ -60,6 +61,7 @@ async def test_resolve_persist_campaign_id_drops_execution_orphan_campaign_id(se
     execution = Execution(
         id="exec-orphan",
         run_type="campaign_device",
+        org_id="org-1",
         campaign_id="deleted-campaign",
         status="running",
         created_at=now,
@@ -81,6 +83,7 @@ async def test_resolve_persist_campaign_id_drops_missing_campaign(session):
     execution = Execution(
         id="exec-2",
         run_type="campaign_device",
+        org_id="org-1",
         campaign_id=None,
         status="running",
         created_at=now,
@@ -124,6 +127,7 @@ async def test_resolve_persist_campaign_id_without_tenant_context(session, monke
     execution = Execution(
         id="exec-strict",
         run_type="campaign_device",
+        org_id="org-1",
         campaign_id="camp-strict",
         status="running",
         created_at=now,
@@ -156,6 +160,7 @@ async def test_resolve_persist_campaign_id_preview_never_attaches_campaign(sessi
         id="exec-preview",
         run_type="preview",
         kind="preview",
+        org_id="org-1",
         campaign_id="camp-preview",
         status="running",
         created_at=now,

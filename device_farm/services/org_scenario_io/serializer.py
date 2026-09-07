@@ -33,7 +33,7 @@ def checksum_mismatch_warning(payload: dict[str, Any]) -> str | None:
     if str(expected) == actual:
         return None
     return (
-        "File có thể đã chỉnh sửa sau khi tải xuống từ hệ thống. "
+        "Checksum không khớp: file có thể đã chỉnh sửa sau khi tải xuống từ hệ thống. "
         "Đã nhập theo nội dung trong file."
     )
 

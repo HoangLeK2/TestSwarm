@@ -95,7 +95,7 @@ function RelayAgentCard({
       <div className='flex items-center justify-between gap-2'>
         <div className='flex min-w-0 flex-wrap items-center gap-2'>
           <span className='truncate text-sm font-medium'>
-            {agent.hostname || agent.relay_id}
+            {agent.name || agent.relay_id}
           </span>
           <RelayAgentStatusBadge state={connectionState} />
           <span className='shrink-0 text-[11px] text-muted-foreground'>

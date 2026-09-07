@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"sync"
+	"sync/atomic"
 
 	"devicefarm/media-adapter/internal/domain/stream"
 	"github.com/bluenviron/gortsplib/v5"
@@ -115,36 +116,31 @@ func TestPublisherStatsCountKeyframeEvictions(t *testing.T) {
 	}
 }
 
-func TestRemoteRTSPQueueDropsInsteadOfBlockingLane(t *testing.T) {
+func TestPublisherStatsCountsActiveRTSPStatesNotRetainedLanes(t *testing.T) {
 	publisher := &Publisher{
-		cfg: Config{
-			QueueMax:        2,
-			StalePacketAge:  time.Second,
-			InputFPS:        15,
-			RemoteQueueSize: 1,
-			RemoteTimeout:   time.Millisecond,
+		lanes: map[string]*serialLane{
+			"SERIAL-1": {},
+		},
+		rtsp: &rtspHandler{
+			states: map[string]*streamState{},
 		},
 	}
-	state := &streamState{
-		serial:      "SERIAL-1",
-		remoteURL:   "rtsp://127.0.0.1:1/device-SERIAL-1",
-		remoteQueue: make(chan *rtp.Packet, 1),
-		remoteDone:  make(chan struct{}),
-		stats:       &publisher.stats,
-	}
-	packet := &rtp.Packet{Payload: []byte{0x01}}
 
-	state.enqueueRemote(nil, packet)
-	state.enqueueRemote(nil, packet)
-	state.enqueueRemote(nil, packet)
-
-	if queued := len(state.remoteQueue); queued != 1 {
-		t.Fatalf("remote queue len=%d, want 1", queued)
+	if stats := publisher.Stats(); stats.ActiveLanes != 0 {
+		t.Fatalf("active lanes=%d, want 0", stats.ActiveLanes)
 	}
-	if publisher.Stats().QueueEvictions == 0 {
-		t.Fatal("expected remote queue eviction instead of blocking")
+
+	publisher.rtsp.states["device-SERIAL-1"] = &streamState{serial: "SERIAL-1"}
+
+	if stats := publisher.Stats(); stats.ActiveLanes != 1 {
+		t.Fatalf("active lanes=%d, want 1", stats.ActiveLanes)
 	}
 }
+
+// Superseded by TestRemoteOverflowDrainsQueueAndRequestsKeyframe, which asserts
+// the same "never block the lane" invariant plus the two things that actually
+// matter now: the backlog goes whole rather than one packet at a time, and the
+// device is asked for a keyframe.
 
 // recordingServer accepts an ANNOUNCE/RECORD session so writeRemote can be
 // driven against a real peer. A fake client cannot catch the bug this guards:
@@ -176,9 +172,9 @@ func (s *recordingServer) OnRecord(*gortsplib.ServerHandlerOnRecordCtx) (*base.R
 
 func (s *recordingServer) OnPacketsLost(*gortsplib.ServerHandlerOnPacketsLostCtx) {}
 
-func TestWriteRemoteUsesTheAnnouncedMediaNotTheLocalOne(t *testing.T) {
-	// Regression: ensureRemote announces a freshly built description.Media,
-	// but writeRemote used to hand gortsplib the local server's media instead.
+func TestRTSPSinkUsesTheAnnouncedMediaNotTheLocalOne(t *testing.T) {
+	// Regression: the sink announces a freshly built description.Media, but the
+	// write path used to hand gortsplib the local server's media instead.
 	// The client has no entry for that pointer, so WritePacketRTPWithNTP
 	// dereferenced nil and panicked — killing the whole adapter process on the
 	// first published packet. Publishing had never actually run before, so no
@@ -209,30 +205,37 @@ func TestWriteRemoteUsesTheAnnouncedMediaNotTheLocalOne(t *testing.T) {
 		PPS:               []byte{0x68, 0xce, 0x38, 0x80},
 		PacketizationMode: 1,
 	}
+	// Deliberately a different pointer than the one the sink announces: this is
+	// exactly the mismatch that used to panic.
+	localMedia := &description.Media{Type: description.MediaTypeVideo, Formats: []format.Format{forma}}
+	sink := newRTSPSink(
+		"rtsp://"+addr+"/device-SERIAL-1",
+		2*time.Second,
+		forma,
+		slog.New(slog.NewTextHandler(os.Stderr, nil)),
+	)
 	state := &streamState{
-		serial: "SERIAL-1",
-		// Deliberately a different pointer than the one ensureRemote announces:
-		// this is exactly the mismatch that used to panic.
-		media:         &description.Media{Type: description.MediaTypeVideo, Formats: []format.Format{forma}},
-		format:        forma,
-		remoteURL:     "rtsp://" + addr + "/device-SERIAL-1",
-		remoteTimeout: 2 * time.Second,
+		serial:    "SERIAL-1",
+		media:     localMedia,
+		format:    forma,
+		remoteURL: sink.url,
+		remote:    sink,
 	}
 
 	packet := &rtp.Packet{
 		Header:  rtp.Header{Version: 2, PayloadType: 96, SequenceNumber: 1, Marker: true},
 		Payload: []byte{0x65, 0x88, 0x84, 0x00},
 	}
-	if err := state.writeRemote(slog.New(slog.NewTextHandler(os.Stderr, nil)), packet); err != nil {
+	if err := state.writeRemote(packet); err != nil {
 		t.Fatalf("writeRemote returned error: %v", err)
 	}
-	if state.remoteMedia == nil {
-		t.Fatal("remoteMedia not retained; writes cannot reference the announced media")
+	if sink.media == nil {
+		t.Fatal("announced media not retained; writes cannot reference it")
 	}
-	if state.remoteMedia == state.media {
-		t.Fatal("remoteMedia must be the announced media, not the local server's")
+	if sink.media == state.media {
+		t.Fatal("sink must write to the announced media, not the local server's")
 	}
-	state.closeRemote()
+	sink.Close()
 }
 
 func TestNextTimestampUsesMicrosecondsOn90kHzClock(t *testing.T) {
@@ -281,3 +284,309 @@ func TestNextTimestampRebasesWhenDeviceClockRestarts(t *testing.T) {
 		t.Fatalf("timestamp went backwards after restart: %d -> %d", before, after)
 	}
 }
+
+// idrRecorder records keyframe requests. requestIDR issues them on their own
+// goroutine — a device control socket write has no deadline and must not stall
+// the lane — so tests wait on the count rather than reading it inline.
+type idrRecorder struct {
+	mu      sync.Mutex
+	serials []string
+}
+
+func (r *idrRecorder) request(serial string) bool {
+	r.mu.Lock()
+	r.serials = append(r.serials, serial)
+	r.mu.Unlock()
+	return true
+}
+
+func (r *idrRecorder) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.serials)
+}
+
+func (r *idrRecorder) waitFor(t *testing.T, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if r.count() >= want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("keyframe requests=%d, want %d", r.count(), want)
+}
+
+func newTestPublisher(cfg Config) (*Publisher, *idrRecorder) {
+	recorder := &idrRecorder{}
+	return &Publisher{
+		cfg:     cfg,
+		lanes:   make(map[string]*serialLane),
+		lastIDR: make(map[string]time.Time),
+		idr:     recorder.request,
+		rtsp: &rtspHandler{
+			streams: make(map[string]*gortsplib.ServerStream),
+			states:  make(map[string]*streamState),
+		},
+	}, recorder
+}
+
+func addTestLane(publisher *Publisher, serial string) *serialLane {
+	lane := &serialLane{
+		serial:    serial,
+		publisher: publisher,
+		queue:     make(chan queuedPacket, publisher.cfg.QueueMax),
+		done:      make(chan struct{}),
+	}
+	publisher.mu.Lock()
+	publisher.lanes[serial] = lane
+	publisher.mu.Unlock()
+	return lane
+}
+
+func pFrame() stream.EncodedPacket {
+	return stream.EncodedPacket{Serial: "SERIAL-1", Payload: []byte{0, 0, 0, 1, 0x41}}
+}
+
+// A dropped P-frame breaks the reference chain for every frame after it, and on
+// codec level >= 4 scrcpy schedules no IDR of its own. Without this request the
+// viewer stays on a frozen picture until it reconnects.
+func TestQueueDropRequestsKeyframe(t *testing.T) {
+	publisher, recorder := newTestPublisher(Config{
+		QueueMax: 2, StalePacketAge: time.Second, InputFPS: 15, IDRMinInterval: time.Hour,
+	})
+	lane := addTestLane(publisher, "SERIAL-1")
+
+	for i := 0; i < 3; i++ {
+		lane.offer(pFrame())
+	}
+
+	recorder.waitFor(t, 1)
+	if got := recorder.serials[0]; got != "SERIAL-1" {
+		t.Fatalf("requested serial=%q, want SERIAL-1", got)
+	}
+	if drops := publisher.Stats().PerSerial["SERIAL-1"].QueueDrops; drops != 1 {
+		t.Fatalf("per-serial queue drops=%d, want 1", drops)
+	}
+}
+
+// RESET_VIDEO is a full MediaCodec reconfigure on the phone, and
+// MediaCodec.configure() is where Exynos encoders abort. An unbounded request
+// rate would kill the devices the safe profile exists to rescue.
+func TestKeyframeRequestRateLimited(t *testing.T) {
+	publisher, recorder := newTestPublisher(Config{
+		QueueMax: 2, StalePacketAge: time.Second, InputFPS: 15, IDRMinInterval: time.Hour,
+	})
+	lane := addTestLane(publisher, "SERIAL-1")
+
+	for i := 0; i < 100; i++ {
+		lane.offer(pFrame())
+	}
+
+	recorder.waitFor(t, 1)
+	time.Sleep(50 * time.Millisecond)
+	if got := recorder.count(); got != 1 {
+		t.Fatalf("keyframe requests=%d, want exactly 1 — the rate-limit gate is open", got)
+	}
+	if drops := publisher.Stats().PerSerial["SERIAL-1"].QueueDrops; drops != 98 {
+		t.Fatalf("per-serial queue drops=%d, want 98", drops)
+	}
+}
+
+func TestStaleDropRequestsKeyframe(t *testing.T) {
+	publisher, recorder := newTestPublisher(Config{
+		QueueMax: 4, StalePacketAge: 10 * time.Millisecond, InputFPS: 15,
+		IDRMinInterval: time.Hour, LaneIdle: time.Hour,
+	})
+	lane := addTestLane(publisher, "SERIAL-1")
+	go lane.run()
+	t.Cleanup(func() { close(lane.done) })
+
+	lane.queue <- queuedPacket{
+		payload:  []byte{0, 0, 0, 1, 0x41},
+		received: time.Now().Add(-time.Second),
+	}
+
+	recorder.waitFor(t, 1)
+	if drops := publisher.Stats().PerSerial["SERIAL-1"].StaleDrops; drops != 1 {
+		t.Fatalf("per-serial stale drops=%d, want 1", drops)
+	}
+}
+
+// Overflow discards the whole backlog rather than the oldest packet. Evicting
+// one packet cuts the access unit being written in half, which is strictly
+// worse than a gap: the decoder rejects the frame either way, and a truncated
+// keyframe also destroys the recovery.
+func TestRemoteOverflowDrainsQueueAndRequestsKeyframe(t *testing.T) {
+	publisher, recorder := newTestPublisher(Config{
+		QueueMax: 2, StalePacketAge: time.Second, InputFPS: 15,
+		RemoteQueueSize: 4, IDRMinInterval: time.Hour,
+	})
+	addTestLane(publisher, "SERIAL-1")
+	state := &streamState{
+		serial:      "SERIAL-1",
+		remoteURL:   "rtsp://127.0.0.1:1/device-SERIAL-1",
+		remoteQueue: make(chan *rtp.Packet, 4),
+		remoteDone:  make(chan struct{}),
+		stats:       &publisher.stats,
+		onOverflow:  func() { publisher.laneDrop("SERIAL-1", dropRemoteOverflow) },
+	}
+
+	for i := 0; i < 5; i++ {
+		state.enqueueRemote(nil, &rtp.Packet{
+			Header:  rtp.Header{SequenceNumber: uint16(i)},
+			Payload: []byte{byte(i)},
+		})
+	}
+
+	if got := len(state.remoteQueue); got != 1 {
+		t.Fatalf("remote queue len=%d, want 1 — the backlog should be gone, not trimmed", got)
+	}
+	if surviving := <-state.remoteQueue; surviving.SequenceNumber != 4 {
+		t.Fatalf("surviving packet seq=%d, want 4 (the newest)", surviving.SequenceNumber)
+	}
+	recorder.waitFor(t, 1)
+	if resyncs := publisher.Stats().PerSerial["SERIAL-1"].RemoteResyncs; resyncs != 1 {
+		t.Fatalf("per-serial remote resyncs=%d, want 1", resyncs)
+	}
+}
+
+// The drain above only protects a keyframe if the queue can hold one. Every
+// deployment shipped RemoteQueueSize=32 against a ~85-packet keyframe, so the
+// drain discarded the frame it existed to save and the IDR it asked for came
+// back oversized — a drop loop that ran with a perfectly healthy uplink.
+// Customer .env files still carry 32, so the floor has to live here.
+func TestNewFloorsRemoteQueueToHoldOneAccessUnit(t *testing.T) {
+	publisher := New(Config{
+		RTSPAddress:     "127.0.0.1:0",
+		RemoteQueueSize: 32,
+	}, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	t.Cleanup(func() { _ = publisher.Close(context.Background()) })
+
+	if got := publisher.cfg.RemoteQueueSize; got != minRemoteQueueSize {
+		t.Fatalf("RemoteQueueSize=%d, want %d — 32 cannot hold one keyframe", got, minRemoteQueueSize)
+	}
+}
+
+// A lane used to live until Publisher.Close, so every device that ever streamed
+// kept a goroutine and a queue for the life of the process.
+func TestLaneClosesAfterIdle(t *testing.T) {
+	publisher, _ := newTestPublisher(Config{
+		QueueMax: 2, StalePacketAge: time.Second, InputFPS: 15,
+		IDRMinInterval: time.Hour, LaneIdle: 40 * time.Millisecond,
+	})
+	lane := addTestLane(publisher, "SERIAL-1")
+	lane.counters.lastPacketUnix.Store(time.Now().Add(-time.Second).UnixMilli())
+	go lane.run()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		publisher.mu.RLock()
+		_, still := publisher.lanes["SERIAL-1"]
+		publisher.mu.RUnlock()
+		if !still {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("idle lane was never retired; its goroutine and queue leak for the process lifetime")
+}
+
+// Fleet-wide totals cannot answer the only question worth asking during an
+// incident: which phone is dropping.
+func TestPerSerialStatsIsolateDevices(t *testing.T) {
+	publisher, _ := newTestPublisher(Config{
+		QueueMax: 2, StalePacketAge: time.Second, InputFPS: 15, IDRMinInterval: time.Hour,
+	})
+	broken := addTestLane(publisher, "SERIAL-BROKEN")
+	healthy := addTestLane(publisher, "SERIAL-OK")
+
+	for i := 0; i < 5; i++ {
+		broken.offer(pFrame())
+	}
+	healthy.offer(pFrame())
+
+	stats := publisher.Stats()
+	if got := stats.PerSerial["SERIAL-BROKEN"].QueueDrops; got != 3 {
+		t.Fatalf("broken device queue drops=%d, want 3", got)
+	}
+	if got := stats.PerSerial["SERIAL-OK"].QueueDrops; got != 0 {
+		t.Fatalf("healthy device queue drops=%d, want 0", got)
+	}
+	if stats.PerSerial["SERIAL-OK"].LastPacketUnix == 0 {
+		t.Fatal("healthy device has no last-packet timestamp")
+	}
+}
+
+// go2rtc sends PLI on an unconditional two-second ticker, not on real loss
+// (pkg/webrtc/conn.go). scrcpy's RESET_VIDEO is a full MediaCodec reconfigure,
+// and MediaCodec.configure() is where Exynos encoders abort — so honouring every
+// PLI would reset the encoder on every phone every two seconds. Remote feedback
+// must pass through the same gate as a local drop.
+func TestRemoteFeedbackGoesThroughTheKeyframeRateLimit(t *testing.T) {
+	publisher, recorder := newTestPublisher(Config{
+		QueueMax: 2, StalePacketAge: time.Second, InputFPS: 15, IDRMinInterval: time.Hour,
+	})
+	addTestLane(publisher, "SERIAL-1")
+
+	for i := 0; i < 30; i++ {
+		publisher.laneDrop("SERIAL-1", dropRemoteFeedback)
+	}
+
+	recorder.waitFor(t, 1)
+	time.Sleep(50 * time.Millisecond)
+	if got := recorder.count(); got != 1 {
+		t.Fatalf("keyframe requests=%d, want exactly 1 — go2rtc's PLI ticker reaches the encoder", got)
+	}
+	// Nothing was dropped on this side, so no drop counter should move: the
+	// peer reported its own loss.
+	stats := publisher.Stats().PerSerial["SERIAL-1"]
+	if stats.QueueDrops != 0 || stats.StaleDrops != 0 || stats.RemoteResyncs != 0 {
+		t.Fatalf("remote feedback raised a local drop counter: %+v", stats)
+	}
+}
+
+func TestNewRemoteSinkOverrideReplacesTheRTSPTransport(t *testing.T) {
+	var gotSerial, gotURL string
+	sink := &fakeRemoteSink{}
+	publisher := New(Config{
+		RTSPAddress:     "127.0.0.1:0",
+		PublishTemplate: "http://go2rtc:1984/api/webrtc?dst={stream_raw}",
+		NewRemoteSink: func(serial string, url string, onKeyframeNeeded func()) RemoteSink {
+			gotSerial, gotURL = serial, url
+			return sink
+		},
+	}, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	t.Cleanup(func() { _ = publisher.Close(context.Background()) })
+
+	state, err := publisher.ensureRTSPStream("SERIAL-1",
+		[]byte{0x67, 0x42, 0x00, 0x0a, 0xf8, 0x41, 0xa2}, []byte{0x68, 0xce, 0x38, 0x80})
+	if err != nil {
+		t.Fatalf("ensureRTSPStream: %v", err)
+	}
+	if gotSerial != "SERIAL-1" {
+		t.Fatalf("sink built for serial=%q", gotSerial)
+	}
+	if gotURL != "http://go2rtc:1984/api/webrtc?dst=device-SERIAL-1" {
+		t.Fatalf("sink built for url=%q", gotURL)
+	}
+	if err := state.writeRemote(&rtp.Packet{Payload: []byte{0x41}}); err != nil {
+		t.Fatalf("writeRemote: %v", err)
+	}
+	if sink.writes.Load() != 1 {
+		t.Fatalf("sink writes=%d, want 1 — packets are not reaching the override", sink.writes.Load())
+	}
+}
+
+type fakeRemoteSink struct {
+	writes atomic.Int64
+	closed atomic.Bool
+}
+
+func (f *fakeRemoteSink) WriteRTP(*rtp.Packet) error {
+	f.writes.Add(1)
+	return nil
+}
+
+func (f *fakeRemoteSink) Close() { f.closed.Store(true) }

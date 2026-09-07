@@ -11,6 +11,7 @@ type NavLeafDef = {
   icon: NavIcon;
   roles?: NavUserRole[];
   permission?: PermissionRequirement;
+  adminConsoleOnly?: boolean;
 };
 
 type NavGroupDef = {
@@ -76,10 +77,81 @@ const ADMIN_MONITORING_GROUP: NavGroupDef = {
   titleKey: 'nav_group_admin_monitoring',
   items: [
     {
+      titleKey: 'admin_console',
+      url: ROUTES.ADMIN.ROOT,
+      icon: 'dashboard',
+      permission: { object: 'organizations', action: 'read' },
+      adminConsoleOnly: true
+    },
+    {
+      titleKey: 'admin_workspaces',
+      url: ROUTES.ADMIN.WORKSPACES,
+      icon: 'building',
+      permission: { object: 'organizations', action: 'read' },
+      adminConsoleOnly: true
+    },
+    {
+      titleKey: 'admin_workspace_access',
+      url: ROUTES.ADMIN.WORKSPACE_ACCESS,
+      icon: 'usersGroup',
+      permission: { object: 'organizations', action: 'manage' },
+      adminConsoleOnly: true
+    },
+    {
+      titleKey: 'admin_accounts',
+      url: ROUTES.ADMIN.ACCOUNTS,
+      icon: 'user',
+      permission: { object: 'accounts', action: 'read' },
+      adminConsoleOnly: true
+    },
+    {
+      titleKey: 'admin_content',
+      url: ROUTES.ADMIN.CONTENT,
+      icon: 'stats',
+      permission: { object: 'content', action: 'read' },
+      adminConsoleOnly: true
+    },
+    {
+      titleKey: 'admin_workspace_admins',
+      url: ROUTES.ADMIN.WORKSPACE_ADMINS,
+      icon: 'usersGroup',
+      roles: ['superadmin'],
+      permission: { object: 'organizations', action: 'manage' },
+      adminConsoleOnly: true
+    },
+    {
+      titleKey: 'admin_agents',
+      url: ROUTES.ADMIN.AGENTS,
+      icon: 'server',
+      permission: { object: 'relay-agents', action: 'read' },
+      adminConsoleOnly: true
+    },
+    {
+      titleKey: 'admin_devices',
+      url: ROUTES.ADMIN.DEVICES,
+      icon: 'smartphone',
+      permission: { object: 'devices', action: 'read' },
+      adminConsoleOnly: true
+    },
+    {
+      titleKey: 'admin_audit',
+      url: ROUTES.ADMIN.AUDIT,
+      icon: 'history',
+      permission: { object: 'analytics', action: 'read' },
+      adminConsoleOnly: true
+    }
+  ]
+};
+
+const WORKSPACE_MONITORING_GROUP: NavGroupDef = {
+  titleKey: 'nav_group_admin_monitoring',
+  items: [
+    {
       titleKey: 'devices_manage',
       url: ROUTES.DEVICES.MANAGE,
       icon: 'smartphone',
-      permission: { object: 'devices', action: 'read' }
+      permission: { object: 'devices', action: 'read' },
+      adminConsoleOnly: true
     },
     {
       titleKey: 'schedules',
@@ -154,8 +226,10 @@ const INFRASTRUCTURE_GROUP: NavGroupDef = {
 export const DASHBOARD_MAIN_NAV_GROUPS = [
   DAILY_OPERATIONS_GROUP,
   PREPARATION_GROUP,
-  ADMIN_MONITORING_GROUP
+  WORKSPACE_MONITORING_GROUP
 ] as const;
+
+export const ADMIN_CENTER_NAV_GROUPS = [ADMIN_MONITORING_GROUP] as const;
 
 export const DASHBOARD_SETTINGS_NAV_GROUPS = [
   ORGANIZATION_GROUP,
@@ -164,6 +238,7 @@ export const DASHBOARD_SETTINGS_NAV_GROUPS = [
 
 export const DASHBOARD_NAV_PATHS: string[] = [
   ...DASHBOARD_MAIN_NAV_GROUPS.flatMap((g) => g.items.map((i) => i.url)),
+  ...ADMIN_CENTER_NAV_GROUPS.flatMap((g) => g.items.map((i) => i.url)),
   ...DASHBOARD_SETTINGS_NAV_GROUPS.flatMap((g) => g.items.map((i) => i.url))
 ];
 
@@ -173,7 +248,8 @@ function leafFromDef(def: NavLeafDef, t: (key: string) => string): NavItem {
     url: def.url,
     icon: def.icon,
     roles: def.roles,
-    permission: def.permission
+    permission: def.permission,
+    adminConsoleOnly: def.adminConsoleOnly
   };
 }
 
@@ -187,10 +263,12 @@ function groupFromDef(def: NavGroupDef, t: (key: string) => string): NavItem {
 
 export function buildDashboardNavItems(t: (key: string) => string): {
   baseItems: NavItem[];
+  adminItems: NavItem[];
   settingItems: NavItem[];
 } {
   return {
     baseItems: DASHBOARD_MAIN_NAV_GROUPS.map((g) => groupFromDef(g, t)),
+    adminItems: ADMIN_CENTER_NAV_GROUPS.map((g) => groupFromDef(g, t)),
     settingItems: DASHBOARD_SETTINGS_NAV_GROUPS.map((g) => groupFromDef(g, t))
   };
 }

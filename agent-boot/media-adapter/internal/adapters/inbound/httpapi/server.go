@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"devicefarm/media-adapter/internal/adapters/outbound/go2rtc"
+	"devicefarm/media-adapter/internal/adapters/outbound/rtspserver"
 	"devicefarm/media-adapter/internal/adapters/scrcpy"
 	"github.com/go-chi/chi/v5"
 )
@@ -30,9 +31,14 @@ type Server struct {
 	streamRefs map[string]int
 	stopTimers map[string]*time.Timer
 	stopGrace  time.Duration
+	stats      publisherStatsProvider
 }
 
 const webRTCFirstFrameWait = 4 * time.Second
+
+type publisherStatsProvider interface {
+	Stats() rtspserver.PublisherStats
+}
 
 type webrtcSession struct {
 	ID       string
@@ -56,6 +62,10 @@ func NewServerWithWebRTC(addr string, manager *scrcpy.Manager, webrtc *go2rtc.Cl
 		stopTimers: make(map[string]*time.Timer),
 		stopGrace:  time.Duration(envInt("MEDIA_ADAPTER_WEBRTC_STOP_GRACE_MS", 5000)) * time.Millisecond,
 	}
+}
+
+func (s *Server) SetPublisherStatsProvider(provider publisherStatsProvider) {
+	s.stats = provider
 }
 
 func (s *Server) Run(ctx context.Context) error {
@@ -88,6 +98,7 @@ func (s *Server) routes() http.Handler {
 	router := chi.NewRouter()
 	router.Get("/healthz", s.handleHealth)
 	router.Get("/v1/scrcpy/streams", s.handleStreams)
+	router.Get("/v1/rtsp/publisher/status", s.handlePublisherStats)
 	router.Route("/v1/scrcpy/streams/{serial}", func(r chi.Router) {
 		r.Post("/start", func(w http.ResponseWriter, r *http.Request) {
 			serial, ok := routeParam(w, r, "serial")
@@ -158,6 +169,14 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleStreams(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"streams": s.manager.Statuses()})
+}
+
+func (s *Server) handlePublisherStats(w http.ResponseWriter, r *http.Request) {
+	if s.stats == nil {
+		writeError(w, http.StatusServiceUnavailable, "publisher stats are not configured")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.stats.Stats())
 }
 
 func (s *Server) handleStart(w http.ResponseWriter, r *http.Request, serial string) {

@@ -10,17 +10,22 @@ import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from services.platform_readiness import DEFAULT_PLATFORM
 from services.rate_limiter import ACTION_CONTENT_COMMENT, ACTION_CONTENT_LIKE
 from services.social_actions import get_social_action_adapter
 from services.social_actions.contract import (
     SocialActionObservation,
     UnsupportedSocialAction,
 )
-from services.social_ext import supports_step
+from services.social_actions.schema import (
+    content_scan_payload,
+    people_target_payload,
+    read_actions,
+    read_verified,
+)
 
 from tasks.scenario.context import ScenarioContext
 from tasks.scenario.steps import register_step
+from tasks.scenario.steps.platform_resolution import resolve_supported_step_platform
 
 log = logging.getLogger(__name__)
 
@@ -257,6 +262,7 @@ def _save_verified_target(
     *,
     save_as: str,
     target: dict[str, Any],
+    platform: str = "",
 ) -> None:
     id_variable = (
         "CANDIDATE_ENTITY_ID"
@@ -272,8 +278,9 @@ def _save_verified_target(
     )
     if target_id and not target.get("target_id"):
         target["target_id"] = target_id
-    sc.var_ctx.set(save_as, target)
-    sc.ctx.setdefault("vars", {})[save_as] = target
+    payload = people_target_payload(target, platform=platform, verified=True)
+    sc.var_ctx.set(save_as, payload)
+    sc.ctx.setdefault("vars", {})[save_as] = payload
 
 
 def _bool_value(value: Any, default: bool = False) -> bool:
@@ -318,18 +325,22 @@ def _save_unverified_target(
     target_type: str,
     outcome: str,
     message: str,
+    platform: str = "",
 ) -> None:
     if not save_as:
         return
-    sc.var_ctx.set(
-        save_as,
+    payload = people_target_payload(
         {
             "verified": False,
             "target_type": target_type,
             "outcome": outcome,
+            "reason": outcome,
             "message": message,
         },
+        platform=platform,
+        verified=False,
     )
+    sc.var_ctx.set(save_as, payload)
     sc.ctx.setdefault("vars", {})[save_as] = sc.var_ctx.resolve(f"${{{save_as}}}")
 
 
@@ -378,7 +389,10 @@ def _require_verified_target(
     if not required:
         return True
     target = _lookup_verified_target(sc, required)
-    if not target or target.get("verified") is not True:
+    # read_verified, not target["verified"]: a run that started before schema v1
+    # holds a flat payload, and a request must not be refused for the shape of
+    # the evidence.
+    if not target or not read_verified(target):
         _fail(
             sc,
             step,
@@ -538,6 +552,36 @@ def _record_unclaimed_social_action(
     except Exception as exc:
         result["account_action_ledger_error"] = str(exc)
         log.warning("[%s] unclaimed account action recording failed: %s", sc.serial, exc)
+
+
+def _record_ledger_error(
+    sc: ScenarioContext,
+    result: dict[str, Any],
+    *,
+    context: str,
+    exc: Exception,
+) -> None:
+    """Record a ledger write failure without failing the step.
+
+    Correct only AFTER the action has been performed. The ledger is the audit
+    trail, not a precondition — failing the step here made the campaign retry and
+    send the same requests to the same people a second time. Before the action,
+    a failed claim must still stop the step, so the claim sites keep calling
+    ``_fail``.
+    """
+    result["account_action_ledger_error"] = f"{context}: {exc}"
+    try:
+        from web.metrics import account_action_record_failed_total
+
+        account_action_record_failed_total.labels(context=context).inc()
+    except Exception:  # pragma: no cover - metrics optional in unit tests
+        pass
+    log.warning(
+        "[%s] %s: action already performed but ledger write failed: %s",
+        sc.serial,
+        context,
+        exc,
+    )
 
 
 def _fail(
@@ -786,7 +830,12 @@ def _handle_agent_boot_target_resolver(
         return
 
     target["verified"] = True
-    _save_verified_target(sc, save_as=save_as, target=target)
+    _save_verified_target(
+        sc,
+        save_as=save_as,
+        target=target,
+        platform=str(params.get("platform") or ""),
+    )
     result.update(
         {
             "ok": True,
@@ -881,6 +930,7 @@ def _select_person_target(
         target_type="person",
         outcome="target_not_checked",
         message=f"{label}: target has not been verified",
+        platform=platform,
     )
     _handle_agent_boot_target_resolver(
         sc,
@@ -917,6 +967,7 @@ def _select_person_target(
         target_type="person",
         outcome=str(result.get("outcome") or "target_not_verified"),
         message=str(result.get("message") or f"{label} failed"),
+        platform=platform,
     )
     if not bool(step.get("skip_candidate_on_not_verified", False)):
         return
@@ -986,7 +1037,9 @@ def handle_social_select_target(
     """Resolve and open a verified person/post target via the platform resolver."""
 
     del idx
-    platform = str(step.get("platform") or DEFAULT_PLATFORM).strip().casefold()
+    platform = resolve_supported_step_platform(sc, step, _SELECT_TARGET_STEP, result)
+    if platform is None:
+        return
     target_type = str(step.get("target_type") or "person").strip().casefold()
     label = f"{_SELECT_TARGET_STEP}[{target_type}]"
 
@@ -1002,20 +1055,6 @@ def handle_social_select_target(
             ),
         )
         return
-    if not supports_step(platform, _SELECT_TARGET_STEP):
-        _fail(
-            sc,
-            step,
-            result,
-            outcome="unsupported_platform",
-            message=(
-                f"{_SELECT_TARGET_STEP}: platform {platform!r} does not "
-                "implement this step"
-            ),
-        )
-        return
-
-    result["platform"] = platform
     if target_type == "person":
         _select_person_target(sc, step, result, platform=platform, label=label)
     else:
@@ -1031,18 +1070,10 @@ def handle_social_connect_visible_people(
 ) -> None:
     """Click one visible Add Friend row only when the UI exposes common context."""
 
-    platform = str(step.get("platform") or DEFAULT_PLATFORM).strip().casefold()
-    if not supports_step(platform, "social_connect_visible_people"):
-        _fail(
-            sc,
-            step,
-            result,
-            outcome="unsupported_platform",
-            message=(
-                f"social_connect_visible_people: platform {platform!r} does not "
-                "implement this step"
-            ),
-        )
+    platform = resolve_supported_step_platform(
+        sc, step, "social_connect_visible_people", result
+    )
+    if platform is None:
         return
 
     min_score = sc.var_ctx.resolve(step.get("min_score", 40), step_index=idx)
@@ -1235,9 +1266,7 @@ def handle_social_connect_visible_people(
         if sent_count > 0 and ledger_mode in {"observe", "enabled"}:
             try:
                 from services.account_actions import (
-                    finalize_action,
-                    observe_action,
-                    prepare_action,
+                    record_applied_actions,
                     resolve_action_identity,
                 )
 
@@ -1248,63 +1277,42 @@ def handle_social_connect_visible_people(
                     execution_id=sc.execution_id,
                     device_serial=sc.serial,
                 )
-                ledger_records: list[dict[str, Any]] = []
-                for offset, verified_target in enumerate(verified_targets):
-                    ledger_target = {
-                        "action": "request",
-                        "target_type": "person",
-                        "target_id": verified_target.get("target_id"),
-                        "source": verified_target.get("source"),
-                        "name": verified_target.get("name"),
-                    }
-                    if ledger_mode == "observe":
-                        ledger_records.append(
-                            observe_action(
-                                identity=identity,
-                                action_type="connection_request",
-                                platform=platform,
-                                target=ledger_target,
-                                outcome="applied",
-                            )
-                        )
-                        continue
-                    claim = prepare_action(
-                        identity=identity,
-                        action_type="connection_request",
-                        platform=platform,
-                        target=ledger_target,
-                        action_id=reserved_action_id if offset == 0 else None,
-                    )
-                    if claim.get("claimed") is False:
-                        ledger_records.append(claim)
-                        continue
-                    ledger_records.append(
-                        finalize_action(
-                            claim=claim,
-                            succeeded=True,
-                            terminal=True,
-                            reason="verified_visible_common_context",
-                            result={
-                                **result,
-                                "verified_target": verified_target,
+                # One session for the whole batch. Per-target prepare+finalize
+                # opened two sessions each, and every session built and disposed
+                # its own engine — 20 people cost 40 Postgres connections.
+                ledger_records = record_applied_actions(
+                    identity=identity,
+                    action_type="connection_request",
+                    platform=platform,
+                    entries=[
+                        {
+                            "target": {
+                                "action": "request",
+                                "target_type": "person",
+                                "target_id": verified_target.get("target_id"),
+                                "source": verified_target.get("source"),
+                                "name": verified_target.get("name"),
                             },
-                        )
-                    )
+                            "result": {**result, "verified_target": verified_target},
+                        }
+                        for verified_target in verified_targets
+                    ],
+                    reason="verified_visible_common_context",
+                    observe=ledger_mode == "observe",
+                    reserved_action_id=reserved_action_id or None,
+                )
                 result["account_action_ledgers"] = ledger_records
                 if ledger_records:
                     result["account_action_ledger"] = ledger_records[0]
             except Exception as exc:
-                _fail(
+                # The requests were already sent to real people above. Failing the
+                # step here made the campaign retry and send them again.
+                _record_ledger_error(
                     sc,
-                    step,
                     result,
-                    outcome="ledger_prepare_failed",
-                    message=(
-                        "social_connect_visible_people: durable batch action ledger "
-                        f"failed: {exc}"
-                    ),
+                    context="social_connect_visible_people_batch",
+                    exc=exc,
                 )
-                return
 
         _save_result(sc, step, result)
         return
@@ -1409,14 +1417,13 @@ def handle_social_connect_visible_people(
                         reason="verified_visible_common_context",
                     )
         except Exception as exc:
-            _fail(
+            # Same as the batch branch above: the request has already been sent.
+            _record_ledger_error(
                 sc,
-                step,
                 result,
-                outcome="ledger_prepare_failed",
-                message=f"social_connect_visible_people: durable action ledger failed: {exc}",
+                context="social_connect_visible_people",
+                exc=exc,
             )
-            return
 
     _save_result(sc, step, result)
 
@@ -1495,7 +1502,11 @@ def _handle_social_scan_posts_interact(
     #
     # Known limit: one call interacts with up to ``target_count`` posts, so this
     # bounds calls rather than posts. Keep ``target_count`` small in templates.
-    platform_name = str(step.get("platform") or DEFAULT_PLATFORM).strip().casefold()
+    platform_name = resolve_supported_step_platform(
+        sc, step, "social_scan_posts_interact", result
+    )
+    if platform_name is None:
+        return
     wants_comment = _bool_value(step.get("require_comment"), True) and bool(comment_text)
     if _pacing_blocked(
         sc,
@@ -1612,7 +1623,9 @@ def _handle_social_scan_posts_interact(
     save_as = str(step.get("save_as") or "").strip()
     _save_result(sc, step, result)
     if save_as:
-        _set_runtime_variable(sc, save_as, target)
+        _set_runtime_variable(
+            sc, save_as, content_scan_payload(target, platform=platform_name)
+        )
 
 
 @register_step("social_scan_posts_interact")
@@ -1661,7 +1674,9 @@ def handle_social_open_author_from_post_match(
         or ("COMMENTER_PROFILE_OPENED" if is_commenter else "AUTHOR_PROFILE_OPENED")
     ).strip()
     sheet_opened_var = str(step.get("save_sheet_opened_as") or "COMMENT_SHEET_OPENED").strip()
-    platform = str(step.get("platform") or DEFAULT_PLATFORM).strip().casefold()
+    platform = resolve_supported_step_platform(sc, step, step_name, result)
+    if platform is None:
+        return
     _set_runtime_variable(sc, success_var, False)
     _set_runtime_variable(sc, opened_var, False)
     if is_commenter:
@@ -1672,11 +1687,14 @@ def handle_social_open_author_from_post_match(
         target_type="person",
         outcome="target_not_checked",
         message=f"{step_name}: target has not been verified",
+        platform=platform,
     )
 
     source = _lookup_runtime_dict(sc, source_var)
-    actions = source.get("actions") if isinstance(source, dict) else None
-    if not isinstance(actions, list):
+    # Reads a schema v1 scan payload and a pre-v1 one alike: the scan that
+    # produced this variable may have run before the writer was updated.
+    actions = read_actions(source)
+    if actions is None:
         result.update(
             {
                 "ok": True,
@@ -1839,7 +1857,7 @@ def handle_social_open_author_from_post_match(
         _set_runtime_variable(sc, sheet_opened_var, target.get("comment_sheet_opened") is True)
     if target.get("verified") is True:
         target["verified"] = True
-        _save_verified_target(sc, save_as=save_as, target=target)
+        _save_verified_target(sc, save_as=save_as, target=target, platform=platform)
         _set_runtime_variable(sc, success_var, True)
         result["verified_target"] = _verified_target_summary(save_as, target)
         result["action_bounds"] = target.get("action_bounds")
@@ -1853,6 +1871,7 @@ def handle_social_open_author_from_post_match(
             target_type="person",
             outcome=str(result.get("outcome") or "target_not_verified"),
             message=str(result.get("message") or "author profile not verified"),
+            platform=platform,
         )
 
 
@@ -1870,12 +1889,53 @@ def handle_social_action(
     """Act only on the current screen and verify the resulting UI state."""
 
     action_type = str(step.get("type") or "")
-    platform = str(step.get("platform") or DEFAULT_PLATFORM).strip().casefold()
     action = (
         str(step.get("action") or _DEFAULT_ACTIONS.get(action_type) or "")
         .strip()
         .casefold()
     )
+    result["action_performed"] = False
+    ledger_mode = (
+        os.environ.get("ACCOUNT_ACTION_LEDGER_MODE", "disabled").strip().lower()
+    )
+    reserved_action_id = str(step.get("account_action_id") or "").strip()
+    if reserved_action_id:
+        ledger_mode = "enabled"
+    ledger_identity = None
+    ledger_target = None
+    ledger_claim = None
+    ledger_identity_error = None
+    if ledger_mode in {"observe", "enabled"}:
+        from services.account_actions import resolve_action_identity
+
+        try:
+            ledger_identity = resolve_action_identity(
+                step=step,
+                scenario=sc.scenario,
+                variables=sc.ctx.get("vars", {}),
+                execution_id=sc.execution_id,
+                device_serial=sc.serial,
+            )
+        except Exception as exc:
+            ledger_identity_error = exc
+            if ledger_mode == "observe":
+                log.warning(
+                    "[%s] account action identity resolution failed: %s", sc.serial, exc
+                )
+
+    platform = resolve_supported_step_platform(sc, step, action_type, result)
+    if platform is None:
+        _record_unclaimed_social_action(
+            sc,
+            step,
+            result,
+            ledger_mode=ledger_mode,
+            ledger_identity=ledger_identity,
+            action_type=action_type,
+            platform=str(result.get("platform") or step.get("platform") or "missing"),
+            action=action,
+        )
+        return
     timeout = max(0.1, float(step.get("timeout", 6.0) or 6.0))
     poll = max(0.05, float(step.get("poll", 0.4) or 0.4))
     verify_timeout = max(
@@ -1918,33 +1978,6 @@ def handle_social_action(
     ):
         _release_unperformed_candidate_lease(sc, step, result)
         return
-    ledger_mode = (
-        os.environ.get("ACCOUNT_ACTION_LEDGER_MODE", "disabled").strip().lower()
-    )
-    reserved_action_id = str(step.get("account_action_id") or "").strip()
-    if reserved_action_id:
-        ledger_mode = "enabled"
-    ledger_identity = None
-    ledger_target = None
-    ledger_claim = None
-    ledger_identity_error = None
-    if ledger_mode in {"observe", "enabled"}:
-        from services.account_actions import resolve_action_identity
-
-        try:
-            ledger_identity = resolve_action_identity(
-                step=step,
-                scenario=sc.scenario,
-                variables=sc.ctx.get("vars", {}),
-                execution_id=sc.execution_id,
-                device_serial=sc.serial,
-            )
-        except Exception as exc:
-            ledger_identity_error = exc
-            if ledger_mode == "observe":
-                log.warning(
-                    "[%s] account action identity resolution failed: %s", sc.serial, exc
-                )
 
     candidate_entity_id = str(step.get("candidate_entity_id") or "").strip()
     candidate_lease_token = str(step.get("candidate_lease_token") or "").strip()
@@ -2206,14 +2239,14 @@ def handle_social_action(
                 else:
                     result["account_action_ledger"] = ledger_claim
             except Exception as exc:
-                _fail(
+                # Nothing was performed here — the screen was already in the
+                # target state. Failing the step would just make the campaign
+                # re-check and hit the same no-op again.
+                _record_ledger_error(
                     sc,
-                    step,
                     result,
-                    outcome="ledger_prepare_failed",
-                    message=f"{action_type}: durable no-op claim failed: {exc}",
-                    observation=before,
-                    debug_trace=debug_trace,
+                    context=f"{action_type}_already_applied",
+                    exc=exc,
                 )
         elif ledger_mode == "observe" and ledger_identity is not None:
             try:
@@ -2303,6 +2336,10 @@ def handle_social_action(
                 )
                 return
         except Exception as exc:
+            # Claim-before-act: nothing has been tapped yet, so refusing is free
+            # and acting without a claim is not. Do NOT soften this into
+            # _record_ledger_error the way the post-action sites were — that
+            # would let the action run with no way to detect a duplicate.
             _fail(
                 sc,
                 step,
@@ -2619,14 +2656,13 @@ def _finalize_social_action_ledger(
             result=ledger_result,
         )
     except Exception as exc:
-        result.update(
-            {
-                "ok": False,
-                "outcome": "ledger_finalize_failed",
-                "message": (
-                    f"{step.get('type')}: durable action finalization failed: {exc}"
-                ),
-                "action_performed": bool(result.get("action_performed", False)),
-            }
+        # Finalization runs after the tap by definition, so the action is already
+        # on the phone. Failing the step made the campaign retry and repeat it.
+        # The claim (if any) is left open and reconciliation will close it.
+        _record_ledger_error(
+            sc,
+            result,
+            context=f"{step.get('type')}_finalize",
+            exc=exc,
         )
         _save_result(sc, step, result)

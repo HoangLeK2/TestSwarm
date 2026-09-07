@@ -147,6 +147,15 @@ function WorkflowSection({
                     total_steps: eventStream.progress.total_steps ?? 0,
                     current_step_type:
                       eventStream.progress.current_step_type ?? '',
+                    current_step_id:
+                      eventStream.progress.current_step_id ?? null,
+                    current_step_path:
+                      eventStream.progress.current_step_path ?? null,
+                    current_loop_iter:
+                      eventStream.progress.current_loop_iter ??
+                      eventStream.progress.loop_iteration ??
+                      null,
+                    reason_code: eventStream.progress.reason_code ?? null,
                     message: eventStream.progress.message ?? '',
                     loop_iteration: eventStream.progress.loop_iteration ?? null
                   }

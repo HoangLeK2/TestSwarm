@@ -5,12 +5,17 @@ import asyncio
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.crud.execution import get_execution, list_execution_devices
+from db.crud.execution import (
+    get_execution,
+    list_execution_devices,
+    upsert_execution_result,
+)
 from db.models.campaign import Campaign
 from db.models.device import Device
 from db.models.enums import ExecutionStatus
@@ -25,6 +30,13 @@ from services.campaign.scenario_sources import (
     build_campaign_scenario_registry,
     resolve_campaign_scenario_refs,
 )
+from services.execution.event_publisher import enqueue_execution_event
+from services.execution.event_types import EXECUTION_FAILED
+from services.execution.reason_codes import NODE_CAPABILITY_PREFLIGHT_FAILED
+from services.temporal_orchestrator import (
+    TemporalExecutionOrchestrator,
+    workflow_id_for_execution as _temporal_workflow_id_for_execution,
+)
 from common.variable_resolver import normalize_device_vars
 from temporal.shared import ScenarioInput, TASK_QUEUE_NAME
 
@@ -34,11 +46,13 @@ DISPATCH_SOURCE_TEMPORAL = "temporal"
 DISPATCH_SOURCE_FALLBACK = "fallback"
 DEFAULT_RUNTIME_START_CONCURRENCY = 100
 DEFAULT_READINESS_PROBE_CONCURRENCY = 8
+_TEMPORAL_WORKFLOW_RUN: Any | None = None
+_TEMPORAL_WORKFLOW_ID_REUSE_POLICY: Any | None = None
 
 
 def workflow_id_for_execution(execution_id: str) -> str:
     """Deterministic Temporal workflow id (DF-T-04-010)."""
-    return f"exec_{execution_id}"
+    return _temporal_workflow_id_for_execution(execution_id)
 
 
 def _scenario_refs_with_recovery_refs(
@@ -387,23 +401,35 @@ async def _try_start_temporal(
     temporal_config: Any,
     scenario_input: ScenarioInput,
     execution_id: str,
+    *,
+    workflow_run: Any | None = None,
+    id_reuse_policy: Any | None = None,
 ) -> str | None:
-    from temporal.workflows import ScenarioWorkflow
-    from temporalio.common import WorkflowIDReusePolicy
+    if workflow_run is None or id_reuse_policy is None:
+        workflow_run, id_reuse_policy = _temporal_workflow_start_symbols()
 
-    wf_id = workflow_id_for_execution(execution_id)
     task_queue = TASK_QUEUE_NAME
     if temporal_config is not None:
         task_queue = getattr(temporal_config, "task_queue", None) or task_queue
 
-    await temporal_client.start_workflow(
-        ScenarioWorkflow.run,
-        scenario_input,
-        id=wf_id,
+    return await TemporalExecutionOrchestrator(temporal_client).start_scenario_workflow(
+        workflow_run=workflow_run,
+        scenario_input=scenario_input,
+        execution_id=execution_id,
         task_queue=task_queue,
-        id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+        id_reuse_policy=id_reuse_policy,
     )
-    return wf_id
+
+
+def _temporal_workflow_start_symbols() -> tuple[Any, Any]:
+    global _TEMPORAL_WORKFLOW_RUN, _TEMPORAL_WORKFLOW_ID_REUSE_POLICY
+    if _TEMPORAL_WORKFLOW_RUN is None or _TEMPORAL_WORKFLOW_ID_REUSE_POLICY is None:
+        from temporal.workflows import ScenarioWorkflow
+        from temporalio.common import WorkflowIDReusePolicy
+
+        _TEMPORAL_WORKFLOW_RUN = ScenarioWorkflow.run
+        _TEMPORAL_WORKFLOW_ID_REUSE_POLICY = WorkflowIDReusePolicy.ALLOW_DUPLICATE
+    return _TEMPORAL_WORKFLOW_RUN, _TEMPORAL_WORKFLOW_ID_REUSE_POLICY
 
 
 async def _mark_runtime_meta(
@@ -701,7 +727,17 @@ async def start_execution_runtime(
 
     execution_ids = [view.execution_id for view in running_views]
     executions_by_id = await _load_runtime_executions_by_id(db, execution_ids)
-    linked_serials = await _load_runtime_device_serials_by_execution(db, execution_ids)
+    needs_linked_serials = any(
+        not str(
+            (getattr(execution, "device_config", None) or {}).get("device_serial") or ""
+        ).strip()
+        for execution in executions_by_id.values()
+    )
+    linked_serials = (
+        await _load_runtime_device_serials_by_execution(db, execution_ids)
+        if needs_linked_serials
+        else {}
+    )
     recovery_policy = dict(getattr(campaign, "recovery_policy", None) or {})
     registry_refs = _scenario_refs_with_recovery_refs(scenario_refs, recovery_policy)
     # fan_out built its registry from scenario_refs alone. Only reuse it when the
@@ -806,7 +842,6 @@ async def start_execution_runtime(
         if account_id and mode != VerificationMode.OFF:
             if verification is None:
                 from services.account_verification import AccountVerificationResult
-                from datetime import datetime, timezone
                 import uuid
                 verification = AccountVerificationResult(
                     None, VerificationStatus.INCONCLUSIVE, "assignment_not_found",
@@ -917,6 +952,70 @@ async def start_execution_runtime(
             stats["failed"] += 1
             continue
 
+        runtime_device = manager.get_device(device_serial) if manager else None
+        if runtime_device is not None:
+            from services.scenario_node_preflight import (
+                preflight_scenario_registry_node_capabilities,
+                scenario_node_preflight_failure_reason,
+            )
+
+            preflight = preflight_scenario_registry_node_capabilities(
+                runtime_device,
+                registry_refs,
+                scenario_registry,
+            )
+            if not preflight.ok:
+                reason = scenario_node_preflight_failure_reason(preflight)
+                now = datetime.now(timezone.utc)
+                execution.device_config = {
+                    **(execution.device_config or {}),
+                    "failure_reason": reason,
+                }
+                execution.meta = {
+                    **(execution.meta or {}),
+                    "node_capability_preflight": preflight.to_dict(),
+                }
+                evidence = {
+                    "reason_code": NODE_CAPABILITY_PREFLIGHT_FAILED,
+                    "operator_summary": reason,
+                    "device_id": view.device_id,
+                    "device_serial": device_serial,
+                    "node_capability_preflight": preflight.to_dict(),
+                }
+                await enqueue_execution_event(
+                    db,
+                    event_type=EXECUTION_FAILED,
+                    execution_id=execution.id,
+                    organization_id=org_id,
+                    campaign_id=campaign.id,
+                    payload={
+                        "reason_code": NODE_CAPABILITY_PREFLIGHT_FAILED,
+                        "message": reason,
+                        "device_id": view.device_id,
+                        "device_serial": device_serial,
+                        "node_capability_preflight": preflight.to_dict(),
+                        "evidence": evidence,
+                    },
+                )
+                await upsert_execution_result(
+                    db,
+                    execution_id=execution.id,
+                    device_id=view.device_id,
+                    status="failed",
+                    error_detail=reason,
+                    finished_at=now,
+                )
+                await finish_fan_out_execution(
+                    db,
+                    execution,
+                    org_id=org_id,
+                    actor_user_id=actor_user_id,
+                    status=ExecutionStatus.FAILED.value,
+                    device_id=view.device_id,
+                )
+                stats["failed"] += 1
+                continue
+
         prepared.append((view, execution, scenario_input))
         device_index += 1
 
@@ -931,26 +1030,47 @@ async def start_execution_runtime(
 
     async def _start_temporal_item(
         item: tuple[FanOutExecutionView, Execution, ScenarioInput],
-        sem: asyncio.Semaphore,
+        workflow_run: Any,
+        id_reuse_policy: Any,
     ) -> tuple[FanOutExecutionView, Execution, ScenarioInput, str | None, Exception | None]:
         view, execution, scenario_input = item
+        try:
+            wf_id = await _try_start_temporal(
+                temporal_client,
+                temporal_config,
+                scenario_input,
+                execution.id,
+                workflow_run=workflow_run,
+                id_reuse_policy=id_reuse_policy,
+            )
+        except Exception as exc:
+            return view, execution, scenario_input, None, exc
+        return view, execution, scenario_input, wf_id, None
+
+    async def _start_temporal_bounded_item(
+        item: tuple[FanOutExecutionView, Execution, ScenarioInput],
+        sem: asyncio.Semaphore,
+        workflow_run: Any,
+        id_reuse_policy: Any,
+    ) -> tuple[FanOutExecutionView, Execution, ScenarioInput, str | None, Exception | None]:
         async with sem:
-            try:
-                wf_id = await _try_start_temporal(
-                    temporal_client,
-                    temporal_config,
-                    scenario_input,
-                    execution.id,
-                )
-            except Exception as exc:
-                return view, execution, scenario_input, None, exc
-            return view, execution, scenario_input, wf_id, None
+            return await _start_temporal_item(item, workflow_run, id_reuse_policy)
 
     if use_temporal:
-        sem = asyncio.Semaphore(_runtime_start_concurrency_limit())
-        temporal_results = await asyncio.gather(
-            *(_start_temporal_item(item, sem) for item in prepared)
-        )
+        limit = _runtime_start_concurrency_limit()
+        workflow_run, id_reuse_policy = _temporal_workflow_start_symbols()
+        if len(prepared) <= limit:
+            temporal_results = await asyncio.gather(
+                *(_start_temporal_item(item, workflow_run, id_reuse_policy) for item in prepared)
+            )
+        else:
+            sem = asyncio.Semaphore(limit)
+            temporal_results = await asyncio.gather(
+                *(
+                    _start_temporal_bounded_item(item, sem, workflow_run, id_reuse_policy)
+                    for item in prepared
+                )
+            )
     else:
         temporal_results = [
             (view, execution, scenario_input, None, None)

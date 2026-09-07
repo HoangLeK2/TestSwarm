@@ -167,11 +167,6 @@ async def list_scenarios(
     return [_summary_out(v) for v in views]
 
 
-@router.get(
-    "/templates",
-    response_model=list[OrgScenarioSummaryOut],
-    dependencies=[Depends(require_permission("scenarios", "read"))],
-)
 def _scenario_template_summary_out(t) -> OrgScenarioSummaryOut:
     from services.org_scenario_io.service import _template_kind, _template_tags
 
@@ -202,6 +197,11 @@ def _scenario_template_summary_out(t) -> OrgScenarioSummaryOut:
     )
 
 
+@router.get(
+    "/templates",
+    response_model=list[OrgScenarioSummaryOut],
+    dependencies=[Depends(require_permission("scenarios", "read"))],
+)
 async def list_scenario_templates(
     db: DB,
     user: CurrentUser,

@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.crud.account import get_accounts_by_ids, get_primary_accounts_for_devices
-from db.crud.account_group import get_group
+from db.crud.account_group import get_group, pick_next_batch
 from db.models.account import Account, DeviceAccount
 from services.social_ext.contract import SOCIAL_ACCOUNT_BOUND_STEP_TYPES
 from db.models.campaign import Campaign
@@ -257,7 +257,7 @@ async def resolve_accounts_for_devices(
     org_id: str,
     device_ids: list[str],
 ) -> dict[str, ResolvedDeviceAccount]:
-    """Resolve each device's active primary Facebook account."""
+    """Resolve the effective Facebook account for each campaign device."""
     if not device_ids:
         return {}
 
@@ -265,13 +265,80 @@ async def resolve_accounts_for_devices(
     requires_account = scenario_requires_account(
         await load_pinned_scenario_steps(db, campaign, org_id)
     )
+
+    per_device_accounts = {
+        str(device_id): str(account_id)
+        for device_id, account_id in (
+            getattr(campaign, "per_device_accounts", None) or {}
+        ).items()
+        if device_id and account_id
+    }
+    explicit_account_ids: list[str] = []
+    explicit_account_ids.extend(per_device_accounts.values())
+    scenario_account_id = getattr(campaign, "scenario_account_id", None)
+    if scenario_account_id:
+        explicit_account_ids.append(str(scenario_account_id))
+    explicit_accounts = (
+        await get_accounts_by_ids(db, explicit_account_ids, org_id=org_id)
+        if explicit_account_ids
+        else {}
+    )
+
+    out: dict[str, ResolvedDeviceAccount] = {}
+
+    for device_id in device_ids:
+        account_id = per_device_accounts.get(str(device_id))
+        if not account_id:
+            continue
+        out[device_id] = _resolve_account_row(
+            explicit_accounts.get(account_id),
+            org_id=org_id,
+            now=now,
+        )
+
+    remaining_device_ids = [
+        device_id for device_id in device_ids if device_id not in out
+    ]
+
+    account_group_id = getattr(campaign, "account_group_id", None)
+    if account_group_id and remaining_device_ids:
+        accounts = await pick_next_batch(
+            db, str(account_group_id), len(remaining_device_ids)
+        )
+        granted = len(accounts)
+        for index, device_id in enumerate(remaining_device_ids):
+            if index < granted:
+                out[device_id] = _resolve_account_row(
+                    accounts[index],
+                    org_id=org_id,
+                    now=now,
+                )
+            else:
+                out[device_id] = ResolvedDeviceAccount(
+                    account_id=None,
+                    account_vars={},
+                    unavailable=True,
+                    failure_reason="account_unavailable",
+                )
+        return out
+
+    if scenario_account_id and remaining_device_ids:
+        resolved = _resolve_account_row(
+            explicit_accounts.get(str(scenario_account_id)),
+            org_id=org_id,
+            now=now,
+        )
+        for device_id in remaining_device_ids:
+            out[device_id] = resolved
+        return out
+
     primary_accounts = await get_primary_accounts_for_devices(
         db,
-        device_ids,
+        remaining_device_ids,
         "facebook",
     )
     missing_primary_ids = [
-        device_id for device_id in device_ids if device_id not in primary_accounts
+        device_id for device_id in remaining_device_ids if device_id not in primary_accounts
     ]
     if missing_primary_ids:
         rows = (
@@ -294,8 +361,7 @@ async def resolve_accounts_for_devices(
             if len(linked_accounts) == 1:
                 primary_accounts[device_id] = linked_accounts[0]
 
-    out: dict[str, ResolvedDeviceAccount] = {}
-    for device_id in device_ids:
+    for device_id in remaining_device_ids:
         account = primary_accounts.get(device_id)
         if account is None and not requires_account:
             out[device_id] = ResolvedDeviceAccount(account_id=None, account_vars={})

@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from tasks.scenario.context import ScenarioContext
 
 from services.execution.capture_policy import default_capture_enabled_for_step
+from services.execution.reason_codes import CAPTURE_REQUIRED_FAILED
 
 log = logging.getLogger(__name__)
 
@@ -274,6 +275,11 @@ def _artifact_ref(
         ref["screenshot_artifact_id"] = payload["screenshot_artifact_id"]
     if payload.get("hierarchy_artifact_id"):
         ref["hierarchy_artifact_id"] = payload["hierarchy_artifact_id"]
+    # Object keys outlive the presigned URLs above; the read path re-signs them.
+    if payload.get("screenshot_object_key"):
+        ref["screenshot_object_key"] = payload["screenshot_object_key"]
+    if payload.get("hierarchy_object_key"):
+        ref["hierarchy_object_key"] = payload["hierarchy_object_key"]
     return ref
 
 
@@ -373,7 +379,9 @@ def _record_capture_result(
         execution_id=sc.execution_id,
         step_id=step_id,
         step_type=step_type,
-        step_index=step_idx,
+        # The payload knows the step's real position; step_idx is scenario-local
+        # and is always 0 on the Temporal path.
+        step_index=payload.get("step_index", step_idx),
         attempt_index=attempt_index,
         payload=payload,
         content_hash=jpeg_hash,
@@ -399,10 +407,20 @@ def _handle_capture_failure(
     capture_failure_total.labels(phase=phase).inc()
     msg = str(exc) if exc else "empty capture"
     log.warning("[%s] capture %s failed: %s", sc.serial, phase, msg)
+    # Recorded on the step regardless of require_capture. Without this a lost
+    # screenshot and a step that never captured one look identical to whoever
+    # opens the run later — the only signal was a WARNING line in worker logs.
+    # Keyed by phase so a pre failure cannot mask the fail-phase one, which is
+    # the capture an operator actually came looking for.
+    errors = step_result.get("capture_error")
+    if not isinstance(errors, dict):
+        errors = {}
+        step_result["capture_error"] = errors
+    errors[phase] = msg
     cfg = StepCaptureConfig.from_step(step)
     if cfg.require_capture:
         step_result["ok"] = False
-        step_result["reason_code"] = "capture_required_failed"
+        step_result["reason_code"] = CAPTURE_REQUIRED_FAILED
         step_result["message"] = f"capture_required_failed ({phase}): {msg}"
 
 

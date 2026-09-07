@@ -12,12 +12,14 @@ from db.crud.execution_dlq import (
     list_dlq_entries_for_user,
 )
 from db.database import Base
+from db.models.campaign import Campaign
 from db.models.device import Device
 from db.models.execution import Execution
 from services.dlq_maintenance import (
     dismiss_stale_offline_dlq_all_users,
     dismiss_stale_offline_dlq_entries_for_user,
 )
+from tenancy.context import tenant_context
 
 
 @pytest_asyncio.fixture
@@ -31,12 +33,32 @@ async def session():
     await eng.dispose()
 
 
-async def _seed_execution(s: AsyncSession, exec_id: str, campaign_id: str, user_id: str = "u1"):
+async def _seed_execution(
+    s: AsyncSession,
+    exec_id: str,
+    campaign_id: str,
+    user_id: str = "u1",
+    org_id: str = "org-1",
+):
+    with tenant_context(org_id):
+        if await s.get(Campaign, campaign_id) is None:
+            s.add(
+                Campaign(
+                    id=campaign_id,
+                    name=f"Campaign {campaign_id}",
+                    name_lower=f"campaign {campaign_id}".lower(),
+                    user_id=user_id,
+                    org_id=org_id,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
     s.add(
         Execution(
             id=exec_id,
             run_type="campaign_run",
             status="failed",
+            org_id=org_id,
             campaign_id=campaign_id,
             user_id=user_id,
             created_at=datetime.now(timezone.utc),
@@ -175,7 +197,7 @@ async def test_stale_offline_dlq_auto_dismiss_runs_for_all_users_with_pending(se
         ]
     )
     await _seed_execution(session, "exec-u1", "camp-1", user_id="u1")
-    await _seed_execution(session, "exec-u2", "camp-2", user_id="u2")
+    await _seed_execution(session, "exec-u2", "camp-2", user_id="u2", org_id="org-2")
     await create_dlq_entry(
         session,
         execution_id="exec-u1",

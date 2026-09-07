@@ -327,6 +327,118 @@ async def test_start_runtime_uses_temporal_when_available(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_start_runtime_fails_before_temporal_when_device_lacks_node_capability():
+    execution = SimpleNamespace(
+        id="exec-node-capability",
+        account_id=None,
+        checkpoint_step=0,
+        device_config={"device_serial": "SN-NO-OCR"},
+        meta={},
+    )
+    fan_out = FanOutResult(
+        dispatch_id="d-node-capability",
+        campaign_id="camp-node-capability",
+        dispatch_strategy="parallel",
+        executions=[
+            FanOutExecutionView(
+                execution_id=execution.id,
+                device_id="dev-node-capability",
+                status="running",
+                effective_vars={},
+            )
+        ],
+        scenario_refs=[{"scenario_id": "sc-ocr"}],
+        scenario_registry={
+            "by_id": {
+                "sc-ocr": {
+                    "steps": [{"type": "extract_text_ocr", "save_as": "text"}],
+                }
+            }
+        },
+    )
+    campaign = SimpleNamespace(
+        id="camp-node-capability",
+        org_id="org-runtime",
+        user_id="user-owner",
+        created_by="user-owner",
+        variables={},
+        recovery_policy={},
+    )
+    temporal_client = SimpleNamespace(start_workflow=AsyncMock())
+
+    class _NoOcrDevice:
+        serial = "SN-NO-OCR"
+
+        def ocr_supported(self) -> bool:
+            return False
+
+        def image_match_supported(self) -> bool:
+            return True
+
+    manager = SimpleNamespace(get_device=MagicMock(return_value=_NoOcrDevice()))
+    finish_mock = AsyncMock()
+    result_mock = AsyncMock()
+    event_mock = AsyncMock()
+
+    with patch(
+        "services.campaign.execution_runtime._load_runtime_executions_by_id",
+        new=AsyncMock(return_value={execution.id: execution}),
+    ), patch(
+        "services.campaign.execution_runtime._load_runtime_device_serials_by_execution",
+        new=AsyncMock(return_value={}),
+    ), patch(
+        "db.crud.scenario_device_variable.get_campaign_org_scenario_device_variables_bulk",
+        new=AsyncMock(return_value={}),
+    ), patch(
+        "services.campaign.execution_runtime.finish_fan_out_execution",
+        new=finish_mock,
+    ), patch(
+        "services.campaign.execution_runtime.upsert_execution_result",
+        new=result_mock,
+    ), patch(
+        "services.campaign.execution_runtime.enqueue_execution_event",
+        new=event_mock,
+    ):
+        stats = await start_execution_runtime(
+            SimpleNamespace(in_transaction=lambda: False),
+            fan_out=fan_out,
+            campaign=campaign,
+            org_id=campaign.org_id,
+            actor_user_id="user-owner",
+            temporal_client=temporal_client,
+            temporal_config=SimpleNamespace(enabled=True, task_queue="device-scenario"),
+            manager=manager,
+        )
+
+    assert stats["failed"] == 1
+    assert stats["temporal"] == 0
+    temporal_client.start_workflow.assert_not_awaited()
+    manager.get_device.assert_called_once_with("SN-NO-OCR")
+    result_mock.assert_awaited_once()
+    assert result_mock.await_args.kwargs["status"] == "failed"
+    assert (
+        "missing has_ocr, has_tesseract"
+        in result_mock.await_args.kwargs["error_detail"]
+    )
+    finish_mock.assert_awaited_once()
+    assert execution.meta["node_capability_preflight"]["ok"] is False
+    assert (
+        execution.device_config["failure_reason"]
+        == result_mock.await_args.kwargs["error_detail"]
+    )
+    event_mock.assert_awaited_once()
+    assert event_mock.await_args.kwargs["event_type"] == "execution.failed"
+    assert (
+        event_mock.await_args.kwargs["payload"]["reason_code"]
+        == "node_capability_preflight_failed"
+    )
+    assert (
+        event_mock.await_args.kwargs["payload"]["evidence"]["device_serial"]
+        == "SN-NO-OCR"
+    )
+
+
+@pytest.mark.asyncio
 async def test_http_runtime_mode_releases_db_transaction_before_temporal_rpc(session_factory):
     await _seed_orgs(session_factory)
     campaign_id, execution_id = await _seed_campaign_execution(session_factory)

@@ -4,6 +4,7 @@ from typing import Any
 
 from services.social_ext.contract import (
     ExtractionStrategySchema,
+    PlatformCapabilitySupport,
     PlatformContentType,
     PlatformContentTypeSchema,
     PlatformExtension,
@@ -54,6 +55,79 @@ FACEBOOK_STEP_TYPES = [
 
 FACEBOOK_ENTITIES = ["posts", "comments", "groups", "pages"]
 
+FACEBOOK_CAPABILITIES = {
+    "platform.session.check": PlatformCapabilitySupport(
+        facets={
+            "session_surface": "facebook_app",
+            "login_state_markers": "facebook_readiness",
+        },
+    ),
+    "social.target.lease": PlatformCapabilitySupport(
+        execution_mode="generic_recipe",
+        generic_recipes=["database_lease"],
+        facets={"connection_kind": "friend_request"},
+    ),
+    "social.target.select": PlatformCapabilitySupport(
+        facets={
+            "target_type": "person_or_post",
+            "locator_strategy": "facebook_hierarchy",
+            "profile_surface": "facebook_profile",
+            "post_surface": "facebook_post_detail",
+        },
+    ),
+    "social.visible_people.connect": PlatformCapabilitySupport(
+        facets={
+            "connection_kind": "friend_request",
+            "common_context_markers": "mutual_friends_or_group",
+        },
+    ),
+    "social.comments.open": PlatformCapabilitySupport(
+        facets={
+            "comment_surface": "overlay",
+            "comment_filter_modes": ["most_relevant", "newest", "all_comments"],
+            "locator_strategy": "facebook_comment_button",
+        },
+        provider_fields=[
+            {
+                "name": "comment_filter",
+                "type": "select",
+                "label": "Comment ordering",
+                "group": "provider",
+                "advanced": True,
+                "options": ["most_relevant", "newest", "all_comments"],
+            }
+        ],
+    ),
+    "social.content.scan": PlatformCapabilitySupport(
+        facets={
+            "content_surface": "feed_or_group",
+            "comment_surface": "overlay",
+            "profile_surface": "facebook_profile",
+        },
+    ),
+    "social.content.interact": PlatformCapabilitySupport(
+        facets={
+            "content_actions": ["like", "comment", "share"],
+            "comment_surface": "overlay",
+        },
+    ),
+    "social.connection.request": PlatformCapabilitySupport(
+        facets={
+            "connection_kind": "friend_request",
+            "profile_surface": "facebook_profile",
+        },
+    ),
+    "social.community.membership": PlatformCapabilitySupport(
+        facets={
+            "community_surface": "group",
+            "membership_state": "member_or_pending",
+        },
+    ),
+    "social.connections.sync": PlatformCapabilitySupport(
+        facets={"connection_kind": "friend_request", "metric": "friends"},
+    ),
+}
+
 
 def build_facebook_extension() -> PlatformExtension:
     strategies = {
@@ -80,6 +154,7 @@ def build_facebook_extension() -> PlatformExtension:
             step_types=FACEBOOK_STEP_TYPES,
             entities=FACEBOOK_ENTITIES,
             strategies=strategies,
+            capabilities=FACEBOOK_CAPABILITIES,
         ),
         content_schema=PlatformContentTypeSchema(
             platform="facebook",

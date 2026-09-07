@@ -1486,8 +1486,15 @@ class U2JsonRpcClient:
         except Exception:
             return ""
 
-    def page_source(self, timeout: Optional[float] = None,
-                    compressed: bool = False) -> str:
+    def page_source(
+        self,
+        timeout: Optional[float] = None,
+        compressed: bool = False,
+        *,
+        max_depth: Optional[int] = None,
+        root_in_active: bool = False,
+        pretty: bool = False,
+    ) -> str:
         """
         Dump UI hierarchy XML via JSON-RPC dumpWindowHierarchy(compressed, 50).
 
@@ -1501,7 +1508,13 @@ class U2JsonRpcClient:
         t = timeout if timeout is not None else 60.0
         for attempt in range(3):
             try:
-                xml = self._dump_window_hierarchy_rpc(compressed=compressed, timeout=t)
+                xml = self._dump_window_hierarchy_rpc(
+                    compressed=compressed,
+                    timeout=t,
+                    max_depth=max_depth,
+                    root_in_active=root_in_active,
+                    pretty=pretty,
+                )
                 if xml:
                     try:
                         root = parse_xml(xml)
@@ -1531,14 +1544,28 @@ class U2JsonRpcClient:
                 time.sleep(0.3)
         return ""
 
-    def _dump_window_hierarchy_rpc(self, *, compressed: bool, timeout: float) -> str:
-        if compressed and self._dump_hierarchy2_supported is not False:
+    def _dump_window_hierarchy_rpc(
+        self,
+        *,
+        compressed: bool,
+        timeout: float,
+        max_depth: Optional[int] = None,
+        root_in_active: bool = False,
+        pretty: bool = False,
+    ) -> str:
+        depth = 50 if max_depth is None else max(1, min(int(max_depth), 100))
+        needs_options_rpc = compressed or root_in_active or pretty or max_depth is not None
+        if root_in_active and self._dump_hierarchy2_supported is False:
+            return ""
+        if needs_options_rpc and self._dump_hierarchy2_supported is not False:
             try:
                 xml = str(self._rpc(
                     "dumpWindowHierarchy2",
                     {
-                        "compressed": True,
-                        "maxDepth": 50,
+                        "compressed": bool(compressed),
+                        "maxDepth": depth,
+                        "rootInActiveWindow": bool(root_in_active),
+                        "pretty": bool(pretty),
                         "waitForIdleMs": 0,
                         "allWindows": True,
                         "trimEmptyAttributes": True,
@@ -1559,7 +1586,9 @@ class U2JsonRpcClient:
                 if "dumpWindowHierarchy2" in msg:
                     self._dump_hierarchy2_supported = False
                 logger.debug("dumpWindowHierarchy2 unavailable, falling back: %s", exc)
-        return str(self._rpc("dumpWindowHierarchy", compressed, 50, _timeout=timeout) or "")
+                if root_in_active:
+                    return ""
+        return str(self._rpc("dumpWindowHierarchy", compressed, depth, _timeout=timeout) or "")
 
     # ── App / Session API ─────────────────────────────────────────────────────
 

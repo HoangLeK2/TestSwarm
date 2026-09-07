@@ -12,6 +12,7 @@ SCENARIO_STEP_TYPES = [
     "push_file",
     "pull_file",
     "open_url",
+    "install_apk",
     "wait",
     "tap_position",
     "tap_ratio",
@@ -110,6 +111,14 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         "optional": ["package"],
         "description": "Mở URL. package (optional): e.g. com.android.chrome để ép mở bằng app đó.",
     },
+    "install_apk": {
+        "required": ["url"],
+        "optional": ["timeout"],
+        "description": (
+            "Install APK on the device. url accepts http(s), absolute local path, "
+            "or ${VARIABLE}. timeout defaults to 90s."
+        ),
+    },
     "wait": {
         "required": [],
         "optional": ["seconds"],
@@ -188,11 +197,12 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         "optional": [
             "platform", "action", "timeout", "poll", "verify_timeout",
             "settle_seconds", "save_as", "require_verified_target",
+            "comment_text",
             "require_completion", "completion_steps", "completion_verify",
             "candidate_entity_id", "require_candidate_status",
             "account_action_id",
         ],
-        "description": "Interact with content on the current screen through a platform adapter. Facebook actions: like, comment, share.",
+        "description": "Interact with content on the current screen through a platform adapter. Supported actions come from the provider capability registry.",
     },
     "connection_request": {
         "required": [],
@@ -423,11 +433,20 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         ),
     },
     "verify_screen": {
-        "required": ["screenshot"],
-        "optional": ["ssim_threshold", "timeout", "poll"],
+        "required_any": [["template_key", "screenshot"]],
+        "optional": [
+            "template_key",
+            "screenshot",
+            "template_screen_w",
+            "template_screen_h",
+            "ssim_threshold",
+            "timeout",
+            "poll",
+        ],
         "description": (
             "Visual Anchoring: so sánh SSIM giữa ảnh chụp lúc record và màn hình hiện tại. "
-            "screenshot: base64 JPEG từ lúc record. ssim_threshold (0-1, default 0.75). "
+            "template_key: object-storage key của ảnh mẫu đã cắt/upload; screenshot: legacy base64 JPEG. "
+            "ssim_threshold (0-1, default 0.75). "
             "timeout: chờ tối đa N giây cho màn hình khớp (default 8s). "
             "poll: tần suất kiểm tra (default 0.5s). Fail nếu SSIM dưới threshold."
         ),
@@ -788,6 +807,8 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
 
 
 def get_scenario_schema() -> Dict[str, Any]:
+    from common.node_capabilities import build_node_capability_registry
+
     return {
         "description": "Scenario JSON dùng bởi device_farm MCP và run_scenario_task. AI phải output đúng format này.",
         "scenario": {
@@ -796,6 +817,7 @@ def get_scenario_schema() -> Dict[str, Any]:
         },
         "step_types": SCENARIO_STEP_TYPES,
         "steps_schema": STEP_SCHEMA,
+        "node_capabilities": build_node_capability_registry(SCENARIO_STEP_TYPES, STEP_SCHEMA),
         "example_bad": {
             "instructions": "BAD: dùng wait cố định — fragile, không biết app đã load chưa",
             "steps": [
@@ -838,6 +860,16 @@ def validate_step(step: Dict[str, Any], index: int) -> List[str]:
     for key in required:
         if key not in step or step[key] is None or (isinstance(step[key], str) and not step[key].strip()):
             errors.append(f"step[{index}]: type={t} missing required field {key!r}")
+    for group in schema.get("required_any", []):
+        if not any(
+            key in step
+            and step[key] is not None
+            and not (isinstance(step[key], str) and not step[key].strip())
+            for key in group
+        ):
+            errors.append(
+                f"step[{index}]: type={t} requires one of {tuple(group)!r}"
+            )
     if t == "open_url":
         url = step.get("url") or ""
         if isinstance(url, str) and url.strip():

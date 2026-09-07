@@ -48,6 +48,7 @@ def _ctx(device):
         device=device,
         ctx={},
         scenario={
+            "platform": "facebook",
             "_execution_id": "exec",
             "_campaign_id": "camp",
             "_campaign_vars": {"__USER_ID__": "user"},

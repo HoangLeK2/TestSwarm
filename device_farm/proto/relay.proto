@@ -96,7 +96,8 @@ message ServerControlMsg {
   }
 }
 
-message RegisterAck      { string message = 1; }
+// relay_id is the server-issued identity the agent must persist and use.
+message RegisterAck      { string message = 1; string relay_id = 2; }
 message BootstrapCmd     { string msg_id = 1; string serial = 2; int32 timeout = 3; }
 message RestartU2Cmd     { string msg_id = 1; string serial = 2; int32 timeout = 3; }
 message RestartAtxCmd    { string msg_id = 1; string serial = 2; int32 timeout = 3; }

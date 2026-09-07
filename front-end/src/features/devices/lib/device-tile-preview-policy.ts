@@ -63,6 +63,24 @@ export function selectDeviceTilePreviewMode({
   };
 }
 
+/** Two misses, not one: a single dropped poll is normal on a busy grid. */
+export const SNAPSHOT_FAILURES_BEFORE_STALE = 2;
+
+/**
+ * A frame already painted stops being evidence once its source stops moving.
+ * Keeping it on screen is how a dead phone reads as live to an operator.
+ */
+export function isPreviewFrameStale({
+  streamStatus,
+  consecutiveSnapshotFailures
+}: {
+  streamStatus?: string | null;
+  consecutiveSnapshotFailures: number;
+}): boolean {
+  if (streamStatus === 'stale') return true;
+  return consecutiveSnapshotFailures >= SNAPSHOT_FAILURES_BEFORE_STALE;
+}
+
 export function nextSnapshotRetryDelayMs({
   consecutiveFailureCount,
   refreshMs

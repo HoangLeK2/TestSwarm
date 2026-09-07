@@ -346,6 +346,17 @@ def _decision_from_outcome(
     return RecoveryDecision(handled=True, fail_message=message, events=events)
 
 
+def _step_deadline(policy: RecoveryPolicy) -> float | None:
+    """Wall-clock point past which no further playbook starts for this step."""
+    if policy.max_step_recovery_ms <= 0:
+        return None
+    return time.monotonic() + policy.max_step_recovery_ms / 1000.0
+
+
+def _out_of_time(deadline: float | None) -> bool:
+    return deadline is not None and time.monotonic() >= deadline
+
+
 def _try_recovery_playbooks(
     sc: Any,
     policy: RecoveryPolicy,
@@ -353,12 +364,19 @@ def _try_recovery_playbooks(
     idx: int,
     *,
     incident_key: str,
+    deadline: float | None = None,
 ) -> RecoveryDecision | None:
     attempted = False
     events: list[dict[str, Any]] = []
     for rule in policy.rules:
         if not rule.scenario_id and not rule.scenario_name:
             continue
+        if _out_of_time(deadline):
+            log.warning(
+                "[%s] recovery budget spent at step#%s — skipping remaining playbooks",
+                sc.serial, idx,
+            )
+            break
         if not _rule_scope_matches(rule, step, idx):
             continue
         if not _budget_available(sc, rule, idx, incident_key=incident_key):
@@ -569,6 +587,7 @@ def maybe_recover_step(
     if _cancel_requested(sc):
         return RecoveryDecision()
     incident_key = _incident_key(sc, idx, step_result)
+    deadline = _step_deadline(policy)
 
     playbook_decision = _try_recovery_playbooks(
         sc,
@@ -576,6 +595,7 @@ def maybe_recover_step(
         step,
         idx,
         incident_key=incident_key,
+        deadline=deadline,
     )
     if playbook_decision is not None:
         return playbook_decision

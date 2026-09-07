@@ -4,8 +4,16 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Play, Smartphone, CheckSquare, Square, Loader2 } from 'lucide-react';
+import {
+  Play,
+  Smartphone,
+  CheckSquare,
+  Square,
+  Loader2,
+  AlertCircle
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
   Dialog,
   DialogContent,
@@ -28,8 +36,20 @@ import {
   parseDeviceVarsJson
 } from '@/components/device-vars-json-panel';
 import { cn } from '@/lib/utils';
-import { campaignsApi } from '../services/api';
+import { campaignsApi, scenarioDeviceCapabilitiesApi } from '../services/api';
+import {
+  scenarioCapabilityIssueSummary,
+  scenarioCapabilityWarningSummary
+} from '../lib/scenario-capability-preflight';
+import {
+  scenarioLintPreflightForSteps,
+  scenarioLintSummary,
+  type ScenarioLintPreflightResult
+} from '../lib/scenario-lint-preflight';
+import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import type { CampaignDeviceOut, ScenarioOut } from '../types';
+import type { FlowStep } from './scenario-steps/types';
+import { useConfirm } from '@/providers/modal-provider';
 
 interface Props {
   open: boolean;
@@ -46,6 +66,13 @@ interface Props {
 const makePairKey = (scenarioId: string, deviceId: string) =>
   `${scenarioId}::${deviceId}`;
 
+type CampaignCapabilityPreflightState = {
+  ok: boolean;
+  checked: number;
+  issueSummary: string;
+  warningSummary: string;
+};
+
 export function RunCampaignDialog({
   open,
   campaignId,
@@ -59,6 +86,13 @@ export function RunCampaignDialog({
   const tList = useTranslations('campaignsFeature.list');
   const tVars = useTranslations('components.deviceVarsJson');
   const tModal = useTranslations('components.modal');
+  const tCapabilityPreflight = useTranslations(
+    'campaignsFeature.capabilityPreflight'
+  );
+  const tScenarioLintPreflight = useTranslations(
+    'campaignsFeature.scenarioLintPreflight'
+  );
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [activeDeviceId, setActiveDeviceId] = useState<string>('');
@@ -69,6 +103,9 @@ export function RunCampaignDialog({
   >({});
   const [dirtyKeys, setDirtyKeys] = useState<Record<string, true>>({});
   const [isSaving, setIsSaving] = useState(false);
+  const [isCapabilityChecking, setIsCapabilityChecking] = useState(false);
+  const [capabilityPreflight, setCapabilityPreflight] =
+    useState<CampaignCapabilityPreflightState | null>(null);
 
   const allSerials = useMemo(() => devices.map((d) => d.serial), [devices]);
   const deviceSignature = useMemo(
@@ -112,6 +149,7 @@ export function RunCampaignDialog({
     setDrafts({});
     setDeviceVarEnabled({});
     setDirtyKeys({});
+    setCapabilityPreflight(null);
   }, [
     allSerials,
     deviceSignature,
@@ -310,9 +348,179 @@ export function RunCampaignDialog({
     }
   };
 
+  const formatScenarioLintIssue = (
+    issue: ScenarioLintPreflightResult['issues'][number]
+  ) =>
+    tScenarioLintPreflight(`issues.${issue.kind}`, {
+      variable: issue.variable,
+      source: issue.source,
+      producerStepType: issue.producerStepType ?? '',
+      producerPathKey: issue.producerPathKey ?? ''
+    });
+
+  const scenarioLintInitialVariables = (scenario: ScenarioOut): string[] => {
+    const names = new Set<string>();
+    for (const key of Object.keys(effectiveCampaignVariables ?? {})) {
+      if (key.trim()) names.add(key);
+    }
+    for (const key of Object.keys(scenario.variables ?? {})) {
+      if (key.trim()) names.add(key);
+    }
+    return Array.from(names);
+  };
+
+  const runScenarioLintPreflight = async () => {
+    const scenariosToCheck = scenarios.filter((scenario) =>
+      Array.isArray(scenario.steps)
+    );
+    if (scenariosToCheck.length === 0) return true;
+
+    const checks = scenariosToCheck.map((scenario) => ({
+      scenario,
+      result: scenarioLintPreflightForSteps(
+        scenario.steps as FlowStep[],
+        scenarioLintInitialVariables(scenario)
+      )
+    }));
+    const failed = checks.filter((check) => check.result.hasCritical);
+    const warned = checks.filter(
+      (check) => check.result.warningIssues.length > 0
+    );
+    const totalCritical = failed.reduce(
+      (sum, check) => sum + check.result.criticalIssues.length,
+      0
+    );
+    const issueSummary = failed
+      .slice(0, 3)
+      .map(
+        ({ scenario, result }) =>
+          `${scenario.name}: ${scenarioLintSummary(result.criticalIssues, {
+            moreLabel: (count) =>
+              tScenarioLintPreflight('summaryMore', { count }),
+            formatIssue: formatScenarioLintIssue
+          })}`
+      )
+      .join('; ');
+    const warningSummary = warned
+      .slice(0, 3)
+      .map(
+        ({ scenario, result }) =>
+          `${scenario.name}: ${scenarioLintSummary(result.warningIssues, {
+            moreLabel: (count) =>
+              tScenarioLintPreflight('summaryMore', { count }),
+            formatIssue: formatScenarioLintIssue
+          })}`
+      )
+      .join('; ');
+
+    if (warningSummary) {
+      toast.warning(tScenarioLintPreflight('warningToast', { warningSummary }));
+    }
+    if (failed.length === 0) return true;
+
+    return confirm({
+      title: tScenarioLintPreflight('confirmTitle'),
+      description: tScenarioLintPreflight('confirmDescription', {
+        context: tScenarioLintPreflight('campaignRunContext'),
+        count: totalCritical,
+        summary: issueSummary
+      }),
+      confirmText: tScenarioLintPreflight('confirmRun'),
+      cancelText: tScenarioLintPreflight('cancelRun'),
+      confirmVariant: 'destructive',
+      zIndex: 10_000
+    });
+  };
+
+  const runCapabilityPreflight = async (serials: string[]) => {
+    const scenariosToCheck = scenarios.filter((scenario) =>
+      Array.isArray(scenario.steps)
+    );
+    if (scenariosToCheck.length === 0) return true;
+
+    setIsCapabilityChecking(true);
+    try {
+      const checks = await Promise.all(
+        serials.flatMap((serial) =>
+          scenariosToCheck.map(async (scenario) => ({
+            serial,
+            scenario,
+            result: await scenarioDeviceCapabilitiesApi.preflight(serial, {
+              steps: scenario.steps
+            })
+          }))
+        )
+      );
+      const failed = checks.filter((check) => !check.result.preflight.ok);
+      const warned = checks.filter(
+        (check) => check.result.preflight.warnings.length > 0
+      );
+      const issueSummary = failed
+        .slice(0, 3)
+        .map(
+          ({ serial, scenario, result }) =>
+            `${serial}/${scenario.name}: ${
+              scenarioCapabilityIssueSummary(result.preflight, {
+                moreLabel: (count) =>
+                  tCapabilityPreflight('summaryMore', { count })
+              }) || tCapabilityPreflight('missingCapability')
+            }`
+        )
+        .join('; ');
+      const warningSummary = warned
+        .slice(0, 3)
+        .map(
+          ({ serial, scenario, result }) =>
+            `${serial}/${scenario.name}: ${
+              scenarioCapabilityWarningSummary(result.preflight, {
+                moreLabel: (count) =>
+                  tCapabilityPreflight('summaryMore', { count })
+              }) || tCapabilityPreflight('unknownCapability')
+            }`
+        )
+        .join('; ');
+      setCapabilityPreflight({
+        ok: failed.length === 0,
+        checked: checks.length,
+        issueSummary,
+        warningSummary
+      });
+      if (failed.length > 0) {
+        toast.error(
+          issueSummary
+            ? tCapabilityPreflight('campaignBlockedToast', {
+                summary: issueSummary
+              })
+            : tCapabilityPreflight('campaignBlockedToastFallback')
+        );
+        return false;
+      }
+      if (warningSummary) {
+        toast.warning(
+          tCapabilityPreflight('campaignWarningToast', {
+            summary: warningSummary
+          })
+        );
+      }
+      return true;
+    } catch (error) {
+      toast.error(
+        formatFarmApiError(
+          error,
+          tCapabilityPreflight('campaignFailedFallback')
+        )
+      );
+      return false;
+    } finally {
+      setIsCapabilityChecking(false);
+    }
+  };
+
   const handleRun = async () => {
     if (!(await saveDirtyDrafts())) return;
+    if (!(await runScenarioLintPreflight())) return;
     const serials = allSerials.filter((s) => selected.has(s));
+    if (!(await runCapabilityPreflight(serials))) return;
     // If all selected, pass undefined so backend uses all assigned devices
     onConfirm(serials.length === allSerials.length ? undefined : serials);
   };
@@ -372,6 +580,40 @@ export function RunCampaignDialog({
           </p>
         ) : (
           <div className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-5'>
+            {isCapabilityChecking || capabilityPreflight ? (
+              <Alert
+                variant={
+                  capabilityPreflight && !capabilityPreflight.ok
+                    ? 'destructive'
+                    : 'default'
+                }
+                className='mt-3 rounded-md py-2 text-xs'
+              >
+                {isCapabilityChecking ? (
+                  <Loader2 className='size-3.5 animate-spin' />
+                ) : (
+                  <AlertCircle className='size-3.5' />
+                )}
+                <AlertTitle className='text-xs'>
+                  {isCapabilityChecking
+                    ? tCapabilityPreflight('checkingTitle')
+                    : capabilityPreflight?.ok
+                      ? tCapabilityPreflight('campaignOkTitle')
+                      : tCapabilityPreflight('campaignBlockedTitle')}
+                </AlertTitle>
+                <AlertDescription className='text-xs'>
+                  {capabilityPreflight?.ok
+                    ? capabilityPreflight.warningSummary ||
+                      tCapabilityPreflight('campaignReadyDescription', {
+                        count: capabilityPreflight.checked
+                      })
+                    : capabilityPreflight
+                      ? capabilityPreflight.issueSummary ||
+                        tCapabilityPreflight('campaignMissingDescription')
+                      : tCapabilityPreflight('checkingCampaignDescription')}
+                </AlertDescription>
+              </Alert>
+            ) : null}
             <div className='grid min-h-0 min-w-0 flex-1 grid-cols-1 divide-y divide-border pb-2 pt-4 md:grid-cols-[minmax(200px,280px)_minmax(0,1fr)] md:divide-x md:divide-y-0'>
               <div className='min-h-0 max-md:max-h-[40vh] max-md:overflow-y-auto md:py-4 md:pr-4'>
                 <button
@@ -477,11 +719,15 @@ export function RunCampaignDialog({
             size='sm'
             className='h-7 gap-1.5 text-xs'
             disabled={
-              isRunning || isSaving || !someSelected || !!currentJsonError
+              isRunning ||
+              isSaving ||
+              isCapabilityChecking ||
+              !someSelected ||
+              !!currentJsonError
             }
             onClick={handleRun}
           >
-            {isSaving ? (
+            {isSaving || isCapabilityChecking ? (
               <Loader2 size={12} className='animate-spin' />
             ) : (
               <Play size={12} />

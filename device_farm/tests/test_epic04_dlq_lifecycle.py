@@ -29,6 +29,7 @@ from services.campaign.dlq_service import (
 )
 from services.campaign.execution_runtime import DISPATCH_SOURCE_TEMPORAL
 from tenancy.context import set_current_org_id, tenant_context
+from tests.tenancy_test_support import seed_casbin_policy_tables
 
 
 @pytest_asyncio.fixture
@@ -36,6 +37,7 @@ async def engine():
     eng = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await seed_casbin_policy_tables(conn)
     yield eng
     await eng.dispose()
 

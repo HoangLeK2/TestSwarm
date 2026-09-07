@@ -7,10 +7,28 @@ Legacy flat ``by``/``value`` on steps remain readable.
 """
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from runtime.u2_xpath import normalize_u2_xpath
+
+_WS_RUN = re.compile(r"\s+")
+
+
+def normalize_match_text(value: Any) -> str:
+    """Whitespace-only normalization for comparing on-device text.
+
+    NFC, then every Unicode space (``\\s`` covers U+00A0) collapses to a single
+    ASCII space, then strip. Case and Vietnamese diacritics are kept on
+    purpose: ``fb_labels.fold()`` also casefolds and strips accents, which is
+    far too wide for a selector (CLAUDE.md — one folded token once matched 107
+    wrong people).
+    """
+    if not value:
+        return ""
+    return _WS_RUN.sub(" ", unicodedata.normalize("NFC", str(value))).strip()
 
 # Mask bits aligned with u2_jsonrpc (android-uiautomator-server Selector protocol)
 _MASK_TEXT = 0x01

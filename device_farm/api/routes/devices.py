@@ -2,16 +2,18 @@
 from __future__ import annotations
 
 import logging
+import shlex
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 
-from api.deps import AdminUser, CurrentUser, DB, require_permission
+from api.deps import AdminUser, CurrentUser, DB, require_permission, require_permission_or_admin
 from api.org_scope import data_owner_user_id, device_visible_to_user
 from api.auth.rbac import build_enforcer_for_user_from_db, permission_domain
 from runtime.core import DeviceManager
@@ -38,6 +40,7 @@ from api.schemas.fleet_stats import (
     build_device_state_counts,
     build_session_owner_counts,
 )
+from api.schemas.relay_agent import RelayCommandOut
 from api.schemas.device_group import UpdateTagsBody
 from db import crud as repo
 from db.crud.device_capacity import query_capacity_report, CapacityFilters
@@ -59,7 +62,10 @@ from db.models.enums import McpSessionStatus
 from db.models.device import Device
 from db.models.device_fsm import DeviceFsmSnapshot
 from db.models.mcp_session import McpSession
+from core.env import device_farm_ws_public_base
 from services.fleet_stats import derive_session_owner_type
+from services import relay_onboarding
+from services.device_allocation import claim_allocated_device, release_allocated_device
 from services.device_state.exceptions import IllegalDeviceTransitionError
 from services.device_state.service import ApplyOutcome, DeviceStateService
 from services.agent_boot_presence import (
@@ -68,11 +74,18 @@ from services.agent_boot_presence import (
     device_requires_agent_boot,
 )
 from services import pairing as _pairing_mod
+from tenancy.context import tenant_context
 from web.metrics import fleet_stats_duration_seconds, fleet_stats_requests_total
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/devices", tags=["devices"])
+
+
+def _direct_query_default(value):
+    if value.__class__.__module__ == "fastapi.params" and getattr(value, "default", None) is None:
+        return None
+    return value
 
 
 _ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -143,6 +156,49 @@ class RegisterDeviceBody(BaseModel):
     description: str = ""  # ghi chú, lưu tạm vào name nếu backend chưa có cột riêng
 
 
+class ManagedAgentConnectBody(BaseModel):
+    wsBaseUrl: str | None = None
+
+
+def _client_meta(request: Request) -> tuple[str | None, str | None]:
+    ip = request.client.host if request.client else None
+    return ip, request.headers.get("user-agent")
+
+
+def _normalize_ws_base_url(raw: str) -> str | None:
+    s = (raw or "").strip()
+    if not s:
+        return None
+    if "/device-agent" in s:
+        s = s.split("/device-agent", 1)[0].rstrip("/")
+    lower = s.lower()
+    if lower.startswith("ws://"):
+        http_equiv = "http://" + s[5:]
+        ws_scheme = "ws"
+    elif lower.startswith("wss://"):
+        http_equiv = "https://" + s[6:]
+        ws_scheme = "wss"
+    else:
+        return None
+    parsed = urlparse(http_equiv)
+    if not parsed.hostname:
+        return None
+    return f"{ws_scheme}://{parsed.netloc or parsed.hostname}"
+
+
+def _ws_base_url_from_request(request: Request) -> str:
+    configured = device_farm_ws_public_base()
+    if configured:
+        return configured
+    scheme = "wss" if request.url.scheme == "https" else "ws"
+    host = request.headers.get("host", request.url.netloc)
+    return f"{scheme}://{host}"
+
+
+def _ws_base_for_managed_connect(request: Request, ws_base_url: str | None) -> str:
+    return _normalize_ws_base_url(ws_base_url or "") or _ws_base_url_from_request(request)
+
+
 class ConnectByIpBody(BaseModel):
     """Kết nối thiết bị qua ADB TCP: backend chủ động connect tới IP, không cần QR."""
     ip: str
@@ -198,6 +254,57 @@ async def register_device(body: RegisterDeviceBody, db: DB, user: CurrentUser):
     )
     await db.commit()
     return _to_out(device, state=DeviceFsmState.UNKNOWN.value)
+
+
+@router.get(
+    "/allocated",
+    response_model=list[DeviceOut],
+    dependencies=[Depends(require_permission("devices", "read"))],
+)
+async def list_allocated_devices(
+    db: DB,
+    user: CurrentUser,
+    q: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+):
+    """List pool phones allocated to this workspace but not claimed by a user yet."""
+    org_id = getattr(user, "org_id", None)
+    if not org_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Organization context required")
+
+    stmt = (
+        select(Device)
+        .where(Device.org_id == org_id)
+        .where(Device.user_id.is_(None))
+        .where(Device.managed_by_relay_id.isnot(None))
+        .order_by(Device.created_at.asc())
+        .limit(limit)
+    )
+    needle = (q or "").strip()
+    if needle:
+        pattern = f"%{needle}%"
+        stmt = stmt.where(
+            Device.serial.ilike(pattern)
+            | Device.device_serial.ilike(pattern)
+            | Device.adb_serial.ilike(pattern)
+            | Device.relay_serial.ilike(pattern)
+            | Device.name.ilike(pattern)
+            | Device.brand.ilike(pattern)
+            | Device.model.ilike(pattern)
+        )
+
+    rows = list((await db.execute(stmt)).scalars().all())
+    states_map = await get_device_states_map(db, [device.id for device in rows])
+    return [
+        _to_out(
+            device,
+            relay_id=getattr(device, "managed_by_relay_id", None),
+            state=states_map.get(device.id).state
+            if states_map.get(device.id)
+            else DeviceFsmState.UNKNOWN.value,
+        )
+        for device in rows
+    ]
 
 
 # ── Pairing (legacy / optional) ───────────────────────────────────────────────
@@ -288,6 +395,23 @@ async def list_devices(
     page: int | None = Query(default=None, ge=1),
     page_size: int | None = Query(default=None, ge=1, le=200),
 ):
+    cursor = _direct_query_default(cursor)
+    limit = _direct_query_default(limit)
+    state = _direct_query_default(state)
+    group_id = _direct_query_default(group_id)
+    owner_type = _direct_query_default(owner_type)
+    relay_host = _direct_query_default(relay_host)
+    tag = _direct_query_default(tag)
+    q = _direct_query_default(q)
+    sort = _direct_query_default(sort)
+    device_id = _direct_query_default(device_id)
+    device_serial = _direct_query_default(device_serial)
+    adb_serial = _direct_query_default(adb_serial)
+    relay_serial = _direct_query_default(relay_serial)
+    page = _direct_query_default(page)
+    page_size = _direct_query_default(page_size)
+    page_number = page
+
     org_id = getattr(user, "org_id", None)
     ctrl = _get_ctrl_servicer_optional()
     agent_boot_presence_cache: dict[str, AgentBootPresence] = {}
@@ -337,7 +461,7 @@ async def list_devices(
         if not org_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Organization context required")
         try:
-            page = await query_fleet_devices(
+            fleet_page = await query_fleet_devices(
                 db,
                 filters=FleetQueryFilters(
                     org_id=org_id,
@@ -355,7 +479,7 @@ async def list_devices(
                 limit=page_size or limit or 50,
                 cursor=cursor,
                 sort=sort or "-paired_at",
-                offset=(page - 1) * (page_size or limit or 50) if page is not None else None,
+                offset=(page_number - 1) * (page_size or limit or 50) if page_number is not None else None,
             )
         except FleetQueryValidationError as exc:
             raise HTTPException(
@@ -368,14 +492,14 @@ async def list_devices(
         log.info(
             "fleet_list org=%s total=%s limit=%s sort=%s state=%s group=%s q=%s",
             org_id,
-            page.total,
+            fleet_page.total,
             limit or 50,
             sort or "-paired_at",
             state,
             group_id,
             q,
         )
-        if page is not None:
+        if page_number is not None:
             devices_by_id = {
                 str(device.id): device
                 for device in await repo.list_devices(
@@ -399,7 +523,7 @@ async def list_devices(
                 return None
 
             result_items: list[DeviceOut] = []
-            for row in page.items:
+            for row in fleet_page.items:
                 device = devices_by_id.get(row.db_id)
                 if device is None:
                     continue
@@ -415,14 +539,14 @@ async def list_devices(
             size = page_size or limit or 50
             return DeviceListOut(
                 items=result_items,
-                total=page.total,
-                page=page,
+                total=fleet_page.total,
+                page=page_number,
                 page_size=size,
-                page_count=(page.total + size - 1) // size,
+                page_count=(fleet_page.total + size - 1) // size,
             )
 
         items: list[FleetDeviceItemOut] = []
-        for row in page.items:
+        for row in fleet_page.items:
             effective_state = row.state if state else _agent_boot_authoritative_state(row, row.state)
             items.append(
                 FleetDeviceItemOut(
@@ -445,8 +569,8 @@ async def list_devices(
             )
         return FleetDeviceListOut(
             items=items,
-            next_cursor=page.next_cursor,
-            total=page.total,
+            next_cursor=fleet_page.next_cursor,
+            total=fleet_page.total,
         )
 
     devices = await repo.list_devices(
@@ -830,6 +954,100 @@ async def create_device(body: DeviceCreate, db: DB, user: CurrentUser):
     return _to_out(device)
 
 
+@router.post(
+    "/{device_id}/claim",
+    response_model=DeviceOut,
+    dependencies=[Depends(require_permission("devices", "create"))],
+)
+async def claim_device(device_id: str, request: Request, db: DB, user: CurrentUser):
+    org_id = getattr(user, "org_id", None)
+    if not org_id:
+        raise HTTPException(status_code=400, detail={"code": "WORKSPACE_SCOPE_REQUIRED"})
+    device = await repo.get_device(db, device_id)
+    if not device or device.org_id != org_id:
+        raise HTTPException(status_code=404, detail={"code": "DEVICE_NOT_FOUND"})
+    ip, ua = _client_meta(request)
+    try:
+        await claim_allocated_device(
+            db,
+            device,
+            actor_user_id=user.id,
+            org_id=org_id,
+            ip_address=ip,
+            user_agent=ua,
+        )
+    except ValueError as exc:
+        code = str(exc)
+        status_code = 409 if code == "DEVICE_ALREADY_REGISTERED" else 400
+        raise HTTPException(status_code=status_code, detail={"code": code}) from exc
+    await db.commit()
+    state_row = await get_device_state(db, device.id)
+    return _to_out(
+        device,
+        relay_id=getattr(device, "managed_by_relay_id", None),
+        state=state_row.state if state_row else DeviceFsmState.UNKNOWN.value,
+    )
+
+
+@router.post(
+    "/{device_id}/connect-via-managed-agent",
+    response_model=RelayCommandOut,
+    dependencies=[Depends(require_permission("devices", "execute"))],
+)
+async def connect_via_managed_agent(
+    device_id: str,
+    body: ManagedAgentConnectBody,
+    request: Request,
+    db: DB,
+    user: CurrentUser,
+):
+    org_id = getattr(user, "org_id", None)
+    if not org_id:
+        raise HTTPException(status_code=400, detail={"code": "WORKSPACE_SCOPE_REQUIRED"})
+    device = await repo.get_device(db, device_id)
+    if not device or device.org_id != org_id:
+        raise HTTPException(status_code=404, detail={"code": "DEVICE_NOT_FOUND"})
+    if not device.user_id:
+        raise HTTPException(status_code=409, detail={"code": "DEVICE_NOT_CLAIMED"})
+    relay_id = str(getattr(device, "managed_by_relay_id", "") or "").strip()
+    relay_serial = str(
+        getattr(device, "relay_serial", None)
+        or getattr(device, "adb_serial", None)
+        or getattr(device, "serial", "")
+        or ""
+    ).strip()
+    if not relay_id or not relay_serial:
+        raise HTTPException(status_code=409, detail={"code": "MANAGED_AGENT_NOT_AVAILABLE"})
+    managed_org_id = getattr(device, "managed_by_org_id", None) or org_id
+    with tenant_context(str(managed_org_id)):
+        relay = await repo.get_relay_agent(
+            db,
+            relay_id,
+            org_id=managed_org_id,
+        )
+    if relay is None or relay.status != "online":
+        raise HTTPException(status_code=404, detail={"code": "MANAGED_AGENT_OFFLINE"})
+    if relay_serial not in set(relay.serials or []):
+        raise HTTPException(status_code=409, detail={"code": "SERIAL_NOT_REPORTED_BY_AGENT"})
+
+    ws_url = relay_onboarding.build_device_agent_url(
+        _ws_base_for_managed_connect(request, body.wsBaseUrl),
+        device,
+    )
+    cmd = (
+        "am start "
+        "-n jp.co.cyberagent.stf/.IdentityActivity "
+        "-a jp.co.cyberagent.stf.ACTION_IDENTIFY "
+        "--activity-single-top "
+        f"--es qr_content {shlex.quote(ws_url)}"
+    )
+    ctrl = _get_ctrl_servicer_optional()
+    if ctrl is None:
+        raise HTTPException(status_code=503, detail={"code": "MANAGED_AGENT_CONTROL_UNAVAILABLE"})
+    res = await ctrl.shell(relay_serial, cmd, timeout=15.0)
+    return RelayCommandOut(**res)
+
+
 @router.get(
     "/{device_id}",
     response_model=DeviceOut,
@@ -860,7 +1078,17 @@ async def delete_device(device_id: str, db: DB, user: CurrentUser):
     state_row = await get_device_state(db, device_id)
     from_state = state_row.state if state_row else None
     session_id = state_row.session_id if state_row else None
-    await repo.delete_device(db, device_id)
+    managed_by_org_id = getattr(device, "managed_by_org_id", None)
+    if managed_by_org_id and managed_by_org_id != org_id:
+        await release_allocated_device(
+            db,
+            device,
+            actor_user_id=user.id,
+            return_org_id=managed_by_org_id,
+            action="device.released_by_workspace",
+        )
+    else:
+        await repo.delete_device(db, device_id)
     await db.commit()
     try:
         from services.device_state.ws_publisher import publisher as lifecycle_publisher
@@ -915,8 +1143,6 @@ async def device_sessions(device_id: str, db: DB, user: CurrentUser):
 
 
 # ── Relay control endpoints ───────────────────────────────────────────────────
-
-from api.schemas.relay_agent import RelayCommandOut  # noqa: E402
 
 
 def _get_ctrl_servicer_optional():
@@ -1077,7 +1303,7 @@ class DeviceReviveOut(BaseModel):
     "/{device_id}/revive",
     response_model=DeviceReviveOut,
     summary="Revive a DEAD device (admin)",
-    dependencies=[Depends(require_permission("devices", "manage"))],
+    dependencies=[Depends(require_permission_or_admin("devices", "manage"))],
 )
 async def revive_device(device_id: str, db: DB, admin: AdminUser):
     """Transition DEAD → CONNECTING after physical intervention (DF-T-02-005)."""
@@ -1183,10 +1409,12 @@ def _to_out(
         created_at=d.created_at,
         adb_serial=adb_serial if adb_serial is not None else getattr(d, "adb_serial", None),
         relay_serial=getattr(d, "relay_serial", None),
+        managed_by_org_id=getattr(d, "managed_by_org_id", None),
+        managed_by_relay_id=getattr(d, "managed_by_relay_id", None),
         adb_ip=getattr(d, "adb_ip", None),
         adb_port=getattr(d, "adb_port", 5555),
         tags=getattr(d, "tags", "") or "",
-        relay_id=relay_id,
+        relay_id=relay_id if relay_id is not None else getattr(d, "managed_by_relay_id", None),
         state=state,
         status=getattr(d, "status", "paired") or "paired",
         paired_at=getattr(d, "paired_at", None),

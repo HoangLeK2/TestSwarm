@@ -6,14 +6,13 @@ import time
 from typing import Any
 
 from services.platform_readiness import (
-    DEFAULT_PLATFORM,
     PlatformReadinessResult,
     PlatformReadinessStatus,
     resolve_platform_readiness,
 )
-from services.social_ext import supports_step
 from tasks.scenario.context import ScenarioContext
 from tasks.scenario.steps import register_step
+from tasks.scenario.steps.platform_resolution import resolve_supported_step_platform
 
 _STEP_TYPE = "platform_session_gate"
 
@@ -64,16 +63,10 @@ def handle_platform_session_gate(
     idx: int,
     result: dict[str, Any],
 ) -> None:
-    platform = str(step.get("platform") or DEFAULT_PLATFORM).strip().casefold()
+    platform = resolve_supported_step_platform(sc, step, _STEP_TYPE, result)
+    if platform is None:
+        return
     try:
-        if not supports_step(platform, _STEP_TYPE):
-            result["ok"] = False
-            result["outcome"] = "unsupported_platform"
-            result["message"] = (
-                f"{_STEP_TYPE}: platform {platform!r} does not implement this step"
-            )
-            return
-
         phase = str(step.get("phase") or "preflight").strip().lower()
         if phase not in {"preflight", "confirm"}:
             raise ValueError("phase must be preflight or confirm")

@@ -36,6 +36,11 @@ class _Action:
     account_id = "account-1"
     status = "failed"
     action_type = "like"
+    platform = "facebook"
+    device_serial = "PHONE-7"
+    execution_id = "exec-1"
+    step_id = "step-1"
+    artifact_refs: ClassVar[list] = []
     target: ClassVar[dict] = {
         "type": "post",
         "id": "post-1",
@@ -613,10 +618,14 @@ def test_stable_action_key_unchanged_by_the_device_column():
     )
     # Known-good value computed from the pre-device implementation.
     assert stable_action_key(**args) == stable_action_key(**args)
+    # The sanity probe used to be an arbitrary extra key. It has to be part of
+    # the target's identity now: the hash deliberately ignores everything else,
+    # because it used to include the display name read off the screen and a
+    # rename between two dumps produced a second row for the same action.
     assert (
         stable_action_key(**args)
-        != stable_action_key(**{**args, "target": {**args["target"], "x": "1"}})
-    ), "sanity: target really does feed the hash"
+        != stable_action_key(**{**args, "target": {**args["target"], "target_id": "post-2"}})
+    ), "sanity: the target's identity really does feed the hash"
 
 
 def test_device_filter_no_longer_discards_every_account_action():
@@ -668,3 +677,71 @@ def test_account_action_out_exposes_device_and_evidence():
     assert details["comment_text"] == "Chào bạn"
     assert details["author_name"] == "Bob"
     assert details["device_id"] == "dev-1"
+
+
+def test_action_key_ignores_the_display_name_read_off_the_screen():
+    """A rename between two dumps must not fork the idempotency hash.
+
+    The key used to hash the whole target, display name included. Facebook
+    truncates names, adds emoji, and people rename themselves — every variation
+    produced a second ledger row for an action already recorded.
+    """
+    args = dict(
+        org_id="org-1",
+        account_id="acc-1",
+        execution_id="exec-1",
+        step_id="step-1",
+        action_type="connection_request",
+    )
+    base = {"action": "request", "target_type": "person", "target_id": "person-9"}
+
+    assert stable_action_key(**args, target={**base, "name": "Nguyễn Ngọc"}) == (
+        stable_action_key(**args, target={**base, "name": "Nguyễn Ng…", "source": "feed"})
+    )
+    assert stable_action_key(**args, target=base) != stable_action_key(
+        **args, target={**base, "target_id": "person-10"}
+    )
+
+
+def test_action_key_still_uses_the_whole_target_without_an_id():
+    """No id means the rest of the target is the only thing telling two apart."""
+    args = dict(
+        org_id="org-1",
+        account_id="acc-1",
+        execution_id="exec-1",
+        step_id="step-1",
+        action_type="connection_request",
+    )
+    assert stable_action_key(**args, target={"action": "request", "name": "A"}) != (
+        stable_action_key(**args, target={"action": "request", "name": "B"})
+    )
+
+
+def test_action_api_exposes_where_and_when_the_action_ran():
+    """device/execution/step live on the row; the projection used to drop them."""
+    projected = _action_out(_Action())
+
+    assert projected["device_serial"] == "PHONE-7"
+    assert projected["execution_id"] == "exec-1"
+    assert projected["step_id"] == "step-1"
+    assert projected["platform"] == "facebook"
+    assert projected["artifact_refs"] == []
+
+
+def test_account_action_feed_scopes_by_its_own_org_not_by_a_join():
+    """The org predicate is what makes idx_account_actions_org_time reachable.
+
+    Tenancy used to run through a join on `accounts`, leaving org_id out of the
+    WHERE clause entirely, so the unfiltered feed could only sequential-scan.
+    """
+    from api.routes.analytics import _account_action_base
+
+    class _User:
+        org_id = "org-1"
+        id = "user-1"
+
+    sql = str(
+        _account_action_base(_User()).compile(compile_kwargs={"literal_binds": True})
+    )
+    assert "account_actions.org_id" in sql
+    assert "JOIN accounts" not in sql

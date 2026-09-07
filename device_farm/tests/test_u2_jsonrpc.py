@@ -917,8 +917,28 @@ class TestPageSource(unittest.TestCase):
         method, options = self.client._rpc.call_args[0][:2]
         self.assertEqual(method, "dumpWindowHierarchy2")
         self.assertEqual(options["compressed"], True)
+        self.assertEqual(options["maxDepth"], 50)
         self.assertEqual(options["waitForIdleMs"], 0)
         self.assertEqual(options["trimFalseAttributes"], True)
+
+    def test_page_source_forwards_extended_hierarchy_options(self):
+        self.client._rpc = Mock(return_value=SIMPLE_XML)
+
+        xml = self.client.page_source(
+            compressed=False,
+            max_depth=24,
+            root_in_active=True,
+            pretty=True,
+        )
+
+        self.assertIn("<hierarchy", xml)
+        self.client._rpc.assert_called_once()
+        method, options = self.client._rpc.call_args[0][:2]
+        self.assertEqual(method, "dumpWindowHierarchy2")
+        self.assertEqual(options["compressed"], False)
+        self.assertEqual(options["maxDepth"], 24)
+        self.assertEqual(options["rootInActiveWindow"], True)
+        self.assertEqual(options["pretty"], True)
 
     def test_compressed_falls_back_when_dump_window_hierarchy2_missing(self):
         self.client._rpc = Mock(side_effect=[
@@ -932,6 +952,19 @@ class TestPageSource(unittest.TestCase):
         self.assertEqual(self.client._rpc.call_count, 2)
         self.assertEqual(self.client._rpc.call_args_list[0][0][0], "dumpWindowHierarchy2")
         self.assertEqual(self.client._rpc.call_args_list[1][0][0], "dumpWindowHierarchy")
+        self.assertIs(self.client._dump_hierarchy2_supported, False)
+
+    def test_root_in_active_does_not_fallback_to_full_hierarchy_when_options_rpc_missing(self):
+        self.client._rpc = Mock(side_effect=RuntimeError(
+            "JSON-RPC error for method='dumpWindowHierarchy2': Method not found"
+        ))
+
+        with patch("time.sleep"):
+            xml = self.client.page_source(root_in_active=True)
+
+        self.assertEqual(xml, "")
+        self.assertEqual(self.client._rpc.call_count, 1)
+        self.assertEqual(self.client._rpc.call_args_list[0][0][0], "dumpWindowHierarchy2")
         self.assertIs(self.client._dump_hierarchy2_supported, False)
 
 

@@ -58,3 +58,4 @@ class UserOut(BaseModel):
     api_key: str
     orgRole: str | None = None
     defaultOrgId: str | None = None
+    mustChangePassword: bool = False

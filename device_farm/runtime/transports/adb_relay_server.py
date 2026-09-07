@@ -334,6 +334,22 @@ class RelayConnection:
         self._extra_data_chunks.clear()
 
 
+def _relay_agent_suspended(relay_id: str, serials: Set[str] | None = None) -> bool:
+    """In-memory verdict, shared with the other two transports.
+
+    No database call: this runs on every relay registration, and the registry is
+    rebuilt from the database at startup and updated by the admin action itself.
+    """
+    try:
+        from .agent_suspension import get_agent_suspension_registry
+    except Exception:  # pragma: no cover - standalone relay build
+        return False
+    registry = get_agent_suspension_registry()
+    if registry.is_relay_suspended(relay_id):
+        return True
+    return registry.any_serial_suspended(serials or set())
+
+
 # ── Manager ───────────────────────────────────────────────────────────────────
 
 class AdbRelayManager:
@@ -346,6 +362,8 @@ class AdbRelayManager:
         self._lock = asyncio.Lock()
         # relay_id → RelayConnection
         self._relays: Dict[str, RelayConnection] = {}
+        # Parked connections: alive but outside every lookup, so nothing routes.
+        self._suspended: Dict[str, RelayConnection] = {}
         # serial → relay_id (fast lookup)
         self._serial_index: Dict[str, str] = {}
         # serial → RelayScrcpyReceiver (push_frame target)
@@ -438,7 +456,23 @@ class AdbRelayManager:
                 self._capabilities.get(serial, {}),
             )
 
-    async def register(self, conn: RelayConnection) -> None:
+    async def register(self, conn: RelayConnection) -> bool:
+        # Both the gRPC video path and the WebSocket path land here, so this is
+        # the one place where "admin disabled this agent" can shut the transport
+        # for every workspace holding one of its phones. Park rather than refuse:
+        # a refused agent reconnects in a loop and re-enabling has to wait for it.
+        if _relay_agent_suspended(conn.relay_id, conn.serials):
+            async with self._lock:
+                self._suspended[conn.relay_id] = conn
+            logger.info(
+                "relay parked (agent disabled): id=%s serials=%d",
+                conn.relay_id,
+                len(conn.serials),
+            )
+            # True: the connection is accepted and kept. Routing is this
+            # manager's decision, not the caller's — reporting a failure here is
+            # what made the agent tear down and reconnect in a loop.
+            return True
         callbacks_to_fire: list = []
         async with self._lock:
             self._relays[conn.relay_id] = conn
@@ -458,6 +492,38 @@ class AdbRelayManager:
         await self._sync_relay_to_redis(conn)
         for s in conn.serials:
             self._dispatch_callback("on_device_online", self._on_device_online, s)
+        return True
+
+    async def suspend_relay(self, relay_id: str) -> bool:
+        """Move a live relay out of routing without closing its socket."""
+        async with self._lock:
+            conn = self._relays.pop(relay_id, None)
+            if conn is None:
+                return relay_id in self._suspended
+            for serial in list(self._serial_index):
+                if self._serial_index.get(serial) == relay_id:
+                    self._serial_index.pop(serial, None)
+            self._suspended[relay_id] = conn
+        logger.info("relay parked by admin: id=%s", relay_id)
+        return True
+
+    async def resume_relay(self, relay_id: str) -> bool:
+        """Put a parked relay back into routing — no reconnect needed."""
+        async with self._lock:
+            conn = self._suspended.pop(relay_id, None)
+            if conn is None:
+                return False
+            self._relays[relay_id] = conn
+            for serial in conn.serials:
+                self._serial_index[serial] = relay_id
+        logger.info(
+            "relay resumed by admin: id=%s serials=%d", relay_id, len(conn.serials)
+        )
+        async with self._relay_state_changed:
+            self._relay_state_changed.notify_all()
+        for serial in conn.serials:
+            self._dispatch_callback("on_device_online", self._on_device_online, serial)
+        return True
 
     async def update_serials(self, relay_id: str, serials: Set[str]) -> None:
         # Mutate the index under the lock; fire callbacks after releasing it.
@@ -559,7 +625,8 @@ class AdbRelayManager:
 
         Each item is a plain dict with keys: serial, android_version, sdk,
         brand, model, abi, screen_width, screen_height, ram_gb, has_u2,
-        has_stf, has_ocr, tags.
+        has_stf, has_ocr, has_image_match, has_tesseract, has_opencv,
+        supports_*, tags.
 
         NOTE: the copy below is an explicit whitelist, so a capability the agent
         starts sending is silently dropped until it is added here — the feature
@@ -592,7 +659,17 @@ class AdbRelayManager:
                     "has_u2":          bool(cap.get("has_u2", False)),
                     "has_stf":         bool(cap.get("has_stf", False)),
                     "has_ocr":         bool(cap.get("has_ocr", False)),
+                    "has_tesseract":   bool(cap.get("has_tesseract", False)),
                     "has_image_match": bool(cap.get("has_image_match", False)),
+                    "has_opencv":      bool(cap.get("has_opencv", False)),
+                    "supports_advanced_gestures": bool(
+                        cap.get("supports_advanced_gestures", False)
+                    ),
+                    "supports_clipboard": bool(cap.get("supports_clipboard", False)),
+                    "supports_file_ops": bool(cap.get("supports_file_ops", False)),
+                    "supports_install_apk": bool(cap.get("supports_install_apk", False)),
+                    "supports_screenshot": bool(cap.get("supports_screenshot", False)),
+                    "supports_shell":  bool(cap.get("supports_shell", False)),
                     "hardware_serial": cap.get("hardware_serial", ""),
                     "tags":            list(cap.get("tags", [])),
                 }
@@ -614,7 +691,17 @@ class AdbRelayManager:
                     "has_u2":          cap.has_u2,
                     "has_stf":         cap.has_stf,
                     "has_ocr":         bool(getattr(cap, "has_ocr", False)),
+                    "has_tesseract":   bool(getattr(cap, "has_tesseract", False)),
                     "has_image_match": bool(getattr(cap, "has_image_match", False)),
+                    "has_opencv":      bool(getattr(cap, "has_opencv", False)),
+                    "supports_advanced_gestures": bool(
+                        getattr(cap, "supports_advanced_gestures", False)
+                    ),
+                    "supports_clipboard": bool(getattr(cap, "supports_clipboard", False)),
+                    "supports_file_ops": bool(getattr(cap, "supports_file_ops", False)),
+                    "supports_install_apk": bool(getattr(cap, "supports_install_apk", False)),
+                    "supports_screenshot": bool(getattr(cap, "supports_screenshot", False)),
+                    "supports_shell":  bool(getattr(cap, "supports_shell", False)),
                     "tags":            list(cap.tags),
                 }
             self._pool_state.setdefault(serial, "available")

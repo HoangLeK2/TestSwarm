@@ -31,11 +31,16 @@ export type PermissionRequirement = {
   action: PermissionAction;
 };
 
-/** Platform role on users.role — matches backend UserRole constraint. */
-export type PlatformRole = 'superadmin' | 'admin' | 'operator';
+/** Platform role on users.role. Workspace admin comes from orgRole, not users.role. */
+export type PlatformRole =
+  | 'superadmin'
+  | 'operator'
+  | 'support'
+  | 'system'
+  | 'platform-admin';
 
 /** Organization membership role — from GET /auth/me orgRole. */
-export type OrgRole = 'owner' | 'member' | 'supervisor';
+export type OrgRole = 'owner' | 'admin' | 'member' | 'supervisor';
 
 export type RbacIdentity = {
   role: PlatformRole;

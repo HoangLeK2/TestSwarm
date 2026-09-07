@@ -143,7 +143,7 @@ tiên). Máy khách chạy image cũ sẽ crash-loop chứ không phải chỉ t
 ```bash
 MEDIA_ADAPTER_GO2RTC_RTSP_PUBLISH_TEMPLATE=rtsp://farm:<RTSP_PASS>@device-farm.tommadethis.app:8554/{stream_raw}
 MEDIA_ADAPTER_GO2RTC_REGISTER_ENABLED=0
-MEDIA_ADAPTER_REMOTE_RTSP_QUEUE=32
+MEDIA_ADAPTER_REMOTE_RTSP_QUEUE=256
 MEDIA_ADAPTER_CONTROL_GRPC_SERVER=grpc-device-farm.tommadethis.app:443
 MEDIA_ADAPTER_CONTROL_GRPC_TLS=true
 ```
@@ -155,15 +155,20 @@ với publisher trên cùng tên stream.
 ### 5. Kiểm tra sau khi lên
 
 ```bash
-# Trên cloud: stream đã được tạo và có publisher chưa
-docker compose exec go2rtc wget -qO- http://127.0.0.1:1984/api/streams
-
-# Mong đợi: mỗi máy có 2 producers — placeholder + publisher có remote_addr
+python3 scripts/media_diagnostics.py SERIAL \
+  --samples 3 \
+  --interval 1 \
+  --adapter-url http://127.0.0.1:8878 \
+  --go2rtc-url http://127.0.0.1:1984 \
+  --docker \
+  --env-file deploy.env \
+  --fail-on-warning
 ```
 
-Nếu `producers` chỉ có placeholder: adapter chưa publish được. Xem log
-media-adapter tìm `remote RTSP publish not ready` (sai mật khẩu hoặc firewall
-chặn 8554).
+Mong đợi `classification=healthy` khi đang có browser xem, hoặc `no_consumer`
+khi chưa có browser. Exit `2` nghĩa là một hop media bị stall; exit `3` nghĩa là
+stream đang chạy nhưng runtime config drift so với env file. Xem chi tiết trong
+`docs/runbooks/media-stream-diagnostics.md`.
 
 ## Cạm bẫy
 

@@ -165,6 +165,39 @@ def test_fatal_runtime_error_triggers_stop(monkeypatch):
     asyncio.run(_run())
 
 
+def test_fatal_runtime_error_stops_only_matching_serial(monkeypatch):
+    monkeypatch.setattr(sm, "ScrcpyRelaySession", _FakeSession)
+    events: list[tuple[str, str]] = []
+
+    async def _run() -> None:
+        mgr = sm.ScrcpySessionManager(
+            on_session_stopped=lambda s, r: events.append((s, r))
+        )
+        await mgr.start()
+        try:
+            queue = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+            await mgr.start_session("phone-B", 30, 720, True, 27183, queue, loop)
+            await mgr.start_session("phone-C", 30, 720, True, 27184, queue, loop)
+            phone_c = mgr.get("phone-C")
+
+            mgr._on_session_fatal("phone-B", "runtime_error")
+            await asyncio.sleep(0.05)
+
+            assert mgr.get("phone-B") is None
+            assert mgr.get("phone-C") is phone_c
+            assert mgr.active_serials == ["phone-C"]
+            assert ("phone-B", "runtime_error") in events
+            assert not any(
+                serial == "phone-C" and reason == "runtime_error"
+                for serial, reason in events
+            )
+        finally:
+            await mgr.stop()
+
+    asyncio.run(_run())
+
+
 def test_session_health_callback_passes_through(monkeypatch):
     class _HealthSession(_FakeSession):
         def __init__(self, serial: str, on_health=None, **kwargs):

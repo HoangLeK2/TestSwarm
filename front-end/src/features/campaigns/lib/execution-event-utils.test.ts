@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { foldEventsToStepLog } from './execution-event-utils.ts';
+import {
+  foldEventsToProgress,
+  foldEventsToStepLog
+} from './execution-event-utils.ts';
 
 test('foldEventsToStepLog keeps adb shell output fields from step event payload', () => {
   const rows = foldEventsToStepLog([
@@ -124,6 +128,171 @@ test('foldEventsToStepLog attaches incident events to the owning step', () => {
   assert.equal(rows[0].incidents?.[0]?.matched_rule, true);
 });
 
+test('foldEventsToStepLog attaches Temporal activity events to the owning step', () => {
+  const rows = foldEventsToStepLog([
+    {
+      event_id: 'evt-step-started',
+      event_type: 'step.started',
+      execution_id: 'exec-1',
+      step_id: 'tap-1',
+      occurred_at: '2026-09-05T01:00:00.000Z',
+      payload: {
+        step_index: 1,
+        step_id: 'tap-1',
+        step_type: 'tap',
+        message: 'running tap'
+      }
+    } as any,
+    {
+      event_id: 'evt-activity-scheduled',
+      event_type: 'temporal.activity.scheduled',
+      execution_id: 'exec-1',
+      step_id: 'tap-1',
+      occurred_at: '2026-09-05T01:00:01.000Z',
+      payload: {
+        step_index: 1,
+        step_id: 'tap-1',
+        step_type: 'tap',
+        temporal_activity: true,
+        activity_id: 'exec-1.tap-1.attempt-1',
+        step_activity_id: 'tap-1.attempt-1',
+        side_effect_class: 'device_write',
+        activity_attempt: 1,
+        phase: 'scheduled'
+      }
+    } as any,
+    {
+      event_id: 'evt-activity-stalled',
+      event_type: 'temporal.activity.stalled',
+      execution_id: 'exec-1',
+      step_id: 'tap-1',
+      occurred_at: '2026-09-05T01:00:31.000Z',
+      payload: {
+        step_index: 1,
+        step_id: 'tap-1',
+        step_type: 'tap',
+        temporal_activity: true,
+        activity_id: 'exec-1.tap-1.attempt-1',
+        step_activity_id: 'tap-1.attempt-1',
+        side_effect_class: 'device_write',
+        activity_attempt: 1,
+        phase: 'stalled',
+        duration_ms: 30000,
+        stalled_reason: 'temporal_activity_timeout'
+      }
+    } as any,
+    {
+      event_id: 'evt-step-completed',
+      event_type: 'step.completed',
+      execution_id: 'exec-1',
+      step_id: 'tap-1',
+      occurred_at: '2026-09-05T01:00:32.000Z',
+      payload: {
+        step_index: 1,
+        step_id: 'tap-1',
+        step_type: 'tap',
+        message: 'tap ok'
+      }
+    } as any
+  ]);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, 'completed');
+  assert.deepEqual(
+    rows[0].temporal_activity_events?.map((event) => event.state),
+    ['scheduled', 'stalled']
+  );
+  assert.equal(
+    rows[0].temporal_activity_events?.[0]?.activity_id,
+    'exec-1.tap-1.attempt-1'
+  );
+  assert.equal(
+    rows[0].temporal_activity_events?.[1]?.stalled_reason,
+    'temporal_activity_timeout'
+  );
+});
+
+test('foldEventsToStepLog exposes orphan Temporal activity failures as synthetic rows', () => {
+  const rows = foldEventsToStepLog([
+    {
+      event_id: 'evt-activity-failed',
+      event_type: 'temporal.activity.failed',
+      execution_id: 'exec-1',
+      step_id: 'login-1',
+      occurred_at: '2026-09-05T01:05:00.000Z',
+      payload: {
+        step_index: 2,
+        step_id: 'login-1',
+        step_type: 'launch_app',
+        temporal_activity: true,
+        activity_id: 'exec-1.login-1.attempt-2',
+        side_effect_class: 'device_lifecycle',
+        activity_attempt: 2,
+        phase: 'failed',
+        duration_ms: 1200,
+        ok: false,
+        message: 'activity timed out'
+      }
+    } as any
+  ]);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].index, 2);
+  assert.equal(rows[0].step_id, 'login-1');
+  assert.equal(rows[0].step_type, 'launch_app');
+  assert.equal(rows[0].status, 'failed');
+  assert.equal(rows[0].ok, false);
+  assert.equal(rows[0].temporal_activity_events?.[0]?.state, 'failed');
+  assert.equal(rows[0].temporal_activity_events?.[0]?.activity_attempt, 2);
+});
+
+test('foldEventsToStepLog does not let late activity events downgrade terminal rows', () => {
+  const rows = foldEventsToStepLog([
+    {
+      event_id: 'evt-step-started',
+      event_type: 'step.started',
+      execution_id: 'exec-1',
+      step_id: 'tap-1',
+      payload: {
+        step_index: 0,
+        step_id: 'tap-1',
+        step_type: 'tap'
+      }
+    } as any,
+    {
+      event_id: 'evt-step-completed',
+      event_type: 'step.completed',
+      execution_id: 'exec-1',
+      step_id: 'tap-1',
+      payload: {
+        step_index: 0,
+        step_id: 'tap-1',
+        step_type: 'tap',
+        message: 'tap ok'
+      }
+    } as any,
+    {
+      event_id: 'evt-activity-stalled',
+      event_type: 'temporal.activity.stalled',
+      execution_id: 'exec-1',
+      step_id: 'tap-1',
+      occurred_at: '2026-09-05T01:00:31.000Z',
+      payload: {
+        step_index: 0,
+        step_id: 'tap-1',
+        step_type: 'tap',
+        activity_id: 'activity-late',
+        phase: 'stalled',
+        stalled_reason: 'temporal_activity_timeout'
+      }
+    } as any
+  ]);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, 'completed');
+  assert.equal(rows[0].temporal_activity_events?.[0]?.state, 'stalled');
+});
+
 test('foldEventsToStepLog keeps recovery scenario metadata on incident events', () => {
   const rows = foldEventsToStepLog([
     {
@@ -187,6 +356,182 @@ test('foldEventsToStepLog exposes step.started as a running row for live UI spin
   assert.equal(rows[0].depth, 2);
   assert.equal(rows[0].status, 'running');
   assert.equal(rows[0].message, 'running if');
+});
+
+test('foldEventsToStepLog and progress expose scenario step trace fields', () => {
+  const events = [
+    {
+      event_id: 'evt-1',
+      event_type: 'step.started',
+      execution_id: 'exec-1',
+      step_id: 'mark',
+      payload: {
+        step_index: 0,
+        step_id: 'mark',
+        step_type: 'set_variable',
+        depth: 2,
+        trace: {
+          step_id: 'mark',
+          step_path: 'gate.then/cycle#3/mark',
+          loop_id: 'cycle',
+          loop_iter: 3,
+          branch: 'then'
+        }
+      }
+    },
+    {
+      event_id: 'evt-2',
+      event_type: 'step.failed',
+      execution_id: 'exec-1',
+      step_id: 'mark',
+      payload: {
+        step_index: 0,
+        step_id: 'mark',
+        step_type: 'set_variable',
+        depth: 2,
+        reason_code: 'loop_iteration_failed',
+        trace: {
+          step_id: 'mark',
+          step_path: 'gate.then/cycle#3/mark',
+          loop_id: 'cycle',
+          loop_iter: 3,
+          branch: 'then'
+        }
+      }
+    }
+  ] as any;
+
+  const rows = foldEventsToStepLog(events);
+  const progress = foldEventsToProgress(events, 'workflow-1', 'serial-1');
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].step_path, 'gate.then/cycle#3/mark');
+  assert.equal(rows[0].loop_id, 'cycle');
+  assert.equal(rows[0].loop_iter, 3);
+  assert.equal(rows[0].branch, 'then');
+  assert.equal(rows[0].reason_code, 'loop_iteration_failed');
+  assert.equal(progress?.current_step_id, 'mark');
+  assert.equal(progress?.current_step_path, 'gate.then/cycle#3/mark');
+  assert.equal(progress?.current_loop_iter, 3);
+  assert.equal(progress?.reason_code, 'loop_iteration_failed');
+  assert.equal(progress?.loop_iteration, 3);
+});
+
+test('foldEventsToStepLog preserves runtime evidence for monitor rows', () => {
+  const rows = foldEventsToStepLog([
+    {
+      event_id: 'evt-evidence',
+      event_type: 'step.failed',
+      execution_id: 'exec-1',
+      step_id: 'ocr-1',
+      payload: {
+        step_index: 1,
+        step_id: 'ocr-1',
+        step_type: 'extract_text_ocr',
+        ok: false,
+        message: 'OCR unavailable',
+        reason_code: 'node_capability_preflight_failed',
+        evidence: {
+          reason_code: 'node_capability_preflight_failed',
+          device_serial: 'phone-001',
+          scenario_name: 'OCR scenario',
+          missing_capabilities: ['has_ocr', 'has_tesseract'],
+          node_capability_preflight: {
+            ok: false,
+            issues: [
+              {
+                path: 'steps[1]',
+                step_type: 'extract_text_ocr',
+                missing: ['has_ocr', 'has_tesseract']
+              }
+            ]
+          }
+        }
+      }
+    } as any
+  ]);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].reason_code, 'node_capability_preflight_failed');
+  assert.equal(rows[0].evidence?.device_serial, 'phone-001');
+  assert.deepEqual(rows[0].evidence?.missing_capabilities, [
+    'has_ocr',
+    'has_tesseract'
+  ]);
+});
+
+test('fold events expose execution failed preflight evidence without step rows', () => {
+  const events = [
+    {
+      event_id: 'evt-execution-failed',
+      event_type: 'execution.failed',
+      execution_id: 'exec-1',
+      payload: {
+        reason_code: 'node_capability_preflight_failed',
+        message: 'node capability preflight failed at steps[0]',
+        evidence: {
+          reason_code: 'node_capability_preflight_failed',
+          device_serial: 'phone-001',
+          missing_capabilities: ['has_ocr']
+        }
+      }
+    } as any
+  ];
+  const progress = foldEventsToProgress(events, 'exec_exec-1', 'phone-001');
+  const rows = foldEventsToStepLog(events);
+
+  assert.equal(progress?.status, 'failed');
+  assert.equal(
+    progress?.message,
+    'node capability preflight failed at steps[0]'
+  );
+  assert.equal(progress?.reason_code, 'node_capability_preflight_failed');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, 'failed');
+  assert.equal(rows[0].step_type, 'preflight');
+  assert.equal(rows[0].evidence?.device_serial, 'phone-001');
+});
+
+test('runtime evidence monitor labels are localized and rendered from i18n', () => {
+  const source = readFileSync(
+    new URL('../components/workflow-step-list.tsx', import.meta.url),
+    'utf8'
+  );
+
+  assert.match(source, /RuntimeEvidencePanel/);
+  assert.match(source, /monitorEvidenceTitle/);
+  assert.doesNotMatch(source, /Runtime evidence/);
+
+  for (const locale of ['en', 'vi']) {
+    const messages = JSON.parse(
+      readFileSync(
+        new URL(`../../../../messages/${locale}.json`, import.meta.url),
+        'utf8'
+      )
+    );
+    const list = messages.campaignsFeature?.list ?? {};
+    for (const key of [
+      'monitorEvidenceTitle',
+      'monitorEvidenceReason',
+      'monitorEvidenceClass',
+      'monitorEvidenceRetry',
+      'monitorEvidenceOperator',
+      'monitorEvidenceDevice',
+      'monitorEvidenceScenario',
+      'monitorEvidenceAccount',
+      'monitorEvidenceStepPath',
+      'monitorEvidenceMissing',
+      'monitorTemporalActivityEvent',
+      'monitorTemporalActivityOlder',
+      'monitorTemporalActivityScheduled',
+      'monitorTemporalActivityRetrying',
+      'monitorTemporalActivityCompleted',
+      'monitorTemporalActivityFailed',
+      'monitorTemporalActivityStalled'
+    ]) {
+      assert.equal(typeof list[key], 'string', `${locale}.${key}`);
+    }
+  }
 });
 
 test('foldEventsToStepLog preserves every repeated step occurrence and action proof', () => {

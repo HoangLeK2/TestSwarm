@@ -128,24 +128,24 @@ class LocatorCandidate(StrictProfileModel):
         data = self.model_dump()
         if bool(self.by) != bool(self.value):
             raise ValueError("locator candidate must define by and value together")
-        if self.target_class and not self.text_near:
-            raise ValueError("target_class requires text_near")
+        if self.target_class and not (self.text_near or self.ocr_near):
+            raise ValueError("target_class requires text_near or ocr_near")
         if self.region and not (
             self.by
             or self.resource_id_contains
             or self.text_near
+            or self.ocr_near
             or self.class_name
             or self.description_contains
         ):
             raise ValueError("region must filter a real selector signal")
-        if self.ocr_near:
-            raise ValueError("ocr_near is reserved for future OCR support")
         if not _has_value(
             data,
             "by",
             "value",
             "resource_id_contains",
             "text_near",
+            "ocr_near",
             "class_name",
             "description_contains",
         ):

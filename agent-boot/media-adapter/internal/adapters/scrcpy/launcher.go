@@ -853,6 +853,9 @@ func needsDeviceSafeProfile(deviceSignature string) bool {
 	if value == "" {
 		return false
 	}
+	if isAndroidEmulatorSignature(value) {
+		return false
+	}
 	for _, marker := range []string{
 		"sm-n97",
 		"sm-n976",
@@ -865,6 +868,12 @@ func needsDeviceSafeProfile(deviceSignature string) bool {
 		}
 	}
 	return false
+}
+
+func isAndroidEmulatorSignature(value string) bool {
+	return strings.Contains(value, "sdk_gphone") ||
+		strings.Contains(value, " qemu") ||
+		strings.Contains(value, "google")
 }
 
 func launchProfileChanged(before StartRequest, after StartRequest) bool {

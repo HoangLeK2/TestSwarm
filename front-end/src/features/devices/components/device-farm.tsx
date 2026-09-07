@@ -18,11 +18,25 @@ import { fetchConfig } from '../services/api';
 import type { DeviceScreenTransport } from './device-screen';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select';
 import { TablePaginationControls } from '@/components/ui/table/data-table-pagination';
 import { CoreEmptyState } from '@/components/core-empty-state';
-import { RefreshCw, Smartphone } from 'lucide-react';
+import { RefreshCw, Search, Smartphone, X } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { isVisibleDeviceFarmActiveDevice } from '../lib/device-farm-visible-devices';
+import {
+  ALL_RUNS,
+  filterDeviceFarmDevices,
+  listDeviceFarmRuns,
+  type DeviceFarmActivityFilter
+} from '../lib/device-farm-filter';
 import {
   hasMediaPlanePreview,
   isGridWebRtcPreviewEnabled
@@ -107,6 +121,29 @@ export function DeviceFarm() {
     [devices]
   );
 
+  const [query, setQuery] = useState('');
+  const [activity, setActivity] = useState<DeviceFarmActivityFilter>('all');
+  const [runKey, setRunKey] = useState<string>(ALL_RUNS);
+  const runs = useMemo(() => listDeviceFarmRuns(devices), [devices]);
+  const filteredDevices = useMemo(
+    () => filterDeviceFarmDevices(devices, { query, activity, runKey }),
+    [devices, query, activity, runKey]
+  );
+  const isFiltered =
+    query.trim().length > 0 || activity !== 'all' || runKey !== ALL_RUNS;
+  const clearFilters = useCallback(() => {
+    setQuery('');
+    setActivity('all');
+    setRunKey(ALL_RUNS);
+  }, []);
+
+  // A run that ends while it is the selected filter would otherwise leave the
+  // grid permanently empty with no option in the list to explain why.
+  useEffect(() => {
+    if (runKey === ALL_RUNS) return;
+    if (!runs.some((run) => run.key === runKey)) setRunKey(ALL_RUNS);
+  }, [runKey, runs]);
+
   const isInitialLoading =
     requestStatus === 'idle' ||
     (requestStatus === 'loading' && lastUpdatedAt === null);
@@ -115,21 +152,25 @@ export function DeviceFarm() {
     isInitialError,
     isInitialLoading,
     deviceCount: devices.length,
-    filteredCount: devices.length
+    filteredCount: filteredDevices.length
   });
 
   const [pageIndex, setPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState(DEFAULT_GRID_PAGE_SIZE);
-  const pageCount = Math.max(1, Math.ceil(devices.length / pageSize));
+  const pageCount = Math.max(1, Math.ceil(filteredDevices.length / pageSize));
 
   useEffect(() => {
     setPageIndex((prev) => Math.min(prev, pageCount - 1));
   }, [pageCount]);
 
+  useEffect(() => {
+    setPageIndex(0);
+  }, [query, activity, runKey]);
+
   const pageDevices = useMemo(() => {
     const start = pageIndex * pageSize;
-    return devices.slice(start, start + pageSize);
-  }, [devices, pageIndex, pageSize]);
+    return filteredDevices.slice(start, start + pageSize);
+  }, [filteredDevices, pageIndex, pageSize]);
 
   // Callback ref, not useRef: measurement has to be wired the moment the grid
   // node attaches. Keying it off device counts instead looked equivalent and
@@ -189,7 +230,7 @@ export function DeviceFarm() {
   // it without resizing its box, and ResizeObserver does not fire on a move.
   useLayoutEffect(() => {
     syncGeometryRef.current();
-  }, [error, isInitialLoading, devices.length, pageIndex, pageSize]);
+  }, [error, isInitialLoading, filteredDevices.length, pageIndex, pageSize]);
 
   const columnCount = useMemo(
     () => getDeviceGridColumnCount(gridWidth, pageDevices.length),
@@ -263,6 +304,65 @@ export function DeviceFarm() {
         </div>
       </div>
 
+      <div className='flex flex-wrap items-center gap-2'>
+        <div className='relative min-w-[220px] flex-1 md:max-w-sm'>
+          <Search className='pointer-events-none absolute left-2.5 top-2.5 size-4 text-muted-foreground' />
+          <Input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={t('filters.searchPlaceholder')}
+            aria-label={t('filters.searchPlaceholder')}
+            className='pl-8'
+          />
+        </div>
+        <Select
+          value={activity}
+          onValueChange={(value) =>
+            setActivity(value as DeviceFarmActivityFilter)
+          }
+        >
+          <SelectTrigger className='w-[190px]'>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value='all'>{t('filters.allStatuses')}</SelectItem>
+            <SelectItem value='idle'>{t('filters.activityIdle')}</SelectItem>
+            <SelectItem value='running'>
+              {t('filters.activityRunning')}
+            </SelectItem>
+            <SelectItem value='manual'>
+              {t('filters.activityManual')}
+            </SelectItem>
+            <SelectItem value='unavailable'>
+              {t('filters.activityUnavailable')}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        {runs.length > 0 ? (
+          <Select value={runKey} onValueChange={setRunKey}>
+            <SelectTrigger className='w-[220px]'>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_RUNS}>{t('filters.allRuns')}</SelectItem>
+              {runs.map((run) => (
+                <SelectItem key={run.key} value={run.key}>
+                  {run.label} ({run.count})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : null}
+        {isFiltered ? (
+          <>
+            <Button variant='ghost' size='sm' onClick={clearFilters}>
+              <X className='mr-1 size-4' />
+              {t('filters.clear')}
+            </Button>
+          </>
+        ) : null}
+      </div>
+
       {error && lastUpdatedAt && (
         <div className='flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-500/40 bg-amber-500/5 px-4 py-3 text-sm text-amber-800 dark:text-amber-200'>
           <div>
@@ -325,6 +425,21 @@ export function DeviceFarm() {
             href: ROUTES.RELAY_AGENTS.ROOT
           }}
         />
+      ) : renderMode === 'empty-filter' ? (
+        <div className='rounded-md border border-border/60 px-4 py-10 text-center'>
+          <div className='text-sm font-medium'>{t('filters.emptyTitle')}</div>
+          <div className='mt-1 text-xs text-muted-foreground'>
+            {t('filters.emptyHint')}
+          </div>
+          <Button
+            className='mt-4'
+            variant='outline'
+            size='sm'
+            onClick={clearFilters}
+          >
+            {t('filters.clear')}
+          </Button>
+        </div>
       ) : (
         <>
           <section ref={virtualGridRef} className='w-full'>
@@ -364,7 +479,7 @@ export function DeviceFarm() {
           </section>
           <footer className='border-t border-border/40 pt-4'>
             <TablePaginationControls
-              total={devices.length}
+              total={filteredDevices.length}
               pageIndex={pageIndex}
               pageCount={pageCount}
               pageSize={pageSize}

@@ -36,6 +36,7 @@ import uuid
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+from urllib.parse import urlencode
 import re
 import xml.etree.ElementTree as ET
 from runtime.xml_utils import parse_xml, trim_hierarchy_xml as _trim_xml, XML_PARSE_ERRORS
@@ -87,6 +88,16 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_optional_int(name: str) -> Optional[int]:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return None
+    try:
+        return int(raw)
+    except Exception:
+        return None
 
 
 class LatestFrameStore:
@@ -2908,10 +2919,41 @@ class DeviceClient:
             self._log(f"relay call failed: {exc}", level=logging.WARNING)
             return {"ok": False, "error": str(exc)}
 
+    def _hierarchy_dump_options(self) -> dict[str, Any]:
+        options: dict[str, Any] = {
+            "compressed": self._U2_HIERARCHY_COMPRESSED,
+        }
+        if self._U2_HIERARCHY_ROOT_IN_ACTIVE:
+            options["root_in_active"] = True
+        if self._U2_HIERARCHY_MAX_DEPTH is not None:
+            options["max_depth"] = max(1, min(int(self._U2_HIERARCHY_MAX_DEPTH), 100))
+        if self._U2_HIERARCHY_PRETTY:
+            options["pretty"] = True
+        return options
+
+    def _hierarchy_dump_path(self) -> str:
+        params: dict[str, str] = {}
+        options = self._hierarchy_dump_options()
+        if options.get("compressed"):
+            params["compressed"] = "1"
+        if options.get("root_in_active"):
+            params["root_in_active"] = "1"
+        if options.get("max_depth") is not None:
+            params["max_depth"] = str(options["max_depth"])
+        if options.get("pretty"):
+            params["pretty"] = "1"
+        if not params:
+            return "/dump/hierarchy"
+        return f"/dump/hierarchy?{urlencode(params)}"
+
     def _hierarchy_via_ws(self, timeout: float = 5.0) -> Optional[str]:
         """Request hierarchy dump via gRPC a11y query, fallback to WS direct."""
         # Prefer gRPC a11y control-plane (query lane) when enabled.
-        q = self._a11y_query("dump_hierarchy", {"timeout": timeout}, timeout=timeout)
+        q = self._a11y_query(
+            "dump_hierarchy",
+            {"timeout": timeout, **self._hierarchy_dump_options()},
+            timeout=timeout,
+        )
         if q.get("ok"):
             data = q.get("data") or {}
             xml = data.get("xml") if isinstance(data, dict) else None
@@ -2975,8 +3017,8 @@ class DeviceClient:
             return None
         action = {
             "op": "dump_hierarchy",
-            "compressed": self._U2_HIERARCHY_COMPRESSED,
             "timeout": self._U2_HIERARCHY_TIMEOUT,
+            **self._hierarchy_dump_options(),
         }
         if force_refresh:
             action["force_fresh_xml"] = True
@@ -3027,9 +3069,7 @@ class DeviceClient:
             actual = self._relay_u2_control_serial(relay)
             if not actual:
                 return None
-            path = "/dump/hierarchy"
-            if self._U2_HIERARCHY_COMPRESSED:
-                path = f"{path}?compressed=1"
+            path = self._hierarchy_dump_path()
             http_timeout = max(1.0, min(float(timeout), self._U2_HIERARCHY_TIMEOUT))
             fut = asyncio.run_coroutine_threadsafe(
                 relay.u2_http(
@@ -3048,6 +3088,7 @@ class DeviceClient:
             if not isinstance(res, dict) or not bool(res.get("ok")):
                 err = res.get("body") if isinstance(res, dict) else res
                 self._log(f"relay http dump_hierarchy failed: {err}", level=logging.WARNING)
+                self._note_hierarchy_relay_u2_failure(str(err or ""))
                 return None
             xml_norm = self._normalize_hierarchy_xml(res.get("body"))
             if not xml_norm:
@@ -3060,6 +3101,7 @@ class DeviceClient:
             return xml_norm
         except Exception as exc:
             self._log(f"relay http dump_hierarchy unavailable: {exc}", level=logging.DEBUG)
+            self._note_hierarchy_relay_u2_failure(str(exc or ""))
             return None
 
     _HIERARCHY_RELAY_U2_RESTART_FAILS = max(1, _env_int("HIERARCHY_RELAY_U2_RESTART_FAILS", 2))
@@ -3071,6 +3113,7 @@ class DeviceClient:
 
     def _note_hierarchy_relay_u2_failure(self, error: str) -> None:
         s = (error or "").lower()
+        dead_backend = self._looks_like_atx_u2_dead_error(RuntimeError(error))
         timeout_only = (
             ("timed out" in s or "timeout" in s)
             and not any(
@@ -3082,6 +3125,7 @@ class DeviceClient:
                     "bad gateway",
                 )
             )
+            and not dead_backend
         )
         if timeout_only:
             # A slow hierarchy dump is not proof that u2 touch is dead. Keep
@@ -3093,10 +3137,12 @@ class DeviceClient:
             or "connection refused" in s
             or "connection reset" in s
             or "bad gateway" in s
+            or dead_backend
         )
         if not hard:
             self._reset_hierarchy_relay_u2_failures()
             return
+        self._hierarchy_last_u2_failure_kind = "hard"
 
         now = time.monotonic()
         if now - self._hierarchy_relay_u2_last_fail_at > self._HIERARCHY_RELAY_U2_FAIL_WINDOW_S:
@@ -3117,7 +3163,11 @@ class DeviceClient:
         bind_age = now - float(getattr(self, "_relay_u2_bind_at", 0.0) or 0.0)
         in_bootstrap = bind_age < 45.0
 
-        if self._has_active_relay() and (in_bootstrap or "timeout" in (error or "").lower()):
+        if (
+            self._has_active_relay()
+            and not dead_backend
+            and (in_bootstrap or "timeout" in (error or "").lower())
+        ):
             self._log(
                 f"hierarchy: relay u2 failed ({error}) — reconnect via relay (skip restart)",
                 level=logging.WARNING,
@@ -3129,6 +3179,14 @@ class DeviceClient:
                 name=f"u2-hierarchy-recover-{self.serial}",
             ).start()
             return
+
+        if dead_backend and self._has_active_relay():
+            self._log(
+                f"hierarchy: relay u2 backend failed repeatedly ({error}) — triggering restart_u2",
+                level=logging.WARNING,
+            )
+            if self._trigger_u2_restart_async(self._u2_host_hint() or ""):
+                return
 
         if self._u2_host:
             self._log(
@@ -3248,6 +3306,11 @@ class DeviceClient:
                     "hierarchy: XML dump timed out; keeping u2 control session live",
                     level=logging.WARNING,
                 )
+            elif self._hierarchy_last_u2_failure_kind == "hard":
+                self._log(
+                    "hierarchy: hard u2 transport failure recorded; relay recovery path owns restart",
+                    level=logging.WARNING,
+                )
             elif self._u2_host:
                 self._recover_u2_ws_mode()
             else:
@@ -3285,6 +3348,9 @@ class DeviceClient:
     # compressed=True cuts dump time from 3-10 s to 1-3 s on complex Samsung screens
     # because dumpWindowHierarchy skips off-screen/invisible view sub-trees.
     _U2_HIERARCHY_COMPRESSED = True
+    _U2_HIERARCHY_ROOT_IN_ACTIVE = _env_bool("U2_HIERARCHY_ROOT_IN_ACTIVE", False)
+    _U2_HIERARCHY_MAX_DEPTH = _env_optional_int("U2_HIERARCHY_MAX_DEPTH")
+    _U2_HIERARCHY_PRETTY = _env_bool("U2_HIERARCHY_PRETTY", False)
     _U2_HIERARCHY_TIMEOUT    = max(1.0, _env_float("U2_HIERARCHY_TIMEOUT", 2.5))
     _A11Y_HIERARCHY_TIMEOUT  = max(1.0, _env_float("A11Y_HIERARCHY_TIMEOUT", 4.0))
     _HIERARCHY_LOCK_WAIT_S   = 0.15  # seconds; fail fast when another dump is running
@@ -3304,7 +3370,7 @@ class DeviceClient:
         try:
             xml = u2_snap.page_source(
                 timeout=self._U2_HIERARCHY_TIMEOUT,
-                compressed=self._U2_HIERARCHY_COMPRESSED,
+                **self._hierarchy_dump_options(),
             )
             if self._is_empty_hierarchy(xml or ""):
                 self._hierarchy_last_u2_failure_kind = "empty"
@@ -4908,6 +4974,10 @@ class DeviceClient:
         markers = (
             "json-rpc http 502",
             "502 bad gateway",
+            "empty reply from server",
+            "remote end closed connection without response",
+            "server disconnected without sending a response",
+            "connection closed without response",
             "uiautomator not connected",
             "uiautomator not running",
             "uiautomation not connected",
@@ -4969,9 +5039,19 @@ class DeviceClient:
                     else:
                         self._u2_reconnect_failed_at = time.monotonic()
                         self._log(f"u2 restart via agent-boot failed for {actual_serial}", level=logging.WARNING)
+                        self._log(
+                            f"u2 restart failed for {actual_serial} — escalating to restart_atx",
+                            level=logging.WARNING,
+                        )
+                        self._trigger_atx_restart_async(host)
                 except Exception as exc2:
                     self._u2_reconnect_failed_at = time.monotonic()
                     self._log(f"u2 restart error for {actual_serial}: {exc2}", level=logging.WARNING)
+                    self._log(
+                        f"u2 restart error for {actual_serial} — escalating to restart_atx",
+                        level=logging.WARNING,
+                    )
+                    self._trigger_atx_restart_async(host)
 
             asyncio.run_coroutine_threadsafe(_do_restart(), loop)
             return True
@@ -5074,14 +5154,18 @@ class DeviceClient:
 
     def _select_u2_relay_serial(self, relay: Any, host: str) -> Optional[str]:
         """Resolve the relay serial for the current U2 host without trusting stale _adb_serial."""
-        if relay is None or not host:
+        if relay is None:
             return None
 
         hints: list[str] = []
         adb_serial = str(self._adb_serial or "")
         if adb_serial:
             hints.append(adb_serial)
-        hints.extend([f"{host}:5555", host])
+        if host:
+            hints.extend([f"{host}:5555", host])
+        logical_serial = str(self.serial or "")
+        if logical_serial:
+            hints.append(logical_serial)
 
         for hint in dict.fromkeys(hints):
             actual = relay.resolve_serial(hint)

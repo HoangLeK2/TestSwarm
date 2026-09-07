@@ -29,6 +29,8 @@ from services.security_audit import emit_security_event
 
 router = APIRouter(prefix="/organizations", tags=["organizations"])
 
+MANAGEABLE_ORG_MEMBER_ROLES = ("admin", "member", "supervisor")
+
 
 def _client_meta(request: Request) -> tuple[str | None, str | None]:
   ip = request.client.host if request.client else None
@@ -57,6 +59,14 @@ async def _current_org_id(db: DB, user: CurrentUser) -> str:
   if not org_id:
     raise HTTPException(status_code=404, detail={"code": "NO_ORGANIZATION"})
   return str(org_id)
+
+
+def _ensure_can_manage_member_role(user: CurrentUser, role: str) -> None:
+  if role == "admin" and not is_superadmin(user):
+    raise HTTPException(
+      status_code=403,
+      detail={"code": "WORKSPACE_ADMIN_SUPERADMIN_ONLY"},
+    )
 
 
 @router.get(
@@ -148,8 +158,9 @@ async def invite_organization_member(
     raise HTTPException(status_code=400, detail={"code": "INVALID_EMAIL"})
 
   invite_role = (body.role or "member").strip().lower()
-  if invite_role not in ("member", "supervisor"):
+  if invite_role not in MANAGEABLE_ORG_MEMBER_ROLES:
     raise HTTPException(status_code=400, detail={"code": "INVALID_ROLE"})
+  _ensure_can_manage_member_role(user, invite_role)
 
   try:
     invitation, existing_user, email_sent = await create_and_email_invitation(
@@ -265,8 +276,9 @@ async def update_organization_member(
   org_id = await _current_org_id(db, user)
   ip, ua = _client_meta(request)
   new_role = (body.role or "").strip().lower()
-  if new_role not in ("member", "supervisor"):
+  if new_role not in MANAGEABLE_ORG_MEMBER_ROLES:
     raise HTTPException(status_code=400, detail={"code": "INVALID_ROLE"})
+  _ensure_can_manage_member_role(user, new_role)
   if member_user_id == user.id:
     raise HTTPException(status_code=400, detail={"code": "CANNOT_CHANGE_OWN_ROLE"})
 
@@ -274,6 +286,7 @@ async def update_organization_member(
   if member is None:
     raise HTTPException(status_code=404, detail={"code": "NOT_FOUND"})
   old_role = member.role
+  _ensure_can_manage_member_role(user, old_role)
   if member.role == "owner":
     raise HTTPException(status_code=400, detail={"code": "CANNOT_CHANGE_OWNER"})
   if member.role == new_role:
@@ -353,6 +366,7 @@ async def remove_organization_member(
     raise HTTPException(status_code=404, detail={"code": "NOT_FOUND"})
   if member.role == "owner":
     raise HTTPException(status_code=400, detail={"code": "CANNOT_REMOVE_OWNER"})
+  _ensure_can_manage_member_role(user, member.role)
   if member_user_id == user.id:
     raise HTTPException(status_code=400, detail={"code": "CANNOT_REMOVE_SELF"})
   await repo.remove_organization_member(db, org_id, member_user_id)

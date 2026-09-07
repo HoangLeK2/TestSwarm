@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import contextlib
+import inspect
 import os
 import threading
 import time
@@ -13,6 +15,7 @@ import casbin
 from casbin import persist
 from casbin.persist import Adapter
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 _MODEL_PATH = Path(__file__).with_name("rbac_model.conf")
 _POLICY_PATH = Path(__file__).with_name("rbac_policy.csv")
@@ -23,12 +26,13 @@ _SUPERADMIN_ROLE = "superadmin"
 _POLICY_COLUMNS = ("ptype", "v0", "v1", "v2", "v3", "v4", "v5")
 _POLICY_CACHE_LOCK = threading.RLock()
 _POLICY_CACHE: dict[str, Any] = {
+    "source_key": None,
     "revision": None,
     "rows": (),
     "checked_at": 0.0,
 }
 _ENFORCER_CACHE: OrderedDict[
-    tuple[int, str, tuple[str, ...], str],
+    tuple[Any, int, str, tuple[str, ...], str],
     casbin.Enforcer,
 ] = OrderedDict()
 
@@ -40,8 +44,14 @@ def permission_domain(user: Any) -> str:
 
 def roles_for_user(user: Any) -> tuple[str, ...]:
     system_role = str(getattr(user, "role", "") or "").strip().lower() or "system"
-    roles = {system_role}
-    if system_role in ("system", "operator"):
+    roles: set[str] = set()
+    if system_role == _SUPERADMIN_ROLE:
+        roles.add(_SUPERADMIN_ROLE)
+    elif system_role in {"support", "platform-admin"}:
+        roles.add(system_role)
+    else:
+        roles.add("system")
+    if system_role in ("system", "operator", "admin", "support"):
         roles.add("operator")
     org_role = str(getattr(user, "org_role", "") or "").strip().lower()
     if org_role:
@@ -84,10 +94,11 @@ async def build_enforcer_for_user_from_db(
 ) -> casbin.Enforcer:
     """Build an enforcer from Casbin policies stored in the database."""
     effective_domain = (domain or permission_domain(user)).strip() or _DEFAULT_DOMAIN
+    policy_source = _policy_cache_source_key(db)
     revision, rows = await load_policy_snapshot_from_db(db)
     user_id = str(getattr(user, "id", "") or "").strip()
     roles = roles_for_user(user)
-    cache_key = (revision, user_id, roles, effective_domain)
+    cache_key = (policy_source, revision, user_id, roles, effective_domain)
     with _POLICY_CACHE_LOCK:
         cached = _ENFORCER_CACHE.get(cache_key)
         if cached is not None:
@@ -117,28 +128,35 @@ async def load_policy_snapshot_from_db(
     if not hasattr(db, "execute"):
         return 0, tuple(_load_seed_policy_rows())
 
+    source_key = _policy_cache_source_key(db)
     now = time.monotonic()
     ttl = _policy_cache_ttl_seconds()
     with _POLICY_CACHE_LOCK:
         cached_rows = _POLICY_CACHE.get("rows") or ()
+        cached_source = _POLICY_CACHE.get("source_key")
         checked_at = float(_POLICY_CACHE.get("checked_at") or 0.0)
-        if cached_rows and ttl > 0 and now - checked_at < ttl:
+        if cached_rows and cached_source == source_key and ttl > 0 and now - checked_at < ttl:
             return int(_POLICY_CACHE["revision"]), cached_rows
 
     revision = await load_policy_revision_from_db(db)
     with _POLICY_CACHE_LOCK:
+        cached_source = _POLICY_CACHE.get("source_key")
         cached_revision = _POLICY_CACHE.get("revision")
         cached_rows = _POLICY_CACHE.get("rows") or ()
-        if cached_rows and cached_revision == revision:
+        if cached_rows and cached_source == source_key and cached_revision == revision:
             _POLICY_CACHE["checked_at"] = now
             return revision, cached_rows
 
     rows = tuple(await load_policy_rows_from_db(db))
     with _POLICY_CACHE_LOCK:
-        if _POLICY_CACHE.get("revision") != revision:
+        if (
+            _POLICY_CACHE.get("source_key") != source_key
+            or _POLICY_CACHE.get("revision") != revision
+        ):
             _ENFORCER_CACHE.clear()
         _POLICY_CACHE.update(
             {
+                "source_key": source_key,
                 "revision": revision,
                 "rows": rows,
                 "checked_at": now,
@@ -148,39 +166,53 @@ async def load_policy_snapshot_from_db(
 
 
 async def load_policy_revision_from_db(db: Any) -> int:
-    result = await db.execute(
-        text(
-            f"""
-            SELECT revision
-              FROM {_CASBIN_POLICY_REVISION_TABLE}
-             WHERE id = 1
-            """
+    try:
+        result = await db.execute(
+            text(
+                f"""
+                SELECT revision
+                  FROM {_CASBIN_POLICY_REVISION_TABLE}
+                 WHERE id = 1
+                """
+            )
         )
-    )
+    except SQLAlchemyError:
+        return 0
     row = result.fetchone()
+    if inspect.isawaitable(row):
+        row = await row
     if row is None:
         return 0
-    return int(row[0] or 0)
+    try:
+        return int(row[0] or 0)
+    except (KeyError, TypeError, ValueError, IndexError):
+        return 0
 
 
 async def load_policy_rows_from_db(db: Any) -> list[tuple[str, ...]]:
     """Read Casbin policy rows from the canonical DB table."""
     if not hasattr(db, "execute"):
         return _load_seed_policy_rows()
-    result = await db.execute(
-        text(
-            f"""
-            SELECT ptype, v0, v1, v2, v3, v4, v5
-              FROM {_CASBIN_RULE_TABLE}
-             ORDER BY id ASC
-            """
+    try:
+        result = await db.execute(
+            text(
+                f"""
+                SELECT ptype, v0, v1, v2, v3, v4, v5
+                  FROM {_CASBIN_RULE_TABLE}
+                 ORDER BY id ASC
+                """
+            )
         )
-    )
+    except SQLAlchemyError:
+        return _load_seed_policy_rows()
+    raw_rows = result.fetchall()
+    if inspect.isawaitable(raw_rows):
+        raw_rows = await raw_rows
     rows = [
         tuple("" if value is None else str(value) for value in row)
-        for row in result.fetchall()
+        for row in raw_rows
     ]
-    return rows
+    return rows or _load_seed_policy_rows()
 
 
 def build_enforcer_from_policy_rows(
@@ -210,8 +242,26 @@ def _attach_user_roles(
 def clear_rbac_cache() -> None:
     _build_enforcer_for_identity.cache_clear()
     with _POLICY_CACHE_LOCK:
-        _POLICY_CACHE.update({"revision": None, "rows": (), "checked_at": 0.0})
+        _POLICY_CACHE.update(
+            {"source_key": None, "revision": None, "rows": (), "checked_at": 0.0}
+        )
         _ENFORCER_CACHE.clear()
+
+
+def _policy_cache_source_key(db: Any) -> tuple[str, int]:
+    get_bind = getattr(db, "get_bind", None)
+    if callable(get_bind):
+        try:
+            bind = get_bind()
+        except Exception:
+            bind = None
+        if inspect.isawaitable(bind):
+            with contextlib.suppress(Exception):
+                bind.close()
+            bind = None
+        if bind is not None and not inspect.isawaitable(bind):
+            return ("bind", id(bind))
+    return ("db", id(db))
 
 
 def _policy_cache_ttl_seconds() -> float:

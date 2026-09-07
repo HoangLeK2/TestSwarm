@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI
@@ -20,9 +21,11 @@ def test_social_ext_contract_exports_stable_interfaces() -> None:
     from services.social_ext.contract import (
         CONTRACT_VERSION,
         PlatformContentTypeSchema,
+        PlatformCapabilitySupport,
         PlatformHandler,
         PlatformParser,
         PlatformScenarioLib,
+        SocialCapabilitySchema,
     )
 
     assert CONTRACT_VERSION == "2.0.0"
@@ -30,6 +33,8 @@ def test_social_ext_contract_exports_stable_interfaces() -> None:
     assert PlatformHandler
     assert PlatformScenarioLib
     assert PlatformContentTypeSchema
+    assert SocialCapabilitySchema
+    assert PlatformCapabilitySupport
 
     parse_sig = inspect.signature(PlatformParser.parse)
     assert list(parse_sig.parameters) == ["self", "snapshot", "context"]
@@ -49,11 +54,46 @@ def test_default_social_registry_loads_facebook_and_agent_boot_storage_boundary(
     assert facebook.enabled_by_default is True
     assert "social_open_comments" in facebook.scenario_lib.step_types
     assert set(facebook.scenario_lib.entities) >= {"posts", "comments"}
+    assert facebook.scenario_lib.capabilities[
+        "social.connection.request"
+    ].facets["connection_kind"] == "friend_request"
+    assert facebook.scenario_lib.capabilities[
+        "social.content.interact"
+    ].facets["content_actions"] == ["like", "comment", "share"]
+    assert (
+        facebook.scenario_lib.capabilities[
+            "social.target.lease"
+        ].execution_mode
+        == "generic_recipe"
+    )
 
     for content_type in facebook.content_schema.content_types:
         assert content_type.storage_owner == "agent-boot"
         assert content_type.raw_data_owner == "agent-boot"
         assert content_type.persisted_in_device_farm is False
+
+
+def test_social_action_and_extract_schema_accept_capability_first_fields() -> None:
+    from api.schemas.scenario import ContentInteractionStep, ExtractStep
+    from common.scenario_schema import STEP_SCHEMA
+
+    comment_step = ContentInteractionStep(
+        type="content_interaction",
+        platform="auto",
+        action="comment",
+        comment_text="${COMMENT_TEXT}",
+    )
+    extract_step = ExtractStep(
+        type="extract",
+        entity="comments",
+        platform="facebook",
+        content_type="fb_comment",
+    )
+
+    assert comment_step.platform == "auto"
+    assert comment_step.comment_text == "${COMMENT_TEXT}"
+    assert extract_step.platform == "facebook"
+    assert "comment_text" in STEP_SCHEMA["content_interaction"]["optional"]
 
 
 def test_social_registry_rejects_parser_without_handler() -> None:
@@ -141,6 +181,7 @@ async def test_social_ext_routes_discover_platforms_and_flags() -> None:
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         platforms = await client.get("/api/social-ext/platforms")
+        catalog = await client.get("/api/social-ext/node-catalog")
         steps = await client.get("/api/social-ext/platforms/facebook/steps")
         flags = await client.get("/api/social-ext/orgs/acme/platforms")
         enabled = await client.post(
@@ -149,12 +190,51 @@ async def test_social_ext_routes_discover_platforms_and_flags() -> None:
         )
 
     assert platforms.status_code == 200
-    assert platforms.json()["platforms"][0]["name"] == "facebook"
-    assert platforms.json()["platforms"][0]["storage_owner"] == "agent-boot"
+    facebook_platform = platforms.json()["platforms"][0]
+    assert facebook_platform["name"] == "facebook"
+    assert facebook_platform["storage_owner"] == "agent-boot"
+    assert facebook_platform["capability_count"] >= 1
+    assert (
+        facebook_platform["capabilities"]["social.connection.request"][
+            "facets"
+        ]["connection_kind"]
+        == "friend_request"
+    )
+    assert facebook_platform["capabilities"]["social.content.interact"]["facets"][
+        "content_actions"
+    ] == ["like", "comment", "share"]
+    assert (
+        "connection_request"
+        in facebook_platform["capability_schemas"][
+            "social.connection.request"
+        ]["step_types"]
+    )
+    assert catalog.status_code == 200
+    catalog_body = catalog.json()
+    assert catalog_body["execution_model"] == "deterministic_sequence"
+    content_node = next(
+        node
+        for node in catalog_body["nodes"]
+        if node["node_type"] == "content_interaction"
+    )
+    assert content_node["capability_id"] == "social.content.interact"
+    assert {preset["id"] for preset in content_node["presets"]} >= {
+        "content.comment.create",
+        "content.reaction.add",
+    }
+    comment_field = next(
+        field for field in content_node["fields"] if field["name"] == "comment_text"
+    )
+    assert comment_field["visible_when"] == {"action": "comment"}
 
     assert steps.status_code == 200
     body = steps.json()
     assert "social_open_comments" in body["step_types"]
+    assert body["capabilities"]["social.target.lease"]["execution_mode"] == "generic_recipe"
+    assert (
+        "lease_connection_candidate"
+        in body["capability_schemas"]["social.target.lease"]["step_types"]
+    )
     assert body["extraction_strategies"]["posts"]["storage_owner"] == "agent-boot"
 
     assert flags.status_code == 200
@@ -271,6 +351,11 @@ async def test_scenario_templates_can_filter_facebook_platform(monkeypatch) -> N
         ]
 
     monkeypatch.setattr(scenarios, "list_scenario_template_rows", fake_template_rows)
+    monkeypatch.setattr(
+        scenarios,
+        "org_member_user_ids",
+        AsyncMock(return_value=["user-1"]),
+    )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/scenarios/templates?platform=facebook")

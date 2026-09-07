@@ -39,6 +39,7 @@ from temporal.shared import (
 from temporal.workflows import (
     ScenarioStepsWorkflow,
     ScenarioWorkflow,
+    _activity_failure_suggests_stall,
     _append_sub_result,
     _finish_sub_results,
     _handle_set_variable,
@@ -86,6 +87,12 @@ def test_workflow_failure_message_replaces_generic_child_failure():
     assert _workflow_failure_message(verbose_exc, fallback="child failed without step detail") == (
         "child failed without step detail"
     )
+
+
+def test_activity_failure_suggests_stall_for_temporal_timeout_messages():
+    assert _activity_failure_suggests_stall("activity heartbeat timeout")
+    assert _activity_failure_suggests_stall("schedule_to_start timed out")
+    assert not _activity_failure_suggests_stall("tap_selector: element not found")
 
 
 class TestResolveStep:
@@ -582,6 +589,11 @@ class TestWorkflowProgress:
         assert p.current_step == 0
         assert p.total_steps == 0
         assert p.device_serial == ""
+        assert p.current_activity_id is None
+        assert p.current_step_activity_id is None
+        assert p.current_phase is None
+        assert p.side_effect_class is None
+        assert p.activity_attempt == 0
 
     def test_update_progress(self):
         p = WorkflowProgress()
@@ -591,6 +603,66 @@ class TestWorkflowProgress:
         p.device_serial = "test123"
         assert p.status == "paused"
         assert p.current_step == 5
+
+    def test_live_progress_exposes_activity_metadata(self):
+        wf = ScenarioStepsWorkflow()
+        wf._total_steps = 10
+        wf._current_step = 3
+        wf._current_step_type = "tap"
+        wf._current_step_id = "step-tap"
+        wf._current_step_path = "root.step-tap"
+        wf._running_step = False
+
+        wf._mark_activity_progress(
+            activity_id="df-exec-1-0003-tap-a1",
+            step_activity_id="df-exec-1-0003-tap-a1",
+            phase="scheduled",
+            side_effect_class="device_side_effect",
+            activity_attempt=1,
+        )
+
+        progress = wf.get_live_progress()
+        assert progress["current_activity_id"] == "df-exec-1-0003-tap-a1"
+        assert progress["current_step_activity_id"] == "df-exec-1-0003-tap-a1"
+        assert progress["current_phase"] == "scheduled"
+        assert progress["side_effect_class"] == "device_side_effect"
+        assert progress["activity_attempt"] == 1
+
+        activity_progress = wf.get_activity_progress()
+        assert activity_progress == {
+            "current_activity_id": "df-exec-1-0003-tap-a1",
+            "current_step_activity_id": "df-exec-1-0003-tap-a1",
+            "current_phase": "scheduled",
+            "side_effect_class": "device_side_effect",
+            "activity_attempt": 1,
+            "current_step": 3,
+            "current_step_type": "tap",
+            "current_step_id": "step-tap",
+            "current_step_path": "root.step-tap",
+            "current_loop_iter": None,
+            "running_step": False,
+        }
+
+    def test_activity_progress_clears_when_step_finishes(self):
+        wf = ScenarioStepsWorkflow()
+        wf._current_step = 3
+        wf._current_step_type = "tap"
+        wf._mark_activity_progress(
+            activity_id="df-exec-1-0003-tap-a1",
+            step_activity_id="df-exec-1-0003-tap-a1",
+            phase="scheduled",
+            side_effect_class="device_side_effect",
+            activity_attempt=1,
+        )
+
+        wf._mark_step_finished({"index": 3, "type": "tap", "ok": True})
+
+        progress = wf.get_activity_progress()
+        assert progress["current_activity_id"] is None
+        assert progress["current_step_activity_id"] is None
+        assert progress["current_phase"] is None
+        assert progress["side_effect_class"] is None
+        assert progress["activity_attempt"] == 0
 
 
 # ── End-to-end workflow structure tests ──────────────────────────────────────

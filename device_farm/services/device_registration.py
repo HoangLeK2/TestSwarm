@@ -30,9 +30,10 @@ async def get_or_claim_device_for_user(
     serial = (serial or "").strip()
     ref = await lookup_device_by_serial(db, serial)
     if ref:
-        if ref.user_id and ref.user_id != user_id:
+        managed_by_current_org = bool(org_id and ref.managed_by_org_id == org_id)
+        if ref.user_id and ref.user_id != user_id and not managed_by_current_org:
             raise DeviceRegistrationError(409, "serial already registered by another user")
-        if ref.org_id and org_id and ref.org_id != org_id:
+        if ref.org_id and org_id and ref.org_id != org_id and not managed_by_current_org:
             raise DeviceRegistrationError(
                 409, "serial already registered by another organization"
             )
@@ -48,6 +49,8 @@ async def get_or_claim_device_for_user(
                 existing = await repo.get_device_by_serial(db, serial)
         if existing is None:
             raise DeviceRegistrationError(500, "device lookup failed")
+        if existing.managed_by_org_id is None and org_id:
+            existing.managed_by_org_id = org_id
         if existing.user_id is None:
             await repo.assign_device_to_user(db, serial, user_id)
         if display_name and display_name != existing.name:
@@ -56,7 +59,9 @@ async def get_or_claim_device_for_user(
 
     if not org_id:
         raise DeviceRegistrationError(400, "organization required")
-    return await repo.create_device(db, serial, display_name, user_id, org_id=org_id)
+    device = await repo.create_device(db, serial, display_name, user_id, org_id=org_id)
+    device.managed_by_org_id = org_id
+    return device
 
 
 def http_exception_from_registration(err: DeviceRegistrationError) -> HTTPException:

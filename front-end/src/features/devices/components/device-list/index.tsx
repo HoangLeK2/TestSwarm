@@ -102,6 +102,7 @@ export function DeviceList() {
         d.brand,
         d.model,
         d.android_version,
+        relay?.name,
         relay?.hostname,
         relay?.relay_id
       ].some((value) =>

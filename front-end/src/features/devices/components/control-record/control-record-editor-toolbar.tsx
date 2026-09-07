@@ -82,6 +82,7 @@ type ControlRecordEditorToolbarProps = {
   flowEnabled: boolean;
   flowMode: boolean;
   onToggleFlowMode: () => void;
+  variant?: 'standalone' | 'workbench';
   labels: ControlRecordEditorToolbarLabels;
 };
 
@@ -113,10 +114,18 @@ export function ControlRecordEditorToolbar({
   flowEnabled,
   flowMode,
   onToggleFlowMode,
+  variant = 'standalone',
   labels
 }: ControlRecordEditorToolbarProps) {
   return (
-    <div className='flex shrink-0 items-center gap-1 border-b border-border/50 bg-background px-2 py-2'>
+    <div
+      className={cn(
+        'flex shrink-0 items-center gap-1 bg-background',
+        variant === 'standalone'
+          ? 'border-b border-border/50 px-2 py-2'
+          : 'min-w-0 bg-transparent'
+      )}
+    >
       {showClosePicker ? (
         <Button
           type='button'
@@ -129,7 +138,7 @@ export function ControlRecordEditorToolbar({
           <ChevronRight className='size-3.5' />
         </Button>
       ) : null}
-      <div className='flex min-w-0 flex-1 flex-nowrap items-center gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'>
+      <div className='flex min-w-0 flex-1 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'>
         {flowEnabled ? (
           <Button
             size='sm'

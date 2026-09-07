@@ -13,6 +13,7 @@ from Giám sát trực tiếp on any transport blip:
 from __future__ import annotations
 
 import asyncio
+import services
 import threading
 from types import SimpleNamespace
 
@@ -42,6 +43,7 @@ def _install_fake_redis(monkeypatch: pytest.MonkeyPatch) -> _FakeRedis:
         key=lambda name: f"df:{name}",
     )
     monkeypatch.setitem(__import__("sys").modules, "services.redis_store", module)
+    monkeypatch.setattr(services, "redis_store", module, raising=False)
     return fake
 
 

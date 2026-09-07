@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from sqlalchemy import update
@@ -26,6 +28,38 @@ def build_connect_router(manager: DeviceManager, config: Config) -> APIRouter:
         from common.scenario_schema import get_scenario_schema
 
         return get_scenario_schema()
+
+    @router.get("/scenario/device-capabilities/{serial}")
+    async def api_scenario_device_capabilities(serial: str):
+        from services.scenario_node_preflight import collect_node_capabilities
+
+        device = manager.get_device(serial)
+        capabilities = collect_node_capabilities(device, serial=serial)
+        return {
+            "serial": serial,
+            "capabilities": capabilities,
+        }
+
+    @router.post("/scenario/preflight/{serial}")
+    async def api_scenario_preflight(serial: str, body: dict[str, Any]):
+        from services.scenario_node_preflight import (
+            collect_node_capabilities,
+            preflight_scenario_node_capabilities_for_capabilities,
+        )
+
+        scenario = body.get("scenario") if isinstance(body.get("scenario"), dict) else body
+        device = manager.get_device(serial)
+        capabilities = collect_node_capabilities(device, serial=serial)
+        result = preflight_scenario_node_capabilities_for_capabilities(
+            capabilities,
+            scenario,
+            device=device,
+        )
+        return {
+            "serial": serial,
+            "capabilities": capabilities,
+            "preflight": result.to_dict(),
+        }
 
     @router.post("/connect/register")
     async def api_connect_register(body: AdbRegisterRequest):

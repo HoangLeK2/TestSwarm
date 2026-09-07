@@ -130,11 +130,24 @@ class WatchdogThread(threading.Thread):
             self._bad_since.pop(serial, None)
             device.reconnect_attempts = 0
             # ── atx-agent sub-check: HTTP /ping probe on port 7912 ───────────
-            # Detects frozen atx-agent before the next u2 RPC times out.
-            # Only probe when u2 is currently connected (_u2_host set, _u2 live).
-            atx_host = getattr(device, "_u2_host", None)
-            u2_live   = getattr(device, "_u2", None) is not None
-            if atx_host and u2_live:
+            # Detects frozen atx-agent before the next u2 RPC times out. In
+            # relay mode, keep probing even after the local _u2 object was
+            # evicted; a missing client session is not proof that device-side
+            # atx/u2 recovered.
+            host_hint = getattr(device, "_u2_host_hint", None)
+            if callable(host_hint):
+                atx_host = str(host_hint() or "")
+            else:
+                atx_host = str(getattr(device, "_u2_host", None) or "")
+            u2_live = getattr(device, "_u2", None) is not None
+            relay_live = False
+            has_active_relay = getattr(device, "_has_active_relay", None)
+            if callable(has_active_relay):
+                try:
+                    relay_live = bool(has_active_relay())
+                except Exception:
+                    relay_live = False
+            if u2_live or relay_live:
                 self._check_atx_agent(device, atx_host)
             return
 
@@ -225,11 +238,13 @@ class WatchdogThread(threading.Thread):
             except Exception as exc:
                 log.debug("[%s] atx-agent relay probe failed: %s", device.serial, exc)
 
-        try:
-            with urllib.request.urlopen(f"http://{host}:7912/ping", timeout=1.0) as resp:
-                return 200 <= int(resp.status) < 300
-        except Exception:
-            return False
+        if host:
+            try:
+                with urllib.request.urlopen(f"http://{host}:7912/ping", timeout=1.0) as resp:
+                    return 200 <= int(resp.status) < 300
+            except Exception:
+                return False
+        return False
 
     def _track_bad_state(self, device: DeviceClient) -> None:
         """Track how long a device has been in a bad state; mark DEAD if too long."""

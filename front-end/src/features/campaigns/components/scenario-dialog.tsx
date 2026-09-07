@@ -13,6 +13,8 @@ import {
   useCampaignDevices,
   useCompileCampaignScenario,
   useScenarios,
+  useScenarioDeviceCapabilities,
+  useScenarioSchema,
   useUpdateCampaignScenario,
   useUpdateScenario,
   useCompileScenario
@@ -32,6 +34,7 @@ import {
   DialogTitle,
   DialogTrigger
 } from '@/components/ui/dialog';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
   Select,
   SelectContent,
@@ -44,6 +47,7 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   FileText,
   Trash2,
+  AlertCircle,
   Circle,
   Square,
   RefreshCw,
@@ -81,6 +85,11 @@ import { VariableEditor } from '@/components/variable-editor';
 import { useTranslations } from 'next-intl';
 import { useAccountGroups } from '@/features/account-groups/hooks/use-account-groups';
 import { FlowEditor } from './flow-editor/flow-editor';
+import { deviceCapabilityMapFromDevice } from '../lib/node-capabilities';
+import {
+  scenarioCapabilityIssueSummary,
+  scenarioCapabilityWarningSummary
+} from '../lib/scenario-capability-preflight';
 import { deriveNestedInlineRunStates } from './flow-editor/inline-run-key';
 import { canPersistScenario } from './flow-editor/nested-step-edit';
 import { sanitizeScenarioStepsForApi } from '@/features/devices/lib/sanitize-scenario-steps-for-api';
@@ -88,6 +97,10 @@ import { validateScenarioStepsForApi } from '../utils/validate-scenario-steps-fo
 import { stepsToGraph } from '../utils/steps-to-graph';
 import type { FlowNode, FlowEdge } from './scenario-steps/types';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
+import {
+  scenarioDeviceCapabilitiesApi,
+  type ScenarioCapabilityPreflightOut
+} from '../services/api';
 import {
   findSelectorInXml,
   getScreenSignature
@@ -521,6 +534,9 @@ export function ScenarioDialog({
   const tScenarioValidation = useTranslations(
     'campaignsFeature.scenarioValidation'
   );
+  const tCapabilityPreflight = useTranslations(
+    'campaignsFeature.capabilityPreflight'
+  );
   const variablePreviewValues = useMemo(
     () => flattenVarDefs(variables),
     [variables]
@@ -543,6 +559,7 @@ export function ScenarioDialog({
   const isPending = useRowApi ? savingRow : savingLegacy;
   const compiling = useRowApi ? compilingRow : compilingLegacy;
   const { data: devices = [] } = useCampaignDevices(campaign.id);
+  const { data: scenarioSchema } = useScenarioSchema();
   const [previewSerial, setPreviewSerial] = useState('');
   const [xmlSerial, setXmlSerial] = useState('');
   /** Nhiều màn hình: mỗi lần "Thu thập XML" = 1 snapshot từ màn hình hiện tại */
@@ -574,6 +591,10 @@ export function ScenarioDialog({
   const [stepRunStates, setStepRunStates] = useState<
     Record<string, 'idle' | 'running' | 'ok' | 'error'>
   >({});
+  const [scenarioPreflight, setScenarioPreflight] =
+    useState<ScenarioCapabilityPreflightOut | null>(null);
+  const [scenarioPreflightChecking, setScenarioPreflightChecking] =
+    useState(false);
   const [flowCoordPick, setFlowCoordPick] = useState<null | {
     fgId: string;
     kind: 'tap' | 'swipe';
@@ -821,6 +842,47 @@ export function ScenarioDialog({
     []
   );
 
+  const ensureScenarioCapabilityPreflight = useCallback(
+    async (serial: string, scenario: Record<string, unknown>) => {
+      setScenarioPreflightChecking(true);
+      try {
+        const result = await scenarioDeviceCapabilitiesApi.preflight(
+          serial,
+          scenario
+        );
+        setScenarioPreflight(result);
+        if (!result.preflight.ok) {
+          const summary = scenarioCapabilityIssueSummary(result.preflight, {
+            moreLabel: (count) => tCapabilityPreflight('summaryMore', { count })
+          });
+          toast.error(
+            summary
+              ? tCapabilityPreflight('stepBlockedToast', { summary })
+              : tCapabilityPreflight('stepBlockedToastFallback')
+          );
+          return false;
+        }
+        const warning = scenarioCapabilityWarningSummary(result.preflight, {
+          moreLabel: (count) => tCapabilityPreflight('summaryMore', { count })
+        });
+        if (warning) {
+          toast.warning(
+            tCapabilityPreflight('warningToast', { summary: warning })
+          );
+        }
+        return true;
+      } catch (error) {
+        toast.error(
+          formatFarmApiError(error, tCapabilityPreflight('stepFailedFallback'))
+        );
+        return false;
+      } finally {
+        setScenarioPreflightChecking(false);
+      }
+    },
+    [tCapabilityPreflight]
+  );
+
   const handleFlowRunLeaf = useCallback(
     async (fgId: string, step: FlowStep) => {
       const serial = previewSerial?.trim();
@@ -831,14 +893,23 @@ export function ScenarioDialog({
         return;
       }
       if (flowRunningIdsRef.current.has(fgId)) return;
+      const payload = JSON.parse(JSON.stringify(step)) as Record<string, any>;
+      delete payload._fgId;
       flowRunningIdsRef.current.add(fgId);
+      const preflightOk = await ensureScenarioCapabilityPreflight(serial, {
+        steps: [payload]
+      });
+      if (!preflightOk) {
+        flowRunningIdsRef.current.delete(fgId);
+        setFlowRunStates((s) => ({ ...s, [fgId]: 'error' }));
+        clearPreviewRunStateAfterDelay(fgId, setFlowRunStates);
+        return;
+      }
       setFlowRunStates((s) => ({ ...s, [fgId]: 'running' }));
       flowRunAbortRef.current?.abort();
       const ctrl = new AbortController();
       flowRunAbortRef.current = ctrl;
       const runId = previewSession.beginRun();
-      const payload = JSON.parse(JSON.stringify(step)) as Record<string, any>;
-      delete payload._fgId;
       try {
         await previewScenarioStream(
           serial,
@@ -871,6 +942,7 @@ export function ScenarioDialog({
       variables,
       previewSession,
       applyPreviewStepRunEvent,
+      ensureScenarioCapabilityPreflight,
       clearPreviewRunStateAfterDelay
     ]
   );
@@ -926,6 +998,19 @@ export function ScenarioDialog({
         return;
       }
       if (stepRunStates[runKey] === 'running') return;
+      const payload = JSON.parse(JSON.stringify(step)) as Record<
+        string,
+        unknown
+      >;
+      delete payload._fgId;
+      const preflightOk = await ensureScenarioCapabilityPreflight(serial, {
+        steps: [payload]
+      });
+      if (!preflightOk) {
+        setStepRunStates((s) => ({ ...s, [runKey]: 'error' }));
+        clearPreviewRunStateAfterDelay(runKey, setStepRunStates);
+        return;
+      }
 
       stepRunAbortRef.current?.abort();
       const ctrl = new AbortController();
@@ -933,11 +1018,6 @@ export function ScenarioDialog({
       const runId = previewSession.beginRun();
 
       setStepRunStates((s) => ({ ...s, [runKey]: 'running' }));
-      const payload = JSON.parse(JSON.stringify(step)) as Record<
-        string,
-        unknown
-      >;
-      delete payload._fgId;
 
       try {
         await previewScenarioStream(
@@ -978,6 +1058,7 @@ export function ScenarioDialog({
       variables,
       previewSession,
       applyPreviewStepRunEvent,
+      ensureScenarioCapabilityPreflight,
       clearPreviewRunStateAfterDelay
     ]
   );
@@ -1548,6 +1629,10 @@ export function ScenarioDialog({
       toast.error('Chưa có bước nào để test');
       return;
     }
+    const preflightOk = await ensureScenarioCapabilityPreflight(serial, {
+      steps: sanitizedSteps
+    });
+    if (!preflightOk) return;
     previewAllAbortRef.current?.abort();
     const ctrl = new AbortController();
     previewAllAbortRef.current = ctrl;
@@ -1777,6 +1862,16 @@ export function ScenarioDialog({
   /** Luôn có thiết bị xem trước khi campaign có device — tránh cột phải trống khi chọn "Không gửi XML". */
   const embedSerial = xmlSerial || devices[0]?.serial || '';
   const runtimeDevice = devices.find((device) => device.serial === embedSerial);
+  const { data: runtimeCapabilitySnapshot } = useScenarioDeviceCapabilities(
+    runtimeDevice?.serial
+  );
+  const runtimeDeviceCapabilities = useMemo(
+    () => ({
+      ...(deviceCapabilityMapFromDevice(runtimeDevice) ?? {}),
+      ...(runtimeCapabilitySnapshot?.capabilities ?? {})
+    }),
+    [runtimeDevice, runtimeCapabilitySnapshot?.capabilities]
+  );
   const { data: deviceAccountLinks = [], isLoading: accountsLoading } =
     useDeviceAccounts(runtimeDevice?.id ?? '');
   const primaryLink = deviceAccountLinks.find((link) => link.is_primary);
@@ -2242,6 +2337,49 @@ export function ScenarioDialog({
                 </div>
               </div>
 
+              {scenarioPreflightChecking || scenarioPreflight ? (
+                <Alert
+                  variant={
+                    scenarioPreflight && !scenarioPreflight.preflight.ok
+                      ? 'destructive'
+                      : 'default'
+                  }
+                  className='rounded-md py-2 text-xs'
+                >
+                  {scenarioPreflightChecking ? (
+                    <Loader2 className='size-3.5 animate-spin' />
+                  ) : (
+                    <AlertCircle className='size-3.5' />
+                  )}
+                  <AlertTitle className='text-xs'>
+                    {scenarioPreflightChecking
+                      ? tCapabilityPreflight('checkingTitle')
+                      : scenarioPreflight?.preflight.ok
+                        ? tCapabilityPreflight('stepOkTitle')
+                        : tCapabilityPreflight('stepBlockedTitle')}
+                  </AlertTitle>
+                  <AlertDescription className='text-xs'>
+                    {scenarioPreflight?.preflight.ok
+                      ? scenarioCapabilityWarningSummary(
+                          scenarioPreflight.preflight,
+                          {
+                            moreLabel: (count) =>
+                              tCapabilityPreflight('summaryMore', { count })
+                          }
+                        ) || tCapabilityPreflight('stepReadyDescription')
+                      : scenarioPreflight
+                        ? scenarioCapabilityIssueSummary(
+                            scenarioPreflight.preflight,
+                            {
+                              moreLabel: (count) =>
+                                tCapabilityPreflight('summaryMore', { count })
+                            }
+                          ) || tCapabilityPreflight('stepMissingDescription')
+                        : tCapabilityPreflight('checkingStepDescription')}
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+
               {showFlowEditUi ? (
                 <div className='space-y-2'>
                   {flowCoordPick && (
@@ -2272,6 +2410,8 @@ export function ScenarioDialog({
                           step={flowDetailStep}
                           onChange={handleFlowDetailChange}
                           onClose={() => setFlowSelectedFgId(null)}
+                          nodeCapabilities={scenarioSchema?.node_capabilities}
+                          deviceCapabilities={runtimeDeviceCapabilities}
                           onRequestPickSelector={undefined}
                           onRequestPickTapCoords={
                             flowSelectedFgId
@@ -2340,6 +2480,8 @@ export function ScenarioDialog({
                     campaignScenarios={runScenarioCampaignOptions}
                     availableVariables={availableScenarioVariables}
                     variablePreviewValues={variablePreviewValues}
+                    nodeCapabilities={scenarioSchema?.node_capabilities}
+                    deviceCapabilities={runtimeDeviceCapabilities}
                     onRunStep={handleInlineRunStep}
                     stepRunStates={stepRunStates}
                     onStopInlineRun={hardStopPreview}

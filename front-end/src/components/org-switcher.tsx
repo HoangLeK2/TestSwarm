@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  ArrowLeft,
   ChevronsUpDown,
   Settings,
   UserPlus,
@@ -28,7 +29,7 @@ import { useSidebar } from '@/components/ui/sidebar';
 import { cn } from '@/lib/utils';
 import { OverflowTooltip } from './overflow-tooltip';
 import type { ProtoOrganization } from '@/features/device-farm';
-import { useRouter } from '@/i18n/navigation';
+import { usePathname, useRouter } from '@/i18n/navigation';
 import Image from 'next/image';
 import { ROUTES } from '@/config/routes';
 import { useConfirm } from '@/providers/modal-provider';
@@ -36,12 +37,15 @@ import { formatOrgDisplayName } from '@/features/organization/utils/org-name';
 import { useQueryClient } from '@tanstack/react-query';
 import { Input } from '@/components/ui/input';
 import { useOrganizationsInfinite } from '@/features/organization/hooks/use-organizations';
+import { useUser } from '@/features/auth';
 
 export function OrgSwitcher() {
   const { open } = useSidebar();
   const { currentOrg, setCurrentOrg } = useOrganization();
   const router = useRouter();
+  const pathname = usePathname();
   const t = useTranslations('organization');
+  const { user } = useUser();
   const confirm = useConfirm();
   const queryClient = useQueryClient();
   const [orgSearch, setOrgSearch] = React.useState('');
@@ -71,6 +75,47 @@ export function OrgSwitcher() {
   );
 
   const currentOrgName = formatOrgName(currentOrg?.businessName);
+  const isAdminConsole =
+    pathname === ROUTES.ADMIN.ROOT ||
+    pathname.startsWith(`${ROUTES.ADMIN.ROOT}/`);
+  const canReturnToAdminConsole =
+    user?.role === 'superadmin' || user?.orgRole === 'admin';
+
+  if (isAdminConsole) {
+    return (
+      <SidebarMenu>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            size='lg'
+            className='w-full cursor-default gap-3 hover:bg-transparent active:bg-transparent'
+            aria-label={t('adminConsoleTitle')}
+          >
+            <div className='flex aspect-square size-8 items-center justify-center rounded-lg'>
+              <Image
+                src='/logo.png'
+                alt='admin-console-logo'
+                className='rounded-full object-contain'
+                width={32}
+                height={32}
+              />
+            </div>
+            {open ? (
+              <div className='flex min-w-0 flex-1 flex-col gap-0.5 leading-none'>
+                <OverflowTooltip asChild>
+                  <span className='block min-w-0 max-w-full truncate text-sm font-semibold sm:text-base lg:max-w-[250px] xl:max-w-[320px]'>
+                    {t('adminConsoleTitle')}
+                  </span>
+                </OverflowTooltip>
+                <span className='truncate text-xs text-muted-foreground'>
+                  {t('adminConsoleScope')}
+                </span>
+              </div>
+            ) : null}
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+      </SidebarMenu>
+    );
+  }
 
   const handleOrgSwitch = async (org: any) => {
     const confirmed = await confirm({
@@ -161,6 +206,19 @@ export function OrgSwitcher() {
             </div>
 
             <DropdownMenuSeparator />
+
+            {canReturnToAdminConsole ? (
+              <>
+                <DropdownMenuItem
+                  onClick={() => router.push(ROUTES.ADMIN.ROOT)}
+                  className='flex items-center gap-3 p-2'
+                >
+                  <ArrowLeft className='h-4 w-4' />
+                  <span>{t('backToAdminConsole')}</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+              </>
+            ) : null}
 
             {/* General Actions */}
             <DropdownMenuItem

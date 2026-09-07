@@ -154,7 +154,7 @@ function XmlTreeViewerInner({
 
   return (
     <div className='flex h-full flex-col'>
-      {/* Header — two rows so controls fit the 280px hierarchy column */}
+      {/* Header uses two rows so controls fit the compact hierarchy drawer. */}
       <div className='shrink-0 border-b border-border/60 bg-muted/20'>
         <div className='flex items-center gap-1 px-2.5 pb-1 pt-2'>
           <span className='min-w-0 flex-1 truncate text-xs font-semibold leading-tight text-foreground'>

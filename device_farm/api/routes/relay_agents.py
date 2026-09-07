@@ -66,6 +66,7 @@ def _to_out(row) -> RelayAgentOut:
         relay_id=row.relay_id,
         user_id=getattr(row, "user_id", None),
         enrollment_token_id=getattr(row, "enrollment_token_id", None),
+        name=getattr(row, "name", "") or "",
         hostname=row.hostname,
         ip=row.ip,
         version=row.version,
@@ -420,6 +421,9 @@ def _device_to_out(d, *, relay_id: str | None = None) -> DeviceOut:
         last_seen=d.last_seen,
         created_at=d.created_at,
         adb_serial=getattr(d, "adb_serial", None),
+        relay_serial=getattr(d, "relay_serial", None),
+        managed_by_org_id=getattr(d, "managed_by_org_id", None),
+        managed_by_relay_id=getattr(d, "managed_by_relay_id", None),
         adb_ip=getattr(d, "adb_ip", None),
         adb_port=getattr(d, "adb_port", 5555),
         tags=getattr(d, "tags", "") or "",
@@ -810,6 +814,10 @@ async def _claim_relay_serial(db, row, serial: str, user) -> str:
         user_id=user.id,
         org_id=getattr(user, "org_id", None),
     )
+    if existing.managed_by_org_id is None:
+        existing.managed_by_org_id = getattr(user, "org_id", None)
+    existing.managed_by_relay_id = row.relay_id
+    existing.relay_serial = serial
     canonical = str(getattr(existing, "serial", "") or serial)
 
     if caps:

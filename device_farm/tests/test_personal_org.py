@@ -160,7 +160,7 @@ async def test_register_route_creates_default_org(session_factory):
             json={
                 "email": "new@example.com",
                 "name": "Nguyễn Văn A",
-                "password": "secret123",
+                "password": "Str0ng!Pass123",
             },
         )
         assert response.status_code == 201, response.text
@@ -189,7 +189,7 @@ async def test_register_route_ignores_requested_privileged_role(session_factory)
             json={
                 "email": "privileged@example.com",
                 "name": "Privileged",
-                "password": "secret123",
+                "password": "Str0ng!Pass123",
                 "role": "superadmin",
             },
         )
@@ -227,7 +227,7 @@ async def test_register_route_rolls_back_user_when_org_creation_fails(
             json={
                 "email": "rollback@example.com",
                 "name": "Rollback User",
-                "password": "secret123",
+                "password": "Str0ng!Pass123",
             },
         )
         assert response.status_code == 500

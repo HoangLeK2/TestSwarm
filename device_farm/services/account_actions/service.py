@@ -45,6 +45,26 @@ def ledger_mode() -> str:
     return value if value in {"disabled", "observe", "enabled"} else "disabled"
 
 
+def identity_target(target: dict[str, Any] | None) -> Any:
+    """Reduce a target to what identifies it, for keying.
+
+    A target carries the person's display name as read off the screen. That text
+    is not stable — truncation, an emoji, a rename between two dumps — so hashing
+    it produced a second ledger row for an action that had already been recorded.
+    Key on the id when there is one; without an id the full target is all we have
+    to tell two targets apart, so keep the old behaviour there.
+    """
+    data = target or {}
+    target_id = str(data.get("target_id") or "").strip()
+    if not target_id:
+        return redact(data)
+    return {
+        "action": data.get("action"),
+        "target_type": data.get("target_type"),
+        "target_id": target_id,
+    }
+
+
 def stable_action_key(
     *,
     org_id: str,
@@ -55,7 +75,7 @@ def stable_action_key(
     target: dict[str, Any] | None = None,
 ) -> str:
     canonical = json.dumps(
-        [org_id, account_id, execution_id, step_id, action_type, redact(target or {})],
+        [org_id, account_id, execution_id, step_id, action_type, identity_target(target)],
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -407,6 +427,75 @@ async def finish_attempt(
     row.ended_at = datetime.now(UTC)
     await db.flush()
     return row
+
+
+async def _attach_action_artifacts(
+    db, *, org_id: str, action_id: str, artifact_refs: list[dict[str, Any]]
+) -> int:
+    row = (
+        await db.execute(
+            select(AccountAction)
+            .where(AccountAction.id == action_id, AccountAction.org_id == org_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return 0
+    row.artifact_refs = redact(artifact_refs)
+    row.updated_at = datetime.now(UTC)
+    attempt = (
+        await db.execute(
+            select(AccountActionAttempt)
+            .where(
+                AccountActionAttempt.org_id == org_id,
+                AccountActionAttempt.action_id == action_id,
+            )
+            .order_by(AccountActionAttempt.attempt_no.desc())
+            .limit(1)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if attempt is not None and not attempt.artifact_refs:
+        attempt.artifact_refs = redact(artifact_refs)
+    await db.flush()
+    return len(artifact_refs)
+
+
+def attach_action_artifacts(
+    *, org_id: str, action_id: str, artifact_refs: list[dict[str, Any]]
+) -> int:
+    """Attach capture evidence to an action that has already been recorded.
+
+    The failure screenshot is taken after the step handler returns, so the
+    ledger row is already written and closed by then. Without this the
+    ``artifact_refs`` column stayed empty on every row ever recorded and the log
+    could say an account tried something but never show what the screen looked
+    like when it failed.
+
+    Best effort: a missing action or a write error must never turn into a step
+    failure, because the action itself already happened.
+    """
+    if not org_id or not action_id or not artifact_refs:
+        return 0
+    from db.database import activity_session, run_activity_coro_blocking
+
+    async def attach() -> int:
+        async with activity_session() as db:
+            with tenant_context(org_id):
+                return await _attach_action_artifacts(
+                    db,
+                    org_id=org_id,
+                    action_id=action_id,
+                    artifact_refs=artifact_refs,
+                )
+
+    try:
+        return run_activity_coro_blocking(attach())
+    except Exception as exc:
+        log.warning(
+            "account action artifact attach failed action=%s: %s", action_id, exc
+        )
+        return 0
 
 
 async def list_actions(

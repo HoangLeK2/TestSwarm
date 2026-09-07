@@ -19,6 +19,10 @@ class Device(TenantScopedModel, Base):
     serial: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
     device_serial: Mapped[str] = mapped_column(String(128), default="", index=True)
     relay_serial: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, default=None, index=True)
+    managed_by_org_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    managed_by_relay_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, default=None, index=True)
     name: Mapped[str] = mapped_column(String(255), default="")
     status: Mapped[str] = mapped_column(String(20), default="paired", index=True)
     notes: Mapped[str] = mapped_column(Text, default="")

@@ -7,9 +7,33 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.exc import SQLAlchemyError
 
 from api.deps import _get_current_user, _get_db
+from api.deps_streaming import resolve_user_for_streaming
 from api.routes.content import router as content_router
+
+
+class _FakeStreamingSession:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def execute(self, *_args, **_kwargs):
+        raise SQLAlchemyError("streaming test uses seed policy fallback")
+
+    async def commit(self):
+        return None
+
+    async def rollback(self):
+        return None
+
+
+class _FakeStreamingSessionLocal:
+    def __call__(self):
+        return _FakeStreamingSession()
 
 
 def _build_app() -> FastAPI:
@@ -25,11 +49,12 @@ def _build_app() -> FastAPI:
             role="operator",
             org_role="owner",
             is_active=True,
-            org_id="org-1",
+            org_id=None,
         )
 
     app.dependency_overrides[_get_db] = _db_override
     app.dependency_overrides[_get_current_user] = _user_override
+    app.dependency_overrides[resolve_user_for_streaming] = _user_override
     return app
 
 
@@ -107,6 +132,12 @@ async def test_stream_export_csv_returns_attachment_and_rows():
     with patch(
         "api.routes.content.content_crud.query_content",
         new=AsyncMock(side_effect=[([fake_item], 1), ([], 1)]),
+    ), patch(
+        "api.deps_streaming.AsyncSessionLocal",
+        new=_FakeStreamingSessionLocal(),
+    ), patch(
+        "api.routes.content.AsyncSessionLocal",
+        new=_FakeStreamingSessionLocal(),
     ):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/content/export/stream", params={"format": "csv"})

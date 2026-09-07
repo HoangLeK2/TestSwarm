@@ -1,6 +1,7 @@
 """CRUD for Epic 04 org-scoped campaign entity (DF-T-04-006)."""
 from __future__ import annotations
 
+import inspect
 from datetime import datetime, timezone
 from typing import Any
 
@@ -34,7 +35,13 @@ async def lookup_campaign_org_id(db: AsyncSession, campaign_id: str) -> str | No
         {"campaign_id": campaign_id},
     )
     row = result.first()
-    return str(row[0]) if row and row[0] else None
+    if inspect.isawaitable(row):
+        row = await row
+    try:
+        org_id = row[0] if row else None
+    except (KeyError, TypeError, IndexError):
+        return None
+    return str(org_id) if org_id else None
 
 
 async def get_campaign_entity(

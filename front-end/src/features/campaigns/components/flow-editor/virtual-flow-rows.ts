@@ -26,8 +26,8 @@ export type VirtualFlowRow =
        */
       branch: 'then' | 'else' | 'loop' | 'pick';
       count: number;
-      depth: number;
       insertPath: BracketChildRef[];
+      depth: number;
       scopes: VirtualFlowScope[];
     }
   | {
@@ -94,8 +94,8 @@ function projectList(
         labelKey: 'branchLoopBody',
         branch: 'loop',
         count: body.length,
-        depth: depth + 1,
         insertPath: [...path, { listKey: 'steps', ci: body.length }],
+        depth: depth + 1,
         scopes: nestedScopes
       });
       projectList(body, 'steps', path, depth + 1, nestedScopes, rows);
@@ -121,8 +121,8 @@ function projectList(
         labelKey: isFbTap ? 'branchWhenFound' : 'branchIfTrue',
         branch: 'then',
         count: thenSteps.length,
-        depth: depth + 1,
         insertPath: [...path, { listKey: 'then', ci: thenSteps.length }],
+        depth: depth + 1,
         scopes: nestedScopes
       });
       projectList(thenSteps, 'then', path, depth + 1, nestedScopes, rows);
@@ -132,8 +132,8 @@ function projectList(
         labelKey: isFbTap ? 'branchWhenNotFound' : 'branchIfFalse',
         branch: 'else',
         count: elseSteps.length,
-        depth: depth + 1,
         insertPath: [...path, { listKey: 'else', ci: elseSteps.length }],
+        depth: depth + 1,
         scopes: nestedScopes
       });
       projectList(elseSteps, 'else', path, depth + 1, nestedScopes, rows);
@@ -161,8 +161,8 @@ function projectList(
           labelValues: { number: branchIndex + 1 },
           branch: 'pick',
           count: branchSteps.length,
-          depth: depth + 1,
           insertPath: [...path, { listKey: branchKey, ci: branchSteps.length }],
+          depth: depth + 1,
           scopes: nestedScopes
         });
         projectList(

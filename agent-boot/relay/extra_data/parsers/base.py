@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import hashlib
 import re
-from abc import ABC, abstractmethod
+from abc import ABC
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from lxml import etree
 
@@ -69,16 +69,53 @@ class ExtractedItem:
 
 
 class BasePlatformParser(ABC):
-    """Abstract parser. Subclasses set `platform` + `package_names` and
-    implement `parse_posts` / `parse_comments`.
+    """Platform parser. Subclasses set `platform` + `package_names` and either
+    implement `parse_posts` / `parse_comments`, or override `extract` when the
+    platform pipeline needs the raw XML string.
     """
     platform: str = ""
     package_names: List[str] = []
 
-    @abstractmethod
+    # ─── Neutral seam ──────────────────────────────────────────────────
+
+    def extract(
+        self, entity: str, xml: str, context: Dict[str, Any]
+    ) -> Tuple[List[dict], Dict[str, Any]]:
+        """Return ``(items, diagnostic)`` for a platform-neutral entity name.
+
+        Takes the *raw* XML string: a pipeline that normalises whitespace itself
+        must see exactly what the device returned. The default implementation
+        parses it and delegates to `parse_posts` / `parse_comments`; override
+        this instead when the pipeline owns parsing.
+        """
+        if entity not in {"posts", "comments"}:
+            return [], {
+                "reason_code": "not_implemented",
+                "entity": entity,
+                "platform": self.platform,
+            }
+        root = etree.fromstring(xml.encode("utf-8") if isinstance(xml, str) else xml)
+        if entity == "comments":
+            ctx = context or {}
+            post_key = str(
+                ctx.get("post_key")
+                or ctx.get("parent_id")
+                or ctx.get("parent_post_id")
+                or ""
+            )
+            parsed = self.parse_comments(root, post_key)
+        else:
+            parsed = self.parse_posts(root)
+        items = [item.to_dict() for item in parsed]
+        return items, {
+            "reason_code": "ok",
+            "platform": self.platform,
+            "items_returned": len(items),
+        }
+
     def parse_posts(self, xml_root: etree._Element) -> List[ExtractedItem]:
-        """Parse main feed posts from UIAutomator2 XML hierarchy."""
-        raise NotImplementedError
+        """Parse main feed posts from UIAutomator2 XML hierarchy. Default: empty."""
+        return []
 
     def parse_comments(
         self, xml_root: etree._Element, post_key: str

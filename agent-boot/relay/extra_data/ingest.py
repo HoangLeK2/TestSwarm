@@ -34,6 +34,7 @@ _PLATFORM_TOKEN: dict[str, str] = {
     "linkedin": "linkedin",
     "auto": "auto",
 }
+_TOKEN_PLATFORM: dict[str, str] = {tok: plat for plat, tok in _PLATFORM_TOKEN.items()}
 
 
 def resolve_content_strategy(entity: str, platform: str) -> str:
@@ -118,220 +119,48 @@ def _text_node_items(xml: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     return items, {"reason_code": "ok", "texts_returned": len(items)}
 
 
-def _multi_platform_items(
-    strategy: str,
-    xml: str,
-    context: dict[str, Any],
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    from lxml import etree
+def _parse_items(strategy: str, xml: str, context: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Dispatch an internal strategy token to the platform parser registry.
+
+    ``strategy`` is ``"<platform token>_<entity>"``; the entity name is what
+    device_farm asked for, platform-neutral. Every platform — Facebook
+    included — goes through `BasePlatformParser.extract`, which receives the raw
+    XML string, so a pipeline that normalises UI spacing itself sees exactly
+    what the device returned.
+    """
+    if strategy == "text_nodes":
+        return _text_node_items(xml)
 
     from relay.extra_data.parsers.platform_detector import (
-        detect_from_hierarchy,
-        detect_parser,
         detect_platform,
         detect_platform_from_hierarchy,
+        parser_for_platform,
     )
 
-    root = etree.fromstring(xml.encode("utf-8") if isinstance(xml, str) else xml)
-    is_comments = strategy in _MULTI_PLATFORM_COMMENT_STRATEGIES
-    parser = None
-    package_name = str(context.get("package_name") or context.get("current_package") or "").strip()
-    if strategy.startswith("auto_"):
-        # Facebook has no BasePlatformParser — auto-detecting it must fall back to
-        # the dedicated facebook pipeline, not report "parser not found".
-        detected = (
-            (detect_platform(package_name) if package_name else None)
-            or detect_platform_from_hierarchy(root)
-        )
-        if detected == "facebook":
-            return _parse_items(
-                "fb_comments" if is_comments else "fb_posts", xml, context
-            )
-        parser = detect_parser(package_name) if package_name else None
-        if parser is None:
-            parser = detect_from_hierarchy(root)
-    else:
-        platform_code = strategy.split("_", 1)[0]
-        pkg_map = {
-            "ig": "com.instagram.android",
-            "tiktok": "com.zhiliaoapp.musically",
-            "linkedin": "com.linkedin.android",
-        }
-        parser = detect_parser(pkg_map.get(platform_code, ""))
+    context = context or {}
+    token, _, entity = strategy.partition("_")
+    platform = _TOKEN_PLATFORM.get(token)
+    package_name = str(
+        context.get("package_name") or context.get("current_package") or ""
+    ).strip()
+    if platform == "auto":
+        platform = detect_platform(package_name) if package_name else None
+        if platform is None:
+            from lxml import etree
 
+            root = etree.fromstring(
+                xml.encode("utf-8") if isinstance(xml, str) else xml
+            )
+            platform = detect_platform_from_hierarchy(root)
+
+    parser = parser_for_platform(platform or "")
     if parser is None:
         return [], {
             "reason_code": "platform_parser_not_found",
             "strategy": strategy,
             "package_name": package_name,
         }
-
-    if is_comments:
-        post_key = str(context.get("post_key") or context.get("parent_id") or context.get("parent_post_id") or "")
-        parsed = parser.parse_comments(root, post_key)
-    else:
-        parsed = parser.parse_posts(root)
-    items = [item.to_dict() for item in parsed]
-    return items, {
-        "reason_code": "ok",
-        "platform": parser.platform,
-        "items_returned": len(items),
-    }
-
-
-def _parse_items(strategy: str, xml: str, context: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    if strategy == "fb_groups":
-        from relay.extra_data.parsers.facebook.group_pipeline import (
-            parse_group_search_results,
-        )
-
-        return parse_group_search_results(xml)
-    if strategy == "fb_pages":
-        from relay.extra_data.parsers.facebook.page_pipeline import (
-            parse_page_search_results,
-        )
-
-        return parse_page_search_results(xml)
-    if strategy == "fb_comment_filter_next":
-        from relay.extra_data.parsers.facebook.comment_filter import resolve_comment_filter_next_tap
-
-        return [], resolve_comment_filter_next_tap(xml, context)
-    if strategy in {"fb_comment_target", "fb_comment_target_tap"}:
-        from relay.extra_data.parsers.facebook import resolve_comment_targets_from_xml
-        from relay.extra_data.parsers.facebook.comment_pipeline import (
-            diagnose_comment_target_resolution,
-        )
-        from relay.extra_data.parsers.facebook.parser import _hierarchy_is_fb_comment_sheet, _parse_xml
-
-        root = _parse_xml(xml)
-        if root is not None and _hierarchy_is_fb_comment_sheet(root):
-            return [], {
-                "reason_code": "already_on_comment_sheet",
-                "target": None,
-                "alternates": [],
-                "candidate_count": 0,
-            }
-
-        # Rank Comment buttons by proximity to mid-screen so a feed with several
-        # visible "Bình luận" rows never silently latches onto the wrong post.
-        locked_anchor = context.get("_active_comment_parent_anchor")
-        if not isinstance(locked_anchor, dict) or not locked_anchor:
-            locked_anchor = None
-        # Posts already commented on in this run, so a feed loop cannot tap the
-        # same card again once it scrolls back past it.
-        exclude_anchors = context.get("comment_exclude_anchors")
-        if not isinstance(exclude_anchors, list):
-            exclude_anchors = []
-        top, ranked = resolve_comment_targets_from_xml(
-            xml,
-            locked_anchor=locked_anchor,
-            exclude_post_anchors=exclude_anchors,
-        )
-        if not top:
-            diag = diagnose_comment_target_resolution(xml)
-            return [], {
-                "reason_code": "comment_button_not_found",
-                "target": None,
-                "alternates": [],
-                "candidate_count": 0,
-                "resolution_diagnostic": diag,
-            }
-        dedupe_field = str(
-            context.get("posts_dedupe_field")
-            or context.get("_posts_dedupe_field")
-            or context.get("dedupe_field")
-            or "text"
-        )
-        scope = context.get("hash_scope") or context.get("execution_id")
-
-        def _target_from(cand: dict[str, Any]) -> dict[str, Any]:
-            post = cand["post"]
-            bnds = cand["comment_bounds"]
-            base_hash = compute_content_hash(post, dedupe_field=dedupe_field)
-            text_prefix = (
-                post.get("text")
-                or post.get("body")
-                or post.get("content")
-                or post.get("message")
-                or post.get("caption")
-                or post.get("description")
-                or post.get("image_desc")
-                or ""
-            )
-            return {
-                "bounds": list(bnds),
-                "u2_click": cand.get("comment_u2_click"),
-                "parent_post_bounds": (
-                    list(cand["parent_post_bounds"])
-                    if cand.get("parent_post_bounds")
-                    else None
-                ),
-                "pid": post.get("_pid"),
-                "parent_base_hash": base_hash,
-                "parent_id": scope_content_hash(base_hash, scope),
-                "post_key": post.get("post_key"),
-                "stable_post_id": post.get("stable_post_id"),
-                "fb_post_id": post.get("fb_post_id"),
-                "author": post.get("author"),
-                "timestamp": post.get("timestamp"),
-                "text_prefix": str(text_prefix)[:220],
-                "score": cand.get("score"),
-                "score_breakdown": cand.get("breakdown"),
-                "feed_item_index": cand.get("feed_item_index"),
-            }
-
-        target = _target_from(top)
-        alternates = [_target_from(c) for c in ranked[1:]]
-        return [], {
-            "reason_code": "ok",
-            "target": target,
-            "alternates": alternates,
-            "candidate_count": len(ranked),
-        }
-    if strategy == "fb_posts":
-        from relay.extra_data.parsers.facebook import parse_fb_posts_from_xml_with_diagnostic
-
-        return parse_fb_posts_from_xml_with_diagnostic(
-            xml,
-            source_index=int(context.get("source_index") or 0),
-        )
-    if strategy == "fb_comments":
-        from relay.extra_data.parsers.facebook import parse_fb_comments_from_xml_with_diagnostic
-
-        kwargs: dict[str, Any] = {
-            "parent_post_id": context.get("parent_post_id") or context.get("parent_id"),
-            "max_items": int(context.get("max_items") or 400),
-        }
-        parent_post_anchor = (
-            context.get("_active_comment_parent_anchor")
-            if isinstance(context.get("_active_comment_parent_anchor"), dict)
-            else context.get("parent_post_anchor")
-        )
-        if isinstance(parent_post_anchor, dict) and parent_post_anchor:
-            try:
-                import inspect
-
-                sig = inspect.signature(parse_fb_comments_from_xml_with_diagnostic)
-                supports_anchor = (
-                    "parent_post_anchor" in sig.parameters
-                    or any(
-                        p.kind == inspect.Parameter.VAR_KEYWORD
-                        for p in sig.parameters.values()
-                    )
-                )
-            except (TypeError, ValueError):
-                supports_anchor = True
-            if supports_anchor:
-                kwargs["parent_post_anchor"] = parent_post_anchor
-        return parse_fb_comments_from_xml_with_diagnostic(
-            xml,
-            **kwargs,
-        )
-    if strategy == "text_nodes":
-        return _text_node_items(xml)
-    if strategy in _MULTI_PLATFORM_POST_STRATEGIES or strategy in _MULTI_PLATFORM_COMMENT_STRATEGIES:
-        return _multi_platform_items(strategy, xml, context)
-    return [], {"reason_code": "unsupported_strategy", "strategy": strategy}
+    return parser.extract(entity, xml, context)
 
 
 def _xml_snapshots_from_payload(payload: dict[str, Any], primary_xml: str) -> list[str]:

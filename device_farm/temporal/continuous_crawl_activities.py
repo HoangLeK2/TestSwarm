@@ -250,24 +250,30 @@ async def prepare_continuous_crawl_target(
             )
             db.add(execution)
             await db.flush()
+            from services.campaign.dispatcher import resolve_campaign_platform
+            from services.platform_session_guard import guard_platform_session
+
+            campaign_platform = resolve_campaign_platform(campaign, scenario_registry)
             account = (
                 await resolve_accounts_for_devices(
-                    db, campaign=campaign, org_id=inp.org_id, device_ids=[device.id]
+                    db,
+                    campaign=campaign,
+                    org_id=inp.org_id,
+                    device_ids=[device.id],
+                    platform=campaign_platform,
                 )
             )[device.id]
             if account.unavailable:
                 raise ValueError(
                     account.failure_reason or "campaign account unavailable"
                 )
-            from services.campaign.dispatcher import resolve_campaign_platform
-            from services.platform_session_guard import guard_platform_session
 
             guard = await guard_platform_session(
                 db,
                 org_id=inp.org_id,
                 device_id=device.id,
                 account_id=account.account_id,
-                platform=resolve_campaign_platform(campaign, scenario_registry),
+                platform=campaign_platform,
                 device_serial=device.serial,
                 live_check=False,
             )

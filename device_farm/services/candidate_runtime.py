@@ -1,4 +1,4 @@
-"""Synchronous runtime bridge for account-scoped Facebook candidates."""
+"""Synchronous runtime bridge for account-scoped connection candidates."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def assert_connection_candidate_allowed(
     lease_token: str | None = None,
 ) -> dict[str, Any]:
     from db.database import activity_session, run_activity_coro_blocking
-    from services.facebook_candidates import assert_candidate_action_allowed
+    from services.social_candidates import assert_candidate_action_allowed
 
     async def assert_allowed() -> dict[str, Any]:
         async with activity_session() as db:
@@ -119,7 +119,7 @@ def complete_connection_candidate(
     lease_token: str,
 ) -> dict[str, Any]:
     from db.database import activity_session, run_activity_coro_blocking
-    from services.facebook_candidates import complete_candidate_lease
+    from services.social_candidates import complete_candidate_lease
 
     async def complete_candidate() -> dict[str, Any]:
         async with activity_session() as db:
@@ -217,7 +217,7 @@ def release_connection_candidate(
     lease_token: str,
 ) -> dict[str, Any]:
     from db.database import activity_session, run_activity_coro_blocking
-    from services.facebook_candidates import release_candidate_lease_by_entity
+    from services.social_candidates import release_candidate_lease_by_entity
 
     async def release_candidate() -> dict[str, Any]:
         async with activity_session() as db:
@@ -250,7 +250,7 @@ def defer_connection_candidate(
     note: str | None = None,
 ) -> dict[str, Any]:
     from db.database import activity_session, run_activity_coro_blocking
-    from services.facebook_candidates import defer_candidate_lease_by_entity
+    from services.social_candidates import defer_candidate_lease_by_entity
 
     async def defer_candidate() -> dict[str, Any]:
         async with activity_session() as db:

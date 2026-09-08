@@ -1038,7 +1038,13 @@ export function StepDetailPanel({
   const tSocialActions = useTranslations(
     'campaignsFeature.stepEditor.socialActions'
   );
-  const { optionsForStep } = usePlatformCapabilities();
+  const {
+    optionsForStep,
+    isLoading: platformsLoading,
+    isError: platformsError
+  } = usePlatformCapabilities();
+  // No matrix yet is not the same as "this provider cannot run the node".
+  const platformSupportUnknown = platformsLoading || platformsError;
   const variableInfoT = useVariableInfoTranslator();
   const fallbackText = (value: string, key: string, vi: string, en: string) =>
     value.endsWith(`.${key}`) ? (locale.startsWith('vi') ? vi : en) : value;
@@ -1222,11 +1228,13 @@ export function StepDetailPanel({
   ].includes(step.type);
   const missingCommentText =
     showContentCommentText && !String(step.comment_text ?? '').trim();
-  const socialSetupState = !selectedSocialPlatformSupported
-    ? 'unsupported'
-    : !currentSocialActionSupported || missingCommentText
-      ? 'needs_setup'
-      : 'ready';
+  const socialSetupState = platformSupportUnknown
+    ? 'needs_setup'
+    : !selectedSocialPlatformSupported
+      ? 'unsupported'
+      : !currentSocialActionSupported || missingCommentText
+        ? 'needs_setup'
+        : 'ready';
   const socialSetupBadgeClassName =
     socialSetupState === 'ready'
       ? 'border-emerald-500/40 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200'
@@ -2904,11 +2912,12 @@ export function StepDetailPanel({
                         </p>
                       </div>
                     </div>
-                    {!selectedSocialPlatformSupported && (
-                      <p className='rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-[11px] leading-relaxed text-destructive'>
-                        {tField('unsupportedProviderHint')}
-                      </p>
-                    )}
+                    {!platformSupportUnknown &&
+                      !selectedSocialPlatformSupported && (
+                        <p className='rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-[11px] leading-relaxed text-destructive'>
+                          {tField('unsupportedProviderHint')}
+                        </p>
+                      )}
                   </StepPanelSection>
 
                   <StepPanelSection title={tField('actionContent')}>

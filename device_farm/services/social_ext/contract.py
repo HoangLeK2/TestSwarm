@@ -238,3 +238,6 @@ class PlatformExtension:
     lifecycle: str = "loaded"
     min_contract_version: str = CONTRACT_VERSION
     connection_kind: str = DEFAULT_CONNECTION_KIND
+    # Android package the session guard launches to inspect login state. None =
+    # the guard refuses to probe rather than opening some other platform's app.
+    app_package: str | None = None

@@ -633,17 +633,19 @@ class CampaignDispatcher:
             raise CampaignDispatchError(str(exc), code=exc.code, details=exc.details) from exc
 
         device_ids_ordered = [e.device_id for e in valid_entries]
+        campaign_platform = resolve_campaign_platform(campaign, scenario_registry)
         account_by_device = await resolve_accounts_for_devices(
             db,
             campaign=campaign,
             org_id=org_id,
             device_ids=device_ids_ordered,
+            platform=campaign_platform,
         )
         device_map = devices_by_id if devices_by_id is not None else validation.devices_by_id
         account_by_device = await _apply_platform_session_guard_to_accounts(
             db,
             org_id=org_id,
-            platform=resolve_campaign_platform(campaign, scenario_registry),
+            platform=campaign_platform,
             account_by_device=account_by_device,
             device_map=device_map,
             allow_login_recovery=allows_login_recovery,

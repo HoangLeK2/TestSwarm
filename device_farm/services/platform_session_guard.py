@@ -3,7 +3,7 @@
 Same shape as ``services/platform_readiness.py``: the vocabulary and the decision
 ladder live here, the per-platform knowledge (readiness markers, app package)
 lives in the platform module. Adding a platform = register a readiness resolver
-and one entry in :data:`PLATFORM_APP_PACKAGES`. No caller changes.
+and set ``app_package`` on the platform's social_ext extension. No caller changes.
 
 ``services/facebook_session_guard.py`` is a thin alias layer over this module.
 """
@@ -25,7 +25,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.models.device_platform_session import DevicePlatformSession
 from db.models.enums import DevicePlatformSessionState
 from services.device_platform_session import (
-    FACEBOOK_APP_PACKAGE,
     FACEBOOK_PLATFORM,
     get_platform_session,
     mark_readiness_observed,
@@ -42,11 +41,17 @@ _DEVICE_LOCKS: dict[str, asyncio.Lock] = {}
 _DEVICE_LOCKS_GUARD = asyncio.Lock()
 
 DEFAULT_PLATFORM = FACEBOOK_PLATFORM
-PLATFORM_APP_PACKAGES: dict[str, str] = {FACEBOOK_PLATFORM: FACEBOOK_APP_PACKAGE}
 
 
 def platform_app_package(platform: str) -> str | None:
-    return PLATFORM_APP_PACKAGES.get((platform or "").strip().casefold())
+    """Android package for ``platform``, from its social_ext extension."""
+    from services.social_ext.registry import get_social_platform_registry
+
+    clean = (platform or "").strip().casefold()
+    if not clean:
+        return None
+    extension = get_social_platform_registry().get_platform(clean)
+    return (extension.app_package or None) if extension else None
 
 
 class PlatformSessionGuardMode(StrEnum):
@@ -217,7 +222,16 @@ async def observe_platform_readiness_for_device(
     app_version: str | None = None,
 ) -> PlatformReadinessResult:
     started = time.perf_counter()
-    package = package or platform_app_package(platform) or FACEBOOK_APP_PACKAGE
+    package = package or platform_app_package(platform)
+    if not package:
+        # No fallback: launching some other platform's app would inspect the
+        # wrong screen and report a confident, wrong readiness.
+        return PlatformReadinessResult(
+            PlatformReadinessStatus.INCONCLUSIVE,
+            "platform_app_package_unknown",
+            _utcnow(),
+            app_version=app_version,
+        )
     client = manager.get_device(device_serial) if manager is not None else None
     if client is None:
         return PlatformReadinessResult(

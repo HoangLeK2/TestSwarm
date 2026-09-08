@@ -85,15 +85,16 @@ export const socialExtApi = {
    * guess which platforms a node supports.
    */
   listPlatforms: async (): Promise<PlatformCapability[]> => {
+    // farmApi.baseURL already ends in /api — do not repeat the prefix here.
     const { data } = await farmApi.get<{ platforms: PlatformCapability[] }>(
-      '/api/social-ext/platforms'
+      '/social-ext/platforms'
     );
     return data.platforms ?? [];
   },
 
   getNodeCatalog: async (): Promise<SocialNodeCatalog> => {
     const { data } = await farmApi.get<SocialNodeCatalog>(
-      '/api/social-ext/node-catalog'
+      '/social-ext/node-catalog'
     );
     return data;
   }

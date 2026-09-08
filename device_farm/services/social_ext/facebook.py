@@ -147,6 +147,7 @@ def build_facebook_extension() -> PlatformExtension:
         version="2.0.0",
         coverage="L2 Active",
         connection_kind="friend_request",
+        app_package="com.facebook.katana",
         parser=AgentBootDelegatedParser(),
         handlers={step: MetadataOnlyHandler(step) for step in FACEBOOK_STEP_TYPES},
         enabled_by_default=True,

@@ -13,6 +13,7 @@ changes.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import re
 import unicodedata
 import xml.etree.ElementTree as ET
@@ -105,7 +106,16 @@ def register_readiness_resolver(platform: str, resolver: ReadinessResolver) -> N
 
 
 def get_readiness_resolver(platform: str) -> ReadinessResolver | None:
-    return _RESOLVERS.get((platform or "").strip().casefold())
+    key = (platform or "").strip().casefold()
+    if key and key not in _RESOLVERS:
+        # ``services/<platform>_readiness.py`` registers itself on import; import
+        # it on first use so registration does not depend on some other module
+        # happening to import it first.
+        try:
+            importlib.import_module(f"services.{key}_readiness")
+        except ImportError:
+            pass
+    return _RESOLVERS.get(key)
 
 
 def resolve_platform_readiness(

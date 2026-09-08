@@ -22,21 +22,21 @@ from services.device_platform_session import (
 from services.platform_readiness import PlatformReadinessResult, PlatformReadinessStatus
 from tenancy.context import tenant_context
 
-_LOGIN_RECOVERABLE_GUARD_REASONS = frozenset(
-    {
-        "facebook_session_missing",
-        "facebook_session_unknown",
-        "facebook_session_logged_out",
-        "facebook_session_login_required",
-        "facebook_session_logging_in",
-        "facebook_session_expired",
-        "facebook_session_failed",
-    }
+# Guard reasons are ``f"{platform}_session_{state}"`` (services/platform_session_guard.py),
+# so match the suffix instead of a per-platform literal.
+_LOGIN_RECOVERABLE_GUARD_SUFFIXES = (
+    "_session_missing",
+    "_session_unknown",
+    "_session_logged_out",
+    "_session_login_required",
+    "_session_logging_in",
+    "_session_expired",
+    "_session_failed",
 )
 
 
 def guard_reason_allows_login_recovery(reason: str | None) -> bool:
-    return str(reason or "") in _LOGIN_RECOVERABLE_GUARD_REASONS
+    return str(reason or "").endswith(_LOGIN_RECOVERABLE_GUARD_SUFFIXES)
 
 
 def scenario_registry_has_platform_login_gate(

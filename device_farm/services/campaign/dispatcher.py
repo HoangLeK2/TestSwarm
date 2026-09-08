@@ -62,6 +62,7 @@ from services.campaign.override_resolver import (
     validate_per_device_accounts_size,
     validate_per_device_overrides_size,
 )
+from services.platform_entity_locator import resolve_entity_locator
 from services.device_reserve.exceptions import DeviceBusyError, DeviceSessionError
 from services.device_reserve.service import (
     DEFAULT_TTL_SEC,
@@ -162,71 +163,76 @@ def _with_external_entity_vars(
         if isinstance(locator.get("fallback_selector"), dict)
         else {}
     )
-    name = entity.display_name
-    is_facebook_group = entity.platform == "facebook" and entity.entity_type == "group"
-    default_selector_by = "descriptionStartsWith" if is_facebook_group else "text"
-    default_selector_value = f"{name}," if is_facebook_group else name
-    default_fallback_by = "descriptionContains" if is_facebook_group else "textContains"
-    prefixed_locator_vars = (
-        {
-            f"{output_prefix}_SEARCH_QUERY": str(locator.get("search_query") or name),
-            f"{output_prefix}_SELECTOR_BY": str(
-                selector.get("by") or default_selector_by
-            ),
-            f"{output_prefix}_SELECTOR_VALUE": str(
-                selector.get("value") or default_selector_value
-            ),
-            f"{output_prefix}_FALLBACK_SELECTOR_BY": str(
-                fallback_selector.get("by") or default_fallback_by
-            ),
-            f"{output_prefix}_FALLBACK_SELECTOR_VALUE": str(
-                fallback_selector.get("value") or name
-            ),
-        }
-        if output_prefix
-        else {}
-    )
+    defaults = resolve_entity_locator(entity)
+    resolved_locator = {
+        "SEARCH_QUERY": str(locator.get("search_query") or defaults.search_query),
+        "SELECTOR_BY": str(selector.get("by") or defaults.selector_by),
+        "SELECTOR_VALUE": str(selector.get("value") or defaults.selector_value),
+        "FALLBACK_SELECTOR_BY": str(fallback_selector.get("by") or defaults.fallback_by),
+        "FALLBACK_SELECTOR_VALUE": str(
+            fallback_selector.get("value") or defaults.fallback_value
+        ),
+    }
     return {
         **target_vars,
-        "TARGET_SEARCH_QUERY": str(locator.get("search_query") or name),
-        "TARGET_SELECTOR_BY": str(selector.get("by") or default_selector_by),
-        "TARGET_SELECTOR_VALUE": str(selector.get("value") or default_selector_value),
-        "TARGET_FALLBACK_SELECTOR_BY": str(
-            fallback_selector.get("by") or default_fallback_by
-        ),
-        "TARGET_FALLBACK_SELECTOR_VALUE": str(
-            fallback_selector.get("value") or name
-        ),
+        **{f"TARGET_{key}": value for key, value in resolved_locator.items()},
         "TARGET_LOCATOR": locator,
-        **prefixed_locator_vars,
         **(
-            {"GROUP_NAME": name, "TARGET_GROUP_NAME": name}
-            if is_facebook_group
+            {
+                f"{output_prefix}_{key}": value
+                for key, value in resolved_locator.items()
+            }
+            if output_prefix
             else {}
         ),
+        **defaults.extra_vars,
     }
 
 
-async def _apply_facebook_session_guard_to_accounts(
+def resolve_campaign_platform(
+    campaign: Campaign,
+    scenario_registry: dict[str, Any] | None = None,
+) -> str:
+    """Platform a campaign runs on, from its scenarios or its variables.
+
+    Falls back to the neutral guard default (the legacy single-platform
+    assumption) so campaigns that never declared a platform keep the session
+    guard they have today.
+    """
+    from services.platform_session_guard import DEFAULT_PLATFORM
+    from tasks.scenario.steps.platform_resolution import platform_from_payload
+
+    payloads: list[Any] = list((scenario_registry or {}).get("by_id", {}).values())
+    payloads.append(campaign.variables)
+    for payload in payloads:
+        platform = platform_from_payload(payload)
+        if platform:
+            return platform
+    return DEFAULT_PLATFORM
+
+
+async def _apply_platform_session_guard_to_accounts(
     db: AsyncSession,
     *,
     org_id: str,
+    platform: str,
     account_by_device: dict[str, ResolvedDeviceAccount],
     device_map: dict[str, Device],
     allow_login_recovery: bool = False,
 ) -> dict[str, ResolvedDeviceAccount]:
     guarded: dict[str, ResolvedDeviceAccount] = dict(account_by_device)
-    from services.facebook_session_guard import guard_facebook_session
+    from services.platform_session_guard import guard_platform_session
     from services.platform_session_runtime import guard_reason_allows_login_recovery
 
     for device_id, resolved in account_by_device.items():
         if not resolved.account_id:
             continue
-        decision = await guard_facebook_session(
+        decision = await guard_platform_session(
             db,
             org_id=org_id,
             device_id=device_id,
             account_id=resolved.account_id,
+            platform=platform,
             device_serial=getattr(device_map.get(device_id), "serial", None),
             live_check=False,
         )
@@ -600,7 +606,7 @@ class CampaignDispatcher:
         )
         from services.platform_session_runtime import scenario_registry_has_platform_login_gate
 
-        allows_facebook_login_recovery = scenario_registry_has_platform_login_gate(
+        allows_login_recovery = scenario_registry_has_platform_login_gate(
             scenario_registry,
             scenario_refs,
         )
@@ -634,12 +640,13 @@ class CampaignDispatcher:
             device_ids=device_ids_ordered,
         )
         device_map = devices_by_id if devices_by_id is not None else validation.devices_by_id
-        account_by_device = await _apply_facebook_session_guard_to_accounts(
+        account_by_device = await _apply_platform_session_guard_to_accounts(
             db,
             org_id=org_id,
+            platform=resolve_campaign_platform(campaign, scenario_registry),
             account_by_device=account_by_device,
             device_map=device_map,
-            allow_login_recovery=allows_facebook_login_recovery,
+            allow_login_recovery=allows_login_recovery,
         )
         try:
             from web.metrics import campaign_account_resolve_batch_size
@@ -1121,7 +1128,7 @@ class CampaignDispatcher:
         if resolved_account and resolved_account.session_guard:
             execution_values["meta"] = {
                 **execution_values["meta"],
-                "facebook_session_guard": resolved_account.session_guard,
+                "platform_session_guard": resolved_account.session_guard,
             }
 
         active_claim_session_id = claim_session_id
@@ -1452,7 +1459,7 @@ class CampaignDispatcher:
             scenario_registry_has_platform_login_gate,
         )
 
-        allows_facebook_login_recovery = scenario_registry_has_platform_login_gate(
+        allows_login_recovery = scenario_registry_has_platform_login_gate(
             scenario_registry,
             scenario_refs,
         )
@@ -1469,24 +1476,25 @@ class CampaignDispatcher:
             required=campaign_has_account_binding(campaign),
         )
         if resolved.account_id:
-            from services.facebook_session_guard import guard_facebook_session
+            from services.platform_session_guard import guard_platform_session
 
-            decision = await guard_facebook_session(
+            decision = await guard_platform_session(
                 db,
                 org_id=org_id,
                 device_id=device_id,
                 account_id=resolved.account_id,
+                platform=resolve_campaign_platform(campaign, scenario_registry),
                 device_serial=devices[0].serial,
                 live_check=False,
             )
             deferred_to_login = (
-                allows_facebook_login_recovery
+                allows_login_recovery
                 and decision.blocks_execution
                 and guard_reason_allows_login_recovery(decision.reason)
             )
             meta = {
                 **meta,
-                "facebook_session_guard": {
+                "platform_session_guard": {
                     **decision.to_meta(),
                     **({"deferred_to_scenario_login": True} if deferred_to_login else {}),
                 },

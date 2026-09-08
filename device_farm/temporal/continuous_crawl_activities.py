@@ -209,7 +209,7 @@ async def prepare_continuous_crawl_target(
             scenario_registry_has_platform_login_gate,
         )
 
-        allows_facebook_login_recovery = scenario_registry_has_platform_login_gate(
+        allows_login_recovery = scenario_registry_has_platform_login_gate(
             scenario_registry,
             scenario_refs,
         )
@@ -259,24 +259,26 @@ async def prepare_continuous_crawl_target(
                 raise ValueError(
                     account.failure_reason or "campaign account unavailable"
                 )
-            from services.facebook_session_guard import guard_facebook_session
+            from services.campaign.dispatcher import resolve_campaign_platform
+            from services.platform_session_guard import guard_platform_session
 
-            guard = await guard_facebook_session(
+            guard = await guard_platform_session(
                 db,
                 org_id=inp.org_id,
                 device_id=device.id,
                 account_id=account.account_id,
+                platform=resolve_campaign_platform(campaign, scenario_registry),
                 device_serial=device.serial,
                 live_check=False,
             )
             session_guard_deferred = (
-                allows_facebook_login_recovery
+                allows_login_recovery
                 and guard.blocks_execution
                 and guard_reason_allows_login_recovery(guard.reason)
             )
             execution.meta = {
                 **(execution.meta or {}),
-                "facebook_session_guard": {
+                "platform_session_guard": {
                     **guard.to_meta(),
                     **(
                         {"deferred_to_scenario_login": True}

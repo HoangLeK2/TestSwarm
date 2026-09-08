@@ -13,7 +13,7 @@ from db.models.account import Account
 from db.models.device import Device
 from db.models.enums import DevicePlatformSessionState
 from services.campaign.account_resolver import ResolvedDeviceAccount
-from services.campaign.dispatcher import _apply_facebook_session_guard_to_accounts
+from services.campaign.dispatcher import _apply_platform_session_guard_to_accounts
 from services.device_platform_session import get_platform_session, mark_active
 from services.platform_readiness import PlatformReadinessResult, PlatformReadinessStatus
 from services.facebook_session_guard import (
@@ -287,13 +287,14 @@ async def test_dispatch_defers_only_login_recoverable_session_blocks(
         )
 
     monkeypatch.setattr(
-        "services.facebook_session_guard.guard_facebook_session", fake_guard
+        "services.platform_session_guard.guard_platform_session", fake_guard
     )
     resolved = ResolvedDeviceAccount(account_id="account-1", account_vars={})
 
-    result = await _apply_facebook_session_guard_to_accounts(
+    result = await _apply_platform_session_guard_to_accounts(
         None,
         org_id="org-1",
+        platform="facebook",
         account_by_device={"device-1": resolved},
         device_map={"device-1": SimpleNamespace(serial="SERIAL-1")},
         allow_login_recovery=True,

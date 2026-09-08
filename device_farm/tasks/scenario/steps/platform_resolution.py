@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from tasks.scenario.context import ScenarioContext
 
 _AUTO_PLATFORM = "auto"
-_CONTEXT_PLATFORM_KEYS = (
+CONTEXT_PLATFORM_KEYS = (
     "platform",
     "default_platform",
     "target_platform",
@@ -45,17 +45,28 @@ def _clean_platform(value: Any) -> str:
     return str(value or "").strip().casefold()
 
 
+def platform_from_payload(payload: Any) -> str | None:
+    """First declared, non-``auto`` platform in a scenario/context/vars mapping."""
+    if not isinstance(payload, dict):
+        return None
+    for key in CONTEXT_PLATFORM_KEYS:
+        platform = _clean_platform(payload.get(key))
+        if platform and platform != _AUTO_PLATFORM:
+            return platform
+    return None
+
+
 def _first_context_platform(sc: "ScenarioContext") -> tuple[str, str] | None:
     for source, payload in (("scenario", sc.scenario), ("context", sc.ctx)):
         if not isinstance(payload, dict):
             continue
-        for key in _CONTEXT_PLATFORM_KEYS:
+        for key in CONTEXT_PLATFORM_KEYS:
             platform = _clean_platform(payload.get(key))
             if platform and platform != _AUTO_PLATFORM:
                 return platform, f"{source}.{key}"
     vars_payload = sc.ctx.get("vars", {}) if isinstance(sc.ctx, dict) else {}
     if isinstance(vars_payload, dict):
-        for key in _CONTEXT_PLATFORM_KEYS:
+        for key in CONTEXT_PLATFORM_KEYS:
             platform = _clean_platform(vars_payload.get(key))
             if platform and platform != _AUTO_PLATFORM:
                 return platform, f"context.vars.{key}"

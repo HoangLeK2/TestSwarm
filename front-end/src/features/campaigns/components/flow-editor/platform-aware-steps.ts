@@ -20,6 +20,7 @@ export const PLATFORM_AWARE_STEP_TYPES = new Set<string>([
   'social_scan_posts_interact',
   'social_open_author_from_post_match',
   'social_open_commenter_from_post_match',
+  'social_sync_connections',
   'content_interaction',
   'connection_request',
   'community_membership'

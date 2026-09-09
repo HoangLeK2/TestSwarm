@@ -6,6 +6,10 @@ Endpoints:
     POST   /api/accounts                             Create account
     POST   /api/accounts/import                      Bulk import (JSON)
     POST   /api/accounts/import-csv                  Bulk import (CSV text)
+    GET    /api/accounts/import-formats              List TXT import formats
+    POST   /api/accounts/import-txt                  Bulk import (TXT format)
+    POST   /api/admin/account-import-formats         Create TXT import format
+    PATCH  /api/admin/account-import-formats/{id}    Update TXT import format
     GET    /api/accounts/{id}                        Get account detail
     PATCH  /api/accounts/{id}                        Update account
     DELETE /api/accounts/{id}                        Delete account
@@ -26,13 +30,18 @@ import os
 from datetime import datetime, timezone
 from typing import List, NoReturn, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy import select
 
+from api.auth.rbac import is_superadmin
 from api.deps import CurrentUser, DB, require_permission
 from api.org_scope import data_owner_user_id, resource_visible_to_user
 from api.schemas.account import (
     AccountCreate,
+    AccountImportFormatCreate,
+    AccountImportFormatListOut,
+    AccountImportFormatOut,
+    AccountImportFormatUpdate,
     AccountOut,
     AccountStatusUpdate,
     AccountVerificationOut,
@@ -85,6 +94,16 @@ from db.crud.device import get_device
 from db.models.enums import AccountEventType
 from db.models.account import DeviceAccount
 from services.account_event_recorder import get_account_event_recorder
+from services.account_import_formats import (
+    AccountImportFormatError,
+    count_account_import_formats_by_slug,
+    create_account_import_format,
+    get_account_import_format,
+    list_account_import_formats,
+    parse_txt_accounts,
+    update_account_import_format,
+    validate_account_import_slug,
+)
 from services.account_state import (
     AccountStateError,
     AccountStateService,
@@ -133,6 +152,18 @@ def _raise_account_state_http(exc: AccountStateError) -> NoReturn:
     ) from exc
 
 
+def _raise_account_import_format_http(exc: AccountImportFormatError) -> NoReturn:
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail={"code": exc.code, "message": str(exc)},
+    ) from exc
+
+
+def _require_superadmin(user: CurrentUser) -> None:
+    if not is_superadmin(user):
+        raise HTTPException(status_code=403, detail={"code": "SUPERADMIN_ONLY"})
+
+
 async def _commit_and_flush_events(db) -> None:
     await db.commit()
     rec = get_account_event_recorder()
@@ -140,6 +171,10 @@ async def _commit_and_flush_events(db) -> None:
         flushed = await rec.flush(db)
         if flushed == 0:
             break
+
+
+def _account_import_format_to_out(row) -> AccountImportFormatOut:
+    return AccountImportFormatOut.model_validate(row)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -376,7 +411,12 @@ async def create_account_endpoint(body: AccountCreate, db: DB, user: CurrentUser
 async def bulk_import_json(body: BulkImportBody, db: DB, user: CurrentUser):
     """Bulk import accounts from a JSON array. Duplicate (platform, username) pairs are skipped."""
     rows = [r.model_dump() for r in body.accounts]
-    created, skipped = await bulk_create_accounts(db, rows, user_id=user.id)
+    created, skipped = await bulk_create_accounts(
+        db,
+        rows,
+        user_id=user.id,
+        org_id=getattr(user, "org_id", None),
+    )
     await db.commit()
     return BulkImportResult(created=created, skipped=skipped, total=len(rows))
 
@@ -452,14 +492,22 @@ async def bulk_import_csv(
                     continue
 
                 row = dict(zip(header, [f.strip() for f in fields]))
-                prepared = _prepare_account_row(row, user.id)
+                prepared = _prepare_account_row(
+                    row,
+                    user.id,
+                    org_id=getattr(user, "org_id", None),
+                )
                 if prepared is None:
                     invalid += 1
                     total += 1
                     continue
 
-                plain_pw = (row.get("password") or row.get("password_plain") or "").strip()
-                prepared["password_encrypted"] = encrypt_password(plain_pw) if plain_pw else None
+                plain_pw = (
+                    row.get("password") or row.get("password_plain") or ""
+                ).strip()
+                prepared["password_encrypted"] = (
+                    encrypt_password(plain_pw) if plain_pw else None
+                )
 
                 batch.append(prepared)
                 total += 1
@@ -476,12 +524,18 @@ async def bulk_import_csv(
                 fields = next(reader, None)
                 if fields:
                     row = dict(zip(header, [f.strip() for f in fields]))
-                    prepared = _prepare_account_row(row, user.id)
+                    prepared = _prepare_account_row(
+                        row,
+                        user.id,
+                        org_id=getattr(user, "org_id", None),
+                    )
                     if prepared:
                         plain_pw = (
                             row.get("password") or row.get("password_plain") or ""
                         ).strip()
-                        prepared["password_encrypted"] = encrypt_password(plain_pw) if plain_pw else None
+                        prepared["password_encrypted"] = (
+                            encrypt_password(plain_pw) if plain_pw else None
+                        )
                         batch.append(prepared)
                         total += 1
                     else:
@@ -499,6 +553,136 @@ async def bulk_import_csv(
     await db.commit()
     skipped = total - created
     return BulkImportResult(created=created, skipped=skipped, total=total)
+
+
+@router.get(
+    "/accounts/import-formats",
+    response_model=AccountImportFormatListOut,
+    dependencies=[Depends(require_permission("accounts", "read"))],
+)
+async def list_account_import_formats_endpoint(
+    db: DB,
+    user: CurrentUser,
+    include_inactive: bool = Query(False),
+):
+    if include_inactive:
+        _require_superadmin(user)
+    rows = await list_account_import_formats(db, include_inactive=include_inactive)
+    return AccountImportFormatListOut(
+        items=[_account_import_format_to_out(row) for row in rows]
+    )
+
+
+@router.post(
+    "/accounts/import-txt",
+    response_model=BulkImportResult,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_permission("accounts", "create"))],
+)
+async def bulk_import_txt(
+    db: DB,
+    user: CurrentUser,
+    file: UploadFile = File(
+        ...,
+        description="TXT file containing one account per line",
+    ),
+    format_id: str | None = Form(default=None),
+    format_slug: str | None = Form(default=None),
+):
+    if not format_id and not format_slug:
+        format_slug = "facebook_uid_password_totp_cookies_token_email"
+    fmt = await get_account_import_format(db, format_id=format_id, slug=format_slug)
+    if fmt is None:
+        raise HTTPException(status_code=404, detail={"code": "IMPORT_FORMAT_NOT_FOUND"})
+    content = (await file.read()).decode("utf-8", errors="replace")
+    try:
+        parsed = parse_txt_accounts(content, fmt)
+    except AccountImportFormatError as exc:
+        _raise_account_import_format_http(exc)
+    finally:
+        await file.close()
+    created, skipped = await bulk_create_accounts(
+        db,
+        parsed.rows,
+        user_id=user.id,
+        org_id=getattr(user, "org_id", None),
+    )
+    await db.commit()
+    return BulkImportResult(
+        created=created,
+        skipped=skipped + parsed.invalid,
+        total=parsed.total,
+    )
+
+
+@router.post(
+    "/admin/account-import-formats",
+    response_model=AccountImportFormatOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("accounts", "manage"))],
+)
+async def admin_create_account_import_format(
+    body: AccountImportFormatCreate,
+    db: DB,
+    user: CurrentUser,
+):
+    _require_superadmin(user)
+    try:
+        slug = validate_account_import_slug(body.slug)
+        if await count_account_import_formats_by_slug(db, slug):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "IMPORT_FORMAT_SLUG_EXISTS"},
+            )
+        row = await create_account_import_format(
+            db,
+            slug=slug,
+            name=body.name,
+            description=body.description,
+            delimiter=body.delimiter,
+            platform=body.platform,
+            fields=body.fields,
+            is_active=body.is_active,
+            created_by_user_id=user.id,
+        )
+    except AccountImportFormatError as exc:
+        _raise_account_import_format_http(exc)
+    await db.commit()
+    await db.refresh(row)
+    return _account_import_format_to_out(row)
+
+
+@router.patch(
+    "/admin/account-import-formats/{format_id}",
+    response_model=AccountImportFormatOut,
+    dependencies=[Depends(require_permission("accounts", "manage"))],
+)
+async def admin_update_account_import_format(
+    format_id: str,
+    body: AccountImportFormatUpdate,
+    db: DB,
+    user: CurrentUser,
+):
+    _require_superadmin(user)
+    row = await get_account_import_format(db, format_id=format_id, active_only=False)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"code": "IMPORT_FORMAT_NOT_FOUND"})
+    try:
+        row = await update_account_import_format(
+            db,
+            row,
+            name=body.name,
+            description=body.description,
+            delimiter=body.delimiter,
+            platform=body.platform,
+            fields=body.fields,
+            is_active=body.is_active,
+        )
+    except AccountImportFormatError as exc:
+        _raise_account_import_format_http(exc)
+    await db.commit()
+    await db.refresh(row)
+    return _account_import_format_to_out(row)
 
 
 @router.post(

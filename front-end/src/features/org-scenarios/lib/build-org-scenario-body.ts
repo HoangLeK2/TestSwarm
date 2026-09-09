@@ -59,7 +59,8 @@ function ensureOrgStepIds(step: any, fallbackId: string): any {
 /** Convert control-record steps into an org-scenario body payload accepted by POST /scenarios/{id}/body. */
 export function buildOrgScenarioBodyPayload(
   steps: unknown[],
-  variables?: Record<string, unknown> | null
+  variables?: Record<string, unknown> | null,
+  requirements?: Record<string, unknown> | null
 ): OrgScenarioBodyIn {
   const sanitized = sanitizeScenarioStepsForApi(steps);
   const withIds = sanitized.map((step, index) =>
@@ -71,6 +72,7 @@ export function buildOrgScenarioBodyPayload(
       withIds,
       normalizedVariables
     ),
-    variables: normalizedVariables
+    variables: normalizedVariables,
+    requirements: requirements ?? {}
   };
 }

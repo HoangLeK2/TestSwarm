@@ -99,6 +99,7 @@ const ICON_MAP: Record<string, React.ComponentType<LucideProps>> = {
   social_scan_posts_interact: MessageCircle,
   social_open_author_from_post_match: UserPlus,
   social_open_commenter_from_post_match: UserPlus,
+  social_sync_connections: Users,
   social_content_like_comment_flow: MessageCircle,
   content_interaction: MousePointerClick,
   connection_request: UserPlus,
@@ -168,6 +169,7 @@ const COLOR_MAP: Record<string, string> = {
   social_scan_posts_interact: 'text-blue-600',
   social_open_author_from_post_match: 'text-emerald-700',
   social_open_commenter_from_post_match: 'text-emerald-700',
+  social_sync_connections: 'text-emerald-600',
   extract_comments: 'text-fuchsia-500',
   extract_posts: 'text-fuchsia-500'
 };

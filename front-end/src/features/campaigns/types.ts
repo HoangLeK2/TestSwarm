@@ -73,6 +73,7 @@ export type ScenarioOut = {
   instructions: string;
   steps: Record<string, any>[];
   variables: Record<string, any>;
+  requirements: Record<string, any>;
   order: number;
   nodes: FlowNode[];
   edges: FlowEdge[];
@@ -87,6 +88,7 @@ export type ScenarioCreate = {
   instructions?: string;
   steps?: Record<string, any>[];
   variables?: Record<string, any>;
+  requirements?: Record<string, any>;
   order?: number;
   nodes?: FlowNode[];
   edges?: FlowEdge[];

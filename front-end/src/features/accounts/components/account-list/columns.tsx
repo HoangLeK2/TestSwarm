@@ -32,6 +32,7 @@ import type { AccountOut } from '../../services/api';
 import { EditAccountDialog } from '../edit-account-dialog';
 import { AccountStateTransitionDialog } from '../account-state-transition-dialog';
 import { AccountDevicesDialog } from '../account-devices-dialog';
+import { AccountLoginDialog } from '../account-login-dialog';
 import Link from 'next/link';
 import { ROUTES } from '@/config/routes';
 import type { ResourcePermissionFlags } from '@/features/auth/types/resource-permissions';
@@ -200,6 +201,7 @@ export function getAccountColumns(
         const targets = allowedTransitionTargets(current);
         return (
           <div className='flex items-center gap-1'>
+            <AccountLoginDialog account={account} canUpdate={perms.canUpdate} />
             <AccountDevicesDialog
               account={account}
               canUpdate={perms.canUpdate}

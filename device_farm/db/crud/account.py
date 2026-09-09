@@ -263,7 +263,11 @@ async def delete_account(db: AsyncSession, account_id: str) -> bool:
     return result.rowcount > 0
 
 
-def _prepare_account_row(row: dict, user_id: Optional[str]) -> Optional[dict]:
+def _prepare_account_row(
+    row: dict,
+    user_id: Optional[str],
+    org_id: Optional[str] = None,
+) -> Optional[dict]:
     """
     Validate and normalise a raw import row dict.
     Returns a DB-ready dict, or None if the row is malformed (platform/username missing).
@@ -281,6 +285,7 @@ def _prepare_account_row(row: dict, user_id: Optional[str]) -> Optional[dict]:
         "notes": (row.get("notes") or "").strip(),
         "tags": (row.get("tags") or "").strip(),
         "user_id": user_id,
+        "org_id": org_id,
         "metadata": _metadata_from_import_row(row),
         "status": "active",
         "state": "active",
@@ -295,9 +300,9 @@ async def _insert_batch(db: AsyncSession, batch: List[dict]) -> int:
     Returns the number of rows actually inserted (conflicts are silently skipped).
     """
     stmt = (
-        pg_insert(Account)
+        pg_insert(Account.__table__)
         .values(batch)
-        .on_conflict_do_nothing(index_elements=["platform", "username"])
+        .on_conflict_do_nothing(index_elements=["org_id", "platform", "username"])
     )
     result = await db.execute(stmt)
     return result.rowcount
@@ -308,6 +313,7 @@ async def bulk_create_accounts(
     rows: List[dict],
     *,
     user_id: Optional[str] = None,
+    org_id: Optional[str] = None,
 ) -> Tuple[int, int]:
     """
     Batch bulk import with upsert-skip semantics.
@@ -328,7 +334,7 @@ async def bulk_create_accounts(
     created = 0
 
     for row in rows:
-        prepared = _prepare_account_row(row, user_id)
+        prepared = _prepare_account_row(row, user_id, org_id=org_id)
         if prepared is None:
             invalid += 1
             continue

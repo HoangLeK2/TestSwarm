@@ -84,7 +84,10 @@ import { DeviceControlEmbed } from '@/features/devices/components/device-control
 import { VariableEditor } from '@/components/variable-editor';
 import { useTranslations } from 'next-intl';
 import { useAccountGroups } from '@/features/account-groups/hooks/use-account-groups';
-import { FlowEditor } from './flow-editor/flow-editor';
+import {
+  FlowEditor,
+  type ScenarioRequirements
+} from './flow-editor/flow-editor';
 import { deviceCapabilityMapFromDevice } from '../lib/node-capabilities';
 import {
   scenarioCapabilityIssueSummary,
@@ -525,6 +528,8 @@ export function ScenarioDialog({
   const [graphNodes, setGraphNodes] = useState<FlowNode[]>([]);
   const [graphEdges, setGraphEdges] = useState<FlowEdge[]>([]);
   const [variables, setVariables] = useState<Record<string, any>>({});
+  const [scenarioRequirements, setScenarioRequirements] =
+    useState<ScenarioRequirements>({});
   const variablesRef = useRef<Record<string, any>>({});
   const initialVariablesRef = useRef<Record<string, any>>({});
   const [accountGroupId, setAccountGroupId] = useState<string>('');
@@ -1396,6 +1401,7 @@ export function ScenarioDialog({
     let currentDeviceNotes = '';
 
     let currentVariables: Record<string, any> = {};
+    let currentRequirements: ScenarioRequirements = {};
 
     if (effectiveRow) {
       currentInstructions = effectiveRow.instructions ?? '';
@@ -1408,6 +1414,9 @@ export function ScenarioDialog({
           unknown
         >
       ) as Record<string, any>;
+      currentRequirements =
+        ((effectiveRow as ScenarioOut).requirements as ScenarioRequirements) ??
+        {};
       const sc: any = (campaign.scenario as any) ?? {};
       const ctx: any = sc.device_context ?? {};
       currentDeviceModel = ctx.device_model ?? '';
@@ -1419,12 +1428,16 @@ export function ScenarioDialog({
       currentVariables = normalizeScenarioVariables(
         (campaign.variables ?? {}) as Record<string, unknown>
       ) as Record<string, any>;
+      currentRequirements =
+        (((campaign.scenario as any)?.requirements ?? {}) as ScenarioRequirements) ??
+        {};
       setAccountGroupId('');
     }
 
     setInstructions(currentInstructions);
     setSteps(currentSteps);
     setVariables(currentVariables);
+    setScenarioRequirements(currentRequirements);
     variablesRef.current = currentVariables;
     initialVariablesRef.current = currentVariables;
     // Load graph model if available and valid, else derive from steps.
@@ -1466,7 +1479,8 @@ export function ScenarioDialog({
         {
           instructions: currentInstructions,
           steps: currentSteps,
-          variables: currentVariables
+          variables: currentVariables,
+          requirements: currentRequirements
         },
         null,
         2
@@ -1572,6 +1586,7 @@ export function ScenarioDialog({
             instructions,
             steps: sanitizedSteps,
             variables: variablesToSave,
+            requirements: scenarioRequirements,
             nodes: saveNodes as any,
             edges: saveEdges as any,
             // Empty string clears the binding on the backend.
@@ -1601,6 +1616,7 @@ export function ScenarioDialog({
         instructions,
         steps: sanitizedSteps,
         variables: variablesToSave,
+        requirements: scenarioRequirements,
         device_context: deviceContext
       };
       saveScenario(

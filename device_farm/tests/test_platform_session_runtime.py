@@ -299,6 +299,27 @@ def test_registry_collects_platform_session_requirements_from_dependencies():
     ) == {"facebook", "tiktok"}
 
 
+def test_legacy_campaign_registry_preserves_scenario_requirements():
+    from services.campaign_dispatch import _build_scenario_registry
+
+    scenario = SimpleNamespace(
+        id="scenario-1",
+        name="Needs Session",
+        steps=[{"type": "wait", "seconds": 1}],
+        variables={},
+        requirements={
+            "platform_session": {"required": True, "platform": "facebook"}
+        },
+    )
+
+    registry = _build_scenario_registry([scenario], [])
+
+    assert scenario_registry_platform_session_requirements(
+        registry,
+        [{"scenario_id": "scenario-1"}],
+    ) == {"facebook"}
+
+
 def test_template_clone_body_preserves_platform_session_requirement():
     from services.org_scenario_io.service import _template_body_json
 
@@ -317,6 +338,22 @@ def test_template_clone_body_preserves_platform_session_requirement():
         "platform": "facebook",
         "account_source": "device_primary",
     }
+
+
+def test_template_clone_body_does_not_infer_session_requirement_from_platform_tag():
+    from services.org_scenario_io.service import _template_body_json
+
+    body = _template_body_json(
+        SimpleNamespace(
+            steps=[{"type": "extract", "entity": "pages"}],
+            nodes=[],
+            edges=[],
+            variables={},
+            tags="facebook,page,discovery",
+        )
+    )
+
+    assert "requirements" not in body
 
 
 @pytest.mark.asyncio
@@ -361,6 +398,32 @@ async def test_dispatch_defers_only_login_recoverable_session_blocks(
     assert bool(
         (result["device-1"].session_guard or {}).get("deferred_to_scenario_login")
     ) is (not expected_unavailable)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_skips_session_guard_without_requirement(monkeypatch):
+    called = False
+
+    async def fake_guard(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("guard should not run without a session requirement")
+
+    monkeypatch.setattr(
+        "services.platform_session_guard.guard_platform_session", fake_guard
+    )
+    resolved = ResolvedDeviceAccount(account_id="account-1", account_vars={})
+
+    result = await _apply_platform_session_guard_to_accounts(
+        None,
+        org_id="org-1",
+        platform="facebook",
+        account_by_device={"device-1": resolved},
+        device_map={"device-1": SimpleNamespace(serial="SERIAL-1")},
+    )
+
+    assert called is False
+    assert result["device-1"] is resolved
 
 
 def test_scrolled_feed_is_recognised_as_ready() -> None:

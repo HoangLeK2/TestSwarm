@@ -1109,6 +1109,8 @@ export interface CampaignDispatchIn {
    * @default true
    */
   require_online?: boolean;
+  /** Requirements */
+  requirements?: Record<string, any> | null;
 }
 
 /** CampaignDispatchOut */
@@ -4064,6 +4066,8 @@ export interface OrgScenarioBodyIn {
   edges?: Record<string, any>[] | null;
   /** Variables */
   variables?: Record<string, any> | null;
+  /** Requirements */
+  requirements?: Record<string, any> | null;
 }
 
 /** OrgScenarioBodyOut */
@@ -4980,6 +4984,11 @@ export interface ScenarioCreate {
    */
   variables?: Record<string, any>;
   /**
+   * Requirements
+   * @default {}
+   */
+  requirements?: Record<string, any>;
+  /**
    * Order
    * @default 0
    */
@@ -5028,6 +5037,11 @@ export interface ScenarioOut {
   steps: any[];
   /** Variables */
   variables: Record<string, any>;
+  /**
+   * Requirements
+   * @default {}
+   */
+  requirements?: Record<string, any>;
   /** Order */
   order: number;
   /**
@@ -5180,6 +5194,8 @@ export interface ScenarioUpdate {
   steps?: any[] | null;
   /** Variables */
   variables?: Record<string, any> | null;
+  /** Requirements */
+  requirements?: Record<string, any> | null;
   /** Order */
   order?: number | null;
   /** Nodes */

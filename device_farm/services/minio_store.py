@@ -32,7 +32,7 @@ from __future__ import annotations
 import io
 import logging
 import threading
-from typing import Optional
+from typing import BinaryIO, Iterator, Optional
 
 log = logging.getLogger(__name__)
 
@@ -176,6 +176,45 @@ def upload(data: bytes, object_name: str, content_type: str = "image/jpeg") -> O
         return None
 
 
+def upload_file(
+    file_obj: BinaryIO,
+    object_name: str,
+    *,
+    length: int,
+    content_type: str = "application/octet-stream",
+) -> Optional[str]:
+    """Upload a seekable file-like object without copying it into memory."""
+    if not _enabled or _client is None:
+        return None
+    try:
+        file_obj.seek(0)
+        with _upload_semaphore:
+            _client.put_object(
+                _bucket,
+                object_name,
+                file_obj,
+                length=length,
+                content_type=content_type,
+            )
+        if _public_base_url:
+            if _public_url_include_bucket:
+                return f"{_public_base_url}/{_bucket}/{object_name}"
+            return f"{_public_base_url}/{object_name}"
+        from datetime import timedelta
+
+        return _client.presigned_get_object(
+            _bucket, object_name, expires=timedelta(weeks=1)
+        )
+    except Exception as exc:
+        log.warning("minio_store: upload_file failed for %s: %s", object_name, exc)
+        return None
+    finally:
+        try:
+            file_obj.seek(0)
+        except Exception:
+            pass
+
+
 def presigned_get(object_name: str, *, expires_seconds: int = 3600) -> str | None:
     """Return presigned GET URL with configurable TTL (Epic 06 artifact preview)."""
     if not _enabled or _client is None:
@@ -207,6 +246,27 @@ def get_object_bytes(object_name: str) -> bytes | None:
     except Exception as exc:
         log.warning("minio_store: get_object failed for %s: %s", object_name, exc)
         return None
+
+
+def iter_object_bytes(object_name: str, *, chunk_size: int = 1024 * 1024) -> Iterator[bytes] | None:
+    """Return a streaming iterator for object bytes."""
+    if not _enabled or _client is None:
+        return None
+
+    try:
+        response = _client.get_object(_bucket, object_name)
+    except Exception as exc:
+        log.warning("minio_store: iter_object failed for %s: %s", object_name, exc)
+        return None
+
+    def _iter() -> Iterator[bytes]:
+        try:
+            yield from response.stream(max(64 * 1024, chunk_size))
+        finally:
+            response.close()
+            response.release_conn()
+
+    return _iter()
 
 
 def delete_object(object_name: str) -> bool:

@@ -1217,8 +1217,32 @@ def _fb_session_guard_steps(
     *,
     allow_login_recovery: bool = True,
 ) -> List[Dict[str, Any]]:
+    post_confirm_cleanup = [
+        {
+            "id": f"{prefix}_post_confirm_popup_delay",
+            "type": "wait",
+            "seconds": 1,
+        },
+        {
+            "id": f"{prefix}_post_confirm_popups",
+            "type": "repeat",
+            "count": 8,
+            "delay_between": 1,
+            "steps": [{"type": "dismiss_popup", "retries": 3}],
+        },
+    ]
+    preflight_cleanup = [
+        {
+            "id": f"{prefix}_preflight_popups",
+            "type": "repeat",
+            "count": 5,
+            "delay_between": 1,
+            "steps": [{"type": "dismiss_popup", "retries": 3}],
+        },
+    ]
     steps: List[Dict[str, Any]] = [
         *_fb_app_start_steps(prefix),
+        *preflight_cleanup,
         {
             "id": f"{prefix}_session_preflight",
             "type": "platform_session_gate", "platform": "facebook",
@@ -1235,7 +1259,10 @@ def _fb_session_guard_steps(
             "type": "if_variable",
             "name": "PLATFORM_SESSION_READY",
             "equals": True,
-            "then": [{"type": "wait", "seconds": 0.1}],
+            "then": [
+                {"type": "wait", "seconds": 0.1},
+                *deepcopy(post_confirm_cleanup),
+            ],
             "else": [
                 {
                     "type": "if_element",
@@ -1258,9 +1285,64 @@ def _fb_session_guard_steps(
                     "else": [],
                 },
                 {
+                    "type": "if_element",
+                    "by": "text",
+                    "value": "Tôi có trang cá nhân rồi",
+                    "timeout": 2,
+                    "then": [
+                        {
+                            "type": "tap_selector",
+                            "by": "text",
+                            "value": "Tôi có trang cá nhân rồi",
+                            "timeout": 4,
+                        },
+                        {
+                            "type": "wait_stable",
+                            "timeout": 5,
+                            "stable_duration": 0.4,
+                        },
+                    ],
+                    "else": [],
+                },
+                {
+                    "type": "if_element",
+                    "by": "text",
+                    "value": "I already have an account",
+                    "timeout": 1,
+                    "then": [
+                        {
+                            "type": "tap_selector",
+                            "by": "text",
+                            "value": "I already have an account",
+                            "timeout": 4,
+                        },
+                        {
+                            "type": "wait_stable",
+                            "timeout": 5,
+                            "stable_duration": 0.4,
+                        },
+                    ],
+                    "else": [],
+                },
+                {
                     "type": "login_if_needed",
                     "profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
                     "clear_first": True,
+                },
+                # login_if_needed returns the moment it taps submit, and the
+                # confirm gate below only *reads* the screen. Facebook answers a
+                # fresh login with a queue of popups (save login info, turn on
+                # notifications, find friends) that cover the tab bar and the
+                # composer — the exact markers readiness looks for. Without this
+                # the account is signed in and the gate still reports failure.
+                # Repeat rather than a single dismiss_popup: each popup takes
+                # about a second to render after the previous one is closed.
+                {
+                    "id": f"{prefix}_post_login_popups",
+                    "type": "repeat",
+                    "count": 5,
+                    "delay_between": 1,
+                    "steps": [{"type": "dismiss_popup", "retries": 3}],
                 },
                 {
                     "id": f"{prefix}_session_confirm",
@@ -1269,6 +1351,7 @@ def _fb_session_guard_steps(
                     "timeout": 20,
                     "poll_interval": 0.5,
                 },
+                *post_confirm_cleanup,
             ],
         },
     ]
@@ -1450,8 +1533,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "(có vuốt ngang tab nếu Trang đang nằm ngoài màn hình), cào các page "
             "đang thấy và lưu vào catalog Page để phân công cho phone."
         ),
-        "tags": "facebook,page,fanpage,discovery,catalog,keyword,requires-platform-session:facebook",
-        "requirements": _fb_platform_session_requirement(),
+        "tags": "facebook,page,fanpage,discovery,catalog,keyword",
         "variables": {
             "PAGE_KEYWORDS": [
                 "Go2Joy Vietnam",
@@ -1647,8 +1729,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "Mở Fanpage đã gắn cho phone hoặc fallback theo PAGE_SEARCH/PAGE_ROW_TEXT, "
             "crawl bài viết và bình luận để tạo kho post/page evidence dùng cho nuôi account."
         ),
-        "tags": "facebook,page,fanpage,crawl,feed,post,comment,requires-platform-session:facebook",
-        "requirements": _fb_platform_session_requirement(),
+        "tags": "facebook,page,fanpage,crawl,feed,post,comment",
         "variables": {
             "PAGE_SEARCH": "ten fanpage",
             "PAGE_ROW_TEXT": "Tên Fanpage",

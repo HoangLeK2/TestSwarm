@@ -12,6 +12,7 @@ import {
   Play,
   RefreshCw,
   Save,
+  ShieldCheck,
   SlidersHorizontal,
   Square
 } from 'lucide-react';
@@ -46,6 +47,9 @@ type ControlRecordEditorToolbarLabels = {
   recoveryTooltip: string;
   deviceVars: string;
   deviceVarsTooltip: string;
+  requirements: string;
+  requirementsTooltip: string;
+  requirementsEnabledBadge: string;
   helpTooltip: string;
   flowSwitchToList: string;
   flowSwitchToFlow: string;
@@ -78,6 +82,8 @@ type ControlRecordEditorToolbarProps = {
   onOpenDeviceVars: () => void;
   deviceVarsEnabled: boolean;
   deviceVarsDisabled: boolean;
+  onOpenRequirements: () => void;
+  requirementsEnabled: boolean;
   onHelpClick?: () => void;
   flowEnabled: boolean;
   flowMode: boolean;
@@ -110,6 +116,8 @@ export function ControlRecordEditorToolbar({
   onOpenDeviceVars,
   deviceVarsEnabled,
   deviceVarsDisabled,
+  onOpenRequirements,
+  requirementsEnabled,
   onHelpClick,
   flowEnabled,
   flowMode,
@@ -216,7 +224,10 @@ export function ControlRecordEditorToolbar({
               variant='outline'
               className={cn(
                 'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
-                (variableCount > 0 || recoveryEnabled || deviceVarsEnabled) &&
+                (variableCount > 0 ||
+                  recoveryEnabled ||
+                  deviceVarsEnabled ||
+                  requirementsEnabled) &&
                   'border-primary/40 bg-primary/5'
               )}
             >
@@ -228,6 +239,9 @@ export function ControlRecordEditorToolbar({
                 </span>
               ) : null}
               {recoveryEnabled ? (
+                <span className='size-1.5 rounded-full bg-amber-500' />
+              ) : null}
+              {requirementsEnabled ? (
                 <span className='size-1.5 rounded-full bg-amber-500' />
               ) : null}
             </Button>
@@ -275,6 +289,20 @@ export function ControlRecordEditorToolbar({
                 ) : null}
               </DropdownMenuItem>
             ) : null}
+            <DropdownMenuItem className='gap-2' onClick={onOpenRequirements}>
+              <ShieldCheck className='size-4' />
+              <div className='min-w-0 flex-1'>
+                <p>{labels.requirements}</p>
+                <p className='truncate text-[10px] text-muted-foreground'>
+                  {labels.requirementsTooltip}
+                </p>
+              </div>
+              {requirementsEnabled ? (
+                <span className='rounded-full bg-amber-500/15 px-1.5 text-[10px] font-bold text-amber-700 dark:text-amber-300'>
+                  {labels.requirementsEnabledBadge}
+                </span>
+              ) : null}
+            </DropdownMenuItem>
             <DropdownMenuItem
               className='gap-2'
               onClick={onOpenDeviceVars}

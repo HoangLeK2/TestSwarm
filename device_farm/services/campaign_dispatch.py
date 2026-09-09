@@ -189,6 +189,7 @@ def _build_scenario_registry(
         entry: Dict[str, Any] = {
             "steps": s.steps or [],
             "variables": _vars,
+            "requirements": dict(getattr(s, "requirements", None) or {}),
             "name": s.name,
             "tags": getattr(s, "tags", "") or "",
         }

@@ -351,6 +351,72 @@ export type AdminDeviceListOut = {
   limit: number;
 };
 
+export type PlatformAppReleaseOut = {
+  id: string;
+  platform: string;
+  package_name: string;
+  version_name: string;
+  version_code?: string | null;
+  sha256: string;
+  size_bytes: number;
+  object_key: string;
+  original_filename?: string | null;
+  content_type_mime: string;
+  status: string;
+  notes?: string | null;
+  uploaded_by_user_id?: string | null;
+  published_at?: string | null;
+  archived_at?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PlatformAppReleaseListOut = {
+  items: PlatformAppReleaseOut[];
+  total: number;
+  offset: number;
+  limit: number;
+};
+
+export type PlatformAppDownloadOut = {
+  release: PlatformAppReleaseOut;
+  download_url: string;
+  expires_seconds: number;
+};
+
+export type AccountImportFormatOut = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  delimiter: string;
+  platform: string;
+  fields: string[];
+  is_active: boolean;
+  is_builtin: boolean;
+  created_by_user_id?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AccountImportFormatListOut = {
+  items: AccountImportFormatOut[];
+};
+
+export type AccountImportFormatCreate = {
+  slug: string;
+  name: string;
+  description?: string;
+  delimiter?: string;
+  platform?: string;
+  fields: string[];
+  is_active?: boolean;
+};
+
+export type AccountImportFormatUpdate = Partial<
+  Omit<AccountImportFormatCreate, 'slug'>
+>;
+
 export type ActivityLogListOut = {
   activities: Array<{
     id: string;
@@ -390,6 +456,13 @@ const ADMIN_ERROR_MESSAGES: Record<string, string> = {
   INVALID_WORKSPACE_KIND:
     'Loại workspace không hợp lệ (chỉ nhận pool hoặc tenant).',
   SUPERADMIN_ONLY: 'Chỉ superadmin thực hiện được thao tác này.',
+  OBJECT_STORAGE_UNAVAILABLE:
+    'Object storage chưa sẵn sàng nên chưa thể lưu APK.',
+  PLATFORM_APP_UPLOAD_FAILED: 'Upload APK thất bại.',
+  PLATFORM_APP_RELEASE_NOT_FOUND: 'Không tìm thấy bản phát hành APK.',
+  PLATFORM_APP_RELEASE_OBJECT_NOT_FOUND:
+    'Không tìm thấy file APK trong object storage.',
+  PLATFORM_APP_RELEASE_ERROR: 'APK không hợp lệ.',
   AGENT_NOT_FOUND:
     'Không tìm thấy agent này (có thể đã bị xoá). Tải lại danh sách rồi thử lại.',
   DEVICE_MANAGED_BY_ANOTHER_WORKSPACE:
@@ -692,6 +765,64 @@ export const adminApi = {
     farmApi
       .put<AdminDeviceOut>(
         `/admin/devices/${encodeURIComponent(deviceId)}/assignment`,
+        body
+      )
+      .then((r) => r.data),
+  listFacebookAppReleases: (
+    params: PageParams & { status?: string } = {}
+  ) =>
+    farmApi
+      .get<PlatformAppReleaseListOut>('/admin/platform-apps/facebook/releases', {
+        params
+      })
+      .then((r) => r.data),
+  uploadFacebookAppRelease: (file: File, notes?: string) => {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    if (notes?.trim()) form.append('notes', notes.trim());
+    return farmApi
+      .post<PlatformAppReleaseOut>(
+        '/admin/platform-apps/facebook/releases',
+        form,
+        { headers: { 'Content-Type': 'multipart/form-data' } }
+      )
+      .then((r) => r.data);
+  },
+  publishFacebookAppRelease: (releaseId: string) =>
+    farmApi
+      .post<{ release: PlatformAppReleaseOut }>(
+        `/admin/platform-apps/facebook/releases/${encodeURIComponent(releaseId)}/publish`
+      )
+      .then((r) => r.data.release),
+  archiveFacebookAppRelease: (releaseId: string) =>
+    farmApi
+      .post<{ release: PlatformAppReleaseOut }>(
+        `/admin/platform-apps/facebook/releases/${encodeURIComponent(releaseId)}/archive`
+      )
+      .then((r) => r.data.release),
+  getFacebookAppReleaseDownloadUrl: (releaseId: string) =>
+    farmApi
+      .get<PlatformAppDownloadOut>(
+        `/admin/platform-apps/facebook/releases/${encodeURIComponent(releaseId)}/download-url`
+      )
+      .then((r) => r.data),
+  listAccountImportFormats: (includeInactive = true) =>
+    farmApi
+      .get<AccountImportFormatListOut>('/accounts/import-formats', {
+        params: { include_inactive: includeInactive }
+      })
+      .then((r) => r.data),
+  createAccountImportFormat: (body: AccountImportFormatCreate) =>
+    farmApi
+      .post<AccountImportFormatOut>('/admin/account-import-formats', body)
+      .then((r) => r.data),
+  updateAccountImportFormat: (
+    formatId: string,
+    body: AccountImportFormatUpdate
+  ) =>
+    farmApi
+      .patch<AccountImportFormatOut>(
+        `/admin/account-import-formats/${encodeURIComponent(formatId)}`,
         body
       )
       .then((r) => r.data),

@@ -87,6 +87,11 @@ import {
 } from '@/components/ui/dialog';
 import { ROUTES } from '@/config/routes';
 import { toast } from 'sonner';
+import { farmApi } from '@/lib/farm-api';
+import {
+  ScenarioRequirementsSettingsDialog,
+  scenarioRequiresPlatformSession
+} from '@/features/campaigns/components/scenario-requirements-summary';
 import { normalizeInternalAppPath } from '@/lib/i18n-path';
 import type { RegionSelect, RegionSelectRect } from './device-screen';
 import { orgScenariosApi } from '@/features/org-scenarios/services/api';
@@ -250,6 +255,9 @@ export function ControlRecordView({
   const tModal = useTranslations('components.modal');
   const tVar = useTranslations('components.variableEditor');
   const tRecovery = useTranslations('campaignsFeature.recoveryPolicy');
+  const tRequirements = useTranslations(
+    'campaignsFeature.stepEditor.requirements'
+  );
   const tGate = useTranslations('executionMessages');
   const tCapabilityPreflight = useTranslations(
     'campaignsFeature.capabilityPreflight'
@@ -361,7 +369,8 @@ export function ControlRecordView({
     }
     const body = buildOrgScenarioBodyPayload(
       latestSteps,
-      syncDeviceVarKeysIntoScenarioVariables()
+      syncDeviceVarKeysIntoScenarioVariables(),
+      save.requirements
     );
     const check = validateScenarioStepsForApi(body.steps ?? []);
     if (!check.ok) {
@@ -569,6 +578,7 @@ export function ControlRecordView({
   const flowRunningFgIdsRef = useRef<Set<string>>(new Set());
   const [varDialogOpen, setVarDialogOpen] = useState(false);
   const [deviceVarDialogOpen, setDeviceVarDialogOpen] = useState(false);
+  const [requirementsDialogOpen, setRequirementsDialogOpen] = useState(false);
   const deviceVarsHydratedKeyRef = useRef<string | null>(null);
   const deviceVarStateRef = useRef<{
     drafts: Record<string, string>;
@@ -1264,7 +1274,7 @@ export function ControlRecordView({
           throw new Error(tVar('saveUnavailable'));
         }
         const bodyPayload = payloadSteps
-          ? buildOrgScenarioBodyPayload(payloadSteps, next)
+          ? buildOrgScenarioBodyPayload(payloadSteps, next, save.requirements)
           : await orgScenariosApi.getBody(scenarioId).then((body) => {
               const bodyJson = (body.body_json ?? {}) as Record<string, any>;
               return {
@@ -1277,7 +1287,12 @@ export function ControlRecordView({
                 ...(Array.isArray(bodyJson.edges)
                   ? { edges: bodyJson.edges as Record<string, any>[] }
                   : {}),
-                variables: next
+                variables: next,
+                requirements:
+                  typeof bodyJson.requirements === 'object' &&
+                  bodyJson.requirements !== null
+                    ? bodyJson.requirements
+                    : save.requirements
               };
             });
         const saved = await orgScenariosApi.saveBody(scenarioId, bodyPayload);
@@ -1294,7 +1309,8 @@ export function ControlRecordView({
 
       if (save.editingContext) {
         const payload: Parameters<typeof scenariosApi.update>[2] = {
-          variables: next
+          variables: next,
+          requirements: save.requirements
         };
         if (payloadSteps) {
           const payloadGraph = stepsToGraph(payloadSteps);
@@ -3048,17 +3064,18 @@ export function ControlRecordView({
       defaultPackage: packageFromCurrentApp(d.current_app),
       onRunStep: runDeviceOpStep,
       onRunShell: (cmd) => runAgentShell(d.serial, cmd),
-      onInstallApk: (url) => {
-        recordWsSend({ type: 'install', serial: d.serial, url });
-        toast.info(tDeviceOps('installApkRunning', { serial: d.serial }));
+      onInstallStandardFacebookApk: async () => {
+        const { data } = await farmApi.post(
+          '/platform-apps/facebook/current/install',
+          { serial: d.serial, timeout_seconds: 600 }
+        );
+        return data;
       }
     };
   }, [
     selectedDeviceForControl,
     mirrorInputLocked.readOnlyPreview,
-    runDeviceOpStep,
-    tDeviceOps,
-    recordWsSend
+    runDeviceOpStep
   ]);
 
   // ── Error / empty states ─────────────────────────────────────────────────
@@ -3236,6 +3253,8 @@ export function ControlRecordView({
         hasEnabledDeviceVars && canManageDeviceVars && selectedDeviceId
       )}
       deviceVarsDisabled={!canOpenDeviceVarsDialog}
+      onOpenRequirements={() => setRequirementsDialogOpen(true)}
+      requirementsEnabled={scenarioRequiresPlatformSession(save.requirements)}
       flowEnabled={ENABLE_FLOWGRAM_CONTROL_UI}
       flowMode={flowMode}
       onToggleFlowMode={() => {
@@ -3274,6 +3293,13 @@ export function ControlRecordView({
             : t('workbench.deviceVarsTooltip.attachedTo', {
                 device: selectedDeviceLabel
               }),
+        requirements: tRequirements('title'),
+        requirementsTooltip: tRequirements(
+          scenarioRequiresPlatformSession(save.requirements)
+            ? 'summarySessionHint'
+            : 'summaryNoSessionHint'
+        ),
+        requirementsEnabledBadge: tRequirements('sessionToggleLabel'),
         helpTooltip: t('tooltipScenarioSection'),
         flowSwitchToList: t('flowSwitchToList'),
         flowSwitchToFlow: t('flowSwitchToFlow'),
@@ -4026,6 +4052,13 @@ export function ControlRecordView({
           badgeGlobal: tDvDlg('badgeGlobal'),
           cancel: tModal('cancel')
         }}
+      />
+
+      <ScenarioRequirementsSettingsDialog
+        open={requirementsDialogOpen}
+        onOpenChange={setRequirementsDialogOpen}
+        requirements={save.requirements}
+        onChange={save.setRequirements}
       />
 
       <ControlRecordRecoveryDialog

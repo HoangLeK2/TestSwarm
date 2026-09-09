@@ -173,3 +173,43 @@ class BulkImportResult(BaseModel):
     created: int
     skipped: int
     total: int
+
+
+class AccountImportFormatOut(BaseModel):
+    id: str
+    slug: str
+    name: str
+    description: str = ""
+    delimiter: str = "|"
+    platform: str = "facebook"
+    fields: List[str]
+    is_active: bool = True
+    is_builtin: bool = False
+    created_by_user_id: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AccountImportFormatListOut(BaseModel):
+    items: List[AccountImportFormatOut]
+
+
+class AccountImportFormatCreate(BaseModel):
+    slug: str = Field(min_length=3, max_length=100)
+    name: str = Field(min_length=1, max_length=255)
+    description: str = Field(default="", max_length=2000)
+    delimiter: str = Field(default="|", min_length=1, max_length=10)
+    platform: str = Field(default="facebook", min_length=1, max_length=50)
+    fields: List[str] = Field(min_length=1, max_length=50)
+    is_active: bool = True
+
+
+class AccountImportFormatUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    delimiter: Optional[str] = Field(default=None, min_length=1, max_length=10)
+    platform: Optional[str] = Field(default=None, min_length=1, max_length=50)
+    fields: Optional[List[str]] = Field(default=None, min_length=1, max_length=50)
+    is_active: Optional[bool] = None

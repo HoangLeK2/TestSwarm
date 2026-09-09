@@ -199,7 +199,15 @@ export function useCampaignPage(
         search: normalizedSearch,
         limit: pageSize,
         offset: (page - 1) * pageSize
-      })
+      }),
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      return data?.items?.some((c: CampaignOut) =>
+        isCampaignActiveExecution(c.status)
+      )
+        ? CAMPAIGN_LIST_ACTIVE_POLL_MS
+        : false;
+    }
   });
 }
 

@@ -777,7 +777,6 @@ async def start_execution_runtime(
         scenario_registry,
         scenario_refs,
     )
-    requires_facebook_session = "facebook" in platform_session_requirements
     campaign_vars = _runtime_campaign_vars(campaign)
     scenario_ids = [
         str(ref["scenario_id"])
@@ -829,15 +828,17 @@ async def start_execution_runtime(
     # front and in parallel. Without this the guard call inside the loop below
     # serialises one app-launch + UI dump (up to 6s) per device.
     campaign_platform = resolve_campaign_platform(campaign, scenario_registry)
+    requires_platform_session = campaign_platform in platform_session_requirements
     probe_plan: list[tuple[str, str, str]] = []
-    for view in running_views:
-        execution = executions_by_id.get(view.execution_id)
-        if execution is None:
-            continue
-        account_id = getattr(execution, "account_id", None)
-        device_serial = _runtime_device_serial(execution, linked_serials)
-        if account_id and device_serial and view.device_id:
-            probe_plan.append((view.device_id, str(account_id), device_serial))
+    if requires_platform_session or allows_login_recovery:
+        for view in running_views:
+            execution = executions_by_id.get(view.execution_id)
+            if execution is None:
+                continue
+            account_id = getattr(execution, "account_id", None)
+            device_serial = _runtime_device_serial(execution, linked_serials)
+            if account_id and device_serial and view.device_id:
+                probe_plan.append((view.device_id, str(account_id), device_serial))
     readiness_by_serial = await _prefetch_platform_readiness(
         db,
         org_id=org_id,
@@ -901,7 +902,7 @@ async def start_execution_runtime(
                 stats["failed"] += 1
                 continue
 
-        if account_id:
+        if account_id and (requires_platform_session or allows_login_recovery):
             from services.platform_session_guard import guard_platform_session
 
             guard = await guard_platform_session(

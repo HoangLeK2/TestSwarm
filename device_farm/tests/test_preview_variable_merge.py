@@ -126,3 +126,109 @@ async def test_preview_account_group_wins_over_primary_device_account(
     await preview_scenarios._apply_preview_variables(body, "SERIAL1", "user-1")
 
     assert body.variables["__ACCOUNT_ID__"] == "group-account"
+
+
+@pytest.mark.asyncio
+async def test_explicit_account_id_resolves_that_account_not_the_device_primary(
+    monkeypatch,
+) -> None:
+    """The account console names the account; the device's primary must not win.
+
+    Before this branch existed the caller got no credentials at all, so a login
+    run for a non-primary account submitted an empty password. Falling back to
+    the primary would be worse: the run would sign the phone into a different
+    account than the row the operator clicked.
+    """
+
+    async def resolve_device_vars(*args, **kwargs):
+        return {}
+
+    async def resolve_linked(serial, account_id):
+        assert account_id == "picked-account"
+        return {
+            "__ACCOUNT_ID__": account_id,
+            "__ACCOUNT_USERNAME__": "picked-user",
+            "__ACCOUNT_PASSWORD__": "picked-password",
+        }
+
+    async def unexpected_primary(*args, **kwargs):
+        raise AssertionError("primary fallback must not run for a named account")
+
+    monkeypatch.setattr(
+        preview_scenarios, "_resolve_device_runtime_vars", resolve_device_vars
+    )
+    monkeypatch.setattr(
+        preview_scenarios, "_resolve_linked_account_vars", resolve_linked
+    )
+    monkeypatch.setattr(
+        preview_scenarios,
+        "_resolve_primary_device_account_vars",
+        unexpected_primary,
+        raising=False,
+    )
+    body = ScenarioPreviewRequest(
+        steps=[{"type": "login_if_needed"}],
+        variables={"__ACCOUNT_ID__": "picked-account"},
+    )
+
+    await preview_scenarios._apply_preview_variables(body, "SERIAL1", "user-1")
+
+    assert body.variables["__ACCOUNT_ID__"] == "picked-account"
+    assert body.variables["__ACCOUNT_PASSWORD__"] == "picked-password"
+
+
+@pytest.mark.asyncio
+async def test_linked_account_vars_refuse_an_account_not_attached_to_the_device(
+    monkeypatch,
+) -> None:
+    """No link, no credentials — a login belongs to the phone it was attached to.
+
+    The device deliberately belongs to a different user in the same org: the
+    account console is org-wide, and tenant scoping (Device and Account are both
+    TenantScopedModel) is what draws the boundary here, not device ownership.
+    """
+    import db.crud.account as account_crud
+    import db.crud.device as device_crud
+
+    device = SimpleNamespace(id="device-1", user_id="a-teammate")
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc_info):
+            return False
+
+    async def get_device_by_serial(db, serial):
+        return device
+
+    async def list_device_accounts(db, device_id):
+        assert device_id == "device-1"
+        return [
+            SimpleNamespace(
+                account_id="other-account",
+                account=SimpleNamespace(
+                    id="other-account",
+                    username="other",
+                    display_name="",
+                    platform="facebook",
+                    password_encrypted="encrypted",
+                    account_metadata={},
+                ),
+            )
+        ]
+
+    monkeypatch.setattr(preview_scenarios, "AsyncSessionLocal", _FakeSession)
+    monkeypatch.setattr(device_crud, "get_device_by_serial", get_device_by_serial)
+    monkeypatch.setattr(account_crud, "list_device_accounts", list_device_accounts)
+
+    refused = await preview_scenarios._resolve_linked_account_vars(
+        "SERIAL1", "unlinked-account"
+    )
+    assert refused == {}
+
+    allowed = await preview_scenarios._resolve_linked_account_vars(
+        "SERIAL1", "other-account"
+    )
+    assert allowed["__ACCOUNT_ID__"] == "other-account"
+    assert allowed["__ACCOUNT_PASSWORD__"]

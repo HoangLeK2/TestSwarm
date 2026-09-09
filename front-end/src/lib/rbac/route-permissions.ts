@@ -29,6 +29,11 @@ export const DASHBOARD_ROUTE_ACCESS: readonly RouteAccessRule[] = [
     orgRoles: ['admin']
   },
   {
+    prefix: ROUTES.ADMIN.PLATFORM_APPS,
+    permission: { object: 'devices', action: 'manage' },
+    roles: ['superadmin']
+  },
+  {
     prefix: ROUTES.ADMIN.WORKSPACE_ADMINS,
     permission: { object: 'organizations', action: 'manage' },
     roles: ['superadmin']

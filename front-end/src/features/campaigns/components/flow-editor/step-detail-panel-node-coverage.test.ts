@@ -74,7 +74,10 @@ test('scan posts detail panel exposes visible like and comment toggles', () => {
   assert.match(detailSource, /tField\('interactionLikeOption'\)/);
   assert.match(detailSource, /tField\('interactionCommentOption'\)/);
   assert.match(detailSource, /update\(\{ like_post: e\.target\.checked \}\)/);
-  assert.match(detailSource, /update\(\{ require_comment: e\.target\.checked \}\)/);
+  assert.match(
+    detailSource,
+    /update\(\{ require_comment: e\.target\.checked \}\)/
+  );
   assert.doesNotMatch(detailSource, /socialScanInteractionMode/);
   assert.doesNotMatch(detailSource, />\\s*Like post khi match\\s*</);
 });
@@ -286,6 +289,10 @@ test('tap_xml_match is available from the action insert menu', () => {
   const actions = menu.find((group) => group.groupKey === 'actions');
 
   assert.equal(
+    actions?.items.some((item) => item.type === 'tap'),
+    true
+  );
+  assert.equal(
     actions?.items.some((item) => item.type === 'tap_xml_match'),
     true
   );
@@ -304,6 +311,67 @@ test('tap_xml_match defaults match the detail editor fields', () => {
   assert.equal(step.clickable, true);
   assert.equal(step.timeout, 6);
   assert.equal(step.poll, 0.25);
+});
+
+test('social sync connections is exposed across editor entry points', () => {
+  const detailSource = readFileSync(
+    new URL('./step-detail-panel.tsx', import.meta.url),
+    'utf8'
+  );
+  const typesSource = readFileSync(
+    new URL('../scenario-steps/types.ts', import.meta.url),
+    'utf8'
+  );
+  const platformAwareSource = readFileSync(
+    new URL('./platform-aware-steps.ts', import.meta.url),
+    'utf8'
+  );
+  const iconSource = readFileSync(
+    new URL('./step-icon.tsx', import.meta.url),
+    'utf8'
+  );
+  const menu = getInsertMenuForUi((key) => key);
+  const social = menu.find((group) => group.groupKey === 'social');
+  const step = createDefaultStep('social_sync_connections');
+
+  assert.match(typesSource, /\| 'social_sync_connections'/);
+  assert.match(typesSource, /case 'social_sync_connections'/);
+  assert.match(platformAwareSource, /'social_sync_connections'/);
+  assert.match(iconSource, /social_sync_connections: Users/);
+  assert.equal(
+    social?.items.some((item) => item.type === 'social_sync_connections'),
+    true
+  );
+  assert.equal(step.type, 'social_sync_connections');
+  assert.equal(step.metric, 'friends');
+  assert.equal(step.persist, true);
+  assert.match(detailSource, /step\.type === 'social_sync_connections'/);
+  assert.match(detailSource, /socialSyncConnections\.hint/);
+});
+
+test('advanced backend-backed social and target lease fields are editable', () => {
+  const detailSource = readFileSync(
+    new URL('./step-detail-panel.tsx', import.meta.url),
+    'utf8'
+  );
+
+  for (const key of [
+    'settleSeconds',
+    'candidateEntityId',
+    'requireCandidateStatus',
+    'candidateLeaseToken',
+    'accountActionId',
+    'requireCompletion',
+    'completionStepsJson',
+    'completionVerifyJson'
+  ]) {
+    assert.equal(detailSource.includes(`tField('${key}')`), true, key);
+  }
+
+  assert.match(detailSource, /leaseTarget\.actionType/);
+  assert.match(detailSource, /leaseTarget\.statuses/);
+  assert.match(detailSource, /step\.action_type/);
+  assert.match(detailSource, /step\.statuses/);
 });
 
 for (const [locale, messages] of [
@@ -569,5 +637,59 @@ for (const [locale, messages] of [
     ]) {
       assert.equal(typeof node?.[key], 'string', `${locale}.${key}`);
     }
+  });
+
+  test(`social sync and advanced node setup messages exist for ${locale}`, () => {
+    const stepEditor = messages.campaignsFeature?.stepEditor;
+    const fields = stepEditor?.stepFields;
+    const socialSync = stepEditor?.socialSyncConnections;
+    const leaseTarget = stepEditor?.leaseTarget;
+    const flowInsert = messages.campaignsFeature?.flowInsert;
+    const flowStep = messages.campaignsFeature?.flowStep;
+
+    for (const key of [
+      'settleSeconds',
+      'candidateEntityId',
+      'requireCandidateStatus',
+      'candidateLeaseToken',
+      'accountActionId',
+      'requireCompletion',
+      'completionStepsJson',
+      'completionVerifyJson',
+      'metric',
+      'persistMetric'
+    ]) {
+      assert.equal(typeof fields?.[key], 'string', `${locale}.${key}`);
+    }
+
+    for (const key of ['hint', 'persistHint']) {
+      assert.equal(typeof socialSync?.[key], 'string', `${locale}.${key}`);
+    }
+
+    for (const key of ['actionType', 'statuses', 'statusesPlaceholder']) {
+      assert.equal(typeof leaseTarget?.[key], 'string', `${locale}.${key}`);
+    }
+
+    assert.equal(typeof flowInsert?.itemDesc?.tap, 'string', `${locale}.tap`);
+    assert.equal(
+      typeof flowInsert?.itemDesc?.social_sync_connections,
+      'string',
+      `${locale}.social_sync_connections`
+    );
+    assert.equal(
+      typeof flowInsert?.items?.social_sync_connections,
+      'string',
+      `${locale}.social_sync_connections`
+    );
+    assert.equal(
+      typeof flowStep?.display?.socialSyncConnections,
+      'string',
+      `${locale}.socialSyncConnections`
+    );
+    assert.equal(
+      typeof flowStep?.typeName?.social_sync_connections,
+      'string',
+      `${locale}.social_sync_connections`
+    );
   });
 }

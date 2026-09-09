@@ -144,6 +144,7 @@ def _scenario_to_out(s, *, account_group_name: str | None = None) -> ScenarioOut
         instructions=s.instructions or "",
         steps=s.steps or [],
         variables=s.variables or {},
+        requirements=getattr(s, "requirements", None) or {},
         order=s.order,
         nodes=s.nodes or [],
         edges=s.edges or [],
@@ -182,7 +183,7 @@ def _merge_scenario_body_for_validation(scenario, updates: dict) -> dict:
     from services.scenario_validation.validator import build_scenario_body_from_row
 
     body = build_scenario_body_from_row(scenario)
-    for key in ("instructions", "steps", "nodes", "edges", "variables"):
+    for key in ("instructions", "steps", "nodes", "edges", "variables", "requirements"):
         if key in updates:
             body[key] = updates[key]
     return body
@@ -376,6 +377,7 @@ async def _org_scenario_to_campaign_scenario_out(
         instructions=str(body.get("instructions") or ""),
         steps=body.get("steps") or [],
         variables=body.get("variables") or {},
+        requirements=body.get("requirements") or {},
         order=int(ref.order_index or 0),
         nodes=body.get("nodes") or [],
         edges=body.get("edges") or [],
@@ -444,6 +446,7 @@ async def _org_scenario_id_to_campaign_scenario_out(
         instructions=str(body.get("instructions") or ""),
         steps=body.get("steps") or [],
         variables=body.get("variables") or {},
+        requirements=body.get("requirements") or {},
         order=order,
         nodes=body.get("nodes") or [],
         edges=body.get("edges") or [],
@@ -984,6 +987,7 @@ async def dispatch_campaign_route(
             dispatch_strategy=body.dispatch_strategy,  # type: ignore[arg-type]
             allow_partial=body.allow_partial,
             require_online=body.require_online,
+            requirements=body.requirements,
         )
     except CampaignDispatchError as exc:
         raise HTTPException(
@@ -2226,9 +2230,14 @@ async def update_scenario(
     patch_vars = (
         patch.get("variables") if isinstance(patch.get("variables"), dict) else {}
     )
+    patch_requirements = (
+        patch.get("requirements") if isinstance(patch.get("requirements"), dict) else None
+    )
     device_context = patch.get("device_context")
 
     pending_updates: dict = {"instructions": instructions}
+    if patch_requirements is not None:
+        pending_updates["requirements"] = patch_requirements
     if isinstance(nodes_in, list) and len(nodes_in) > 0:
         compiled = compile_graph_to_steps(nodes_in, edges_in or [])
         saved_steps = ensure_step_ids(save_step_images(compiled, s.id))
@@ -2443,6 +2452,7 @@ async def create_scenario(
         instructions=body.instructions,
         steps=[],
         variables=body.variables,
+        requirements=body.requirements,
         order=order,
         account_group_id=body.account_group_id or None,
     )

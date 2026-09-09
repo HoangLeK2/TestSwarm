@@ -32,6 +32,25 @@ export type AccountEventListOut = {
   has_more: boolean;
 };
 
+export type AccountImportFormatOut = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  delimiter: string;
+  platform: string;
+  fields: string[];
+  is_active: boolean;
+  is_builtin: boolean;
+  created_by_user_id?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AccountImportFormatListOut = {
+  items: AccountImportFormatOut[];
+};
+
 export type AccountActionOut = {
   id: string;
   account_id: string;
@@ -187,6 +206,20 @@ export const accountsApi = {
     form.append('file', file);
     return farmApi
       .post<BulkImportResult>('/accounts/import-csv', form, {
+        timeout: 120_000
+      })
+      .then((r) => r.data);
+  },
+  listImportFormats: () =>
+    farmApi
+      .get<AccountImportFormatListOut>('/accounts/import-formats')
+      .then((r) => r.data),
+  bulkImportTxt: (file: File, formatSlug: string) => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('format_slug', formatSlug);
+    return farmApi
+      .post<BulkImportResult>('/accounts/import-txt', form, {
         timeout: 120_000
       })
       .then((r) => r.data);

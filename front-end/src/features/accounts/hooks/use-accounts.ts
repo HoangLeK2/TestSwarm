@@ -45,7 +45,8 @@ const KEYS = {
   actions: (id: string, cursor?: string) =>
     ['accounts', id, 'actions', cursor] as const,
   actionSummary: (id: string) => ['accounts', id, 'action-summary'] as const,
-  candidateSettings: ['accounts', 'candidate-settings'] as const
+  candidateSettings: ['accounts', 'candidate-settings'] as const,
+  importFormats: ['accounts', 'import-formats'] as const
 };
 
 export function useAccounts(query?: {
@@ -209,6 +210,23 @@ export function useBulkImportAccountsCsv() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (file: File) => accountsApi.bulkImportCsv(file),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.list })
+  });
+}
+
+export function useAccountImportFormats() {
+  return useQuery({
+    queryKey: KEYS.importFormats,
+    queryFn: () => accountsApi.listImportFormats(),
+    staleTime: 60_000
+  });
+}
+
+export function useBulkImportAccountsTxt() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ file, formatSlug }: { file: File; formatSlug: string }) =>
+      accountsApi.bulkImportTxt(file, formatSlug),
     onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.list })
   });
 }

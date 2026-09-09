@@ -83,6 +83,7 @@ class CampaignDispatchIn(BaseModel):
     dispatch_strategy: str = Field(default="parallel", pattern="^(parallel|sequential)$")
     allow_partial: bool = False
     require_online: bool = True
+    requirements: Optional[dict[str, Any]] = None
 
     @model_validator(mode="after")
     def validate_source_selection(self):

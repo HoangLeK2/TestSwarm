@@ -163,11 +163,18 @@ export function CampaignRowActions({
                 | unknown[]
                 | undefined)
             : undefined;
+        const requirements =
+          bodyJson && typeof bodyJson === 'object'
+            ? ((bodyJson as Record<string, unknown>).requirements as
+                | Record<string, unknown>
+                | undefined)
+            : undefined;
         return {
           id,
           name: orgScenarios.find((row) => row.id === id)?.name ?? id,
           variables,
-          steps
+          steps,
+          requirements
         };
       }),
     [orgScenarioBodies, orgScenarios, scenarioRefIds]

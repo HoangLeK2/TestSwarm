@@ -114,7 +114,7 @@ class _RelaySession:
         **kwargs: Any,
     ) -> "_RelayResponse":
         import asyncio
-        from urllib.parse import urlparse
+        from urllib.parse import urlencode, urlparse
 
         if kwargs.get("files") is not None:
             raise NotImplementedError(
@@ -130,7 +130,15 @@ class _RelaySession:
             body = json.dumps(kwargs["json"])
         elif kwargs.get("data") is not None:
             raw = kwargs["data"]
-            body = raw if isinstance(raw, str) else raw.decode("latin-1")
+            if isinstance(raw, str):
+                body = raw
+            elif isinstance(raw, bytes):
+                body = raw.decode("latin-1")
+            elif isinstance(raw, dict):
+                body = urlencode(raw)
+                content_type = "application/x-www-form-urlencoded"
+            else:
+                body = str(raw)
 
         parsed = urlparse(url)
         path = parsed.path
@@ -2165,7 +2173,7 @@ class U2JsonRpcClient:
             if apk_source.startswith(("http://", "https://")):
                 r = self._session.post(
                     install_url,
-                    json={"url": apk_source},
+                    data={"url": apk_source},
                     timeout=timeout,
                 )
             else:
@@ -2190,5 +2198,52 @@ class U2JsonRpcClient:
             result = r.json()
         except Exception:
             return  # success with no JSON body
-        if result.get("error") or result.get("success") is False:
-            raise RuntimeError(f"install failed: {result.get('error') or result!r}")
+        def wait_install_task(task_id: int) -> None:
+            deadline = time.monotonic() + timeout
+            task_path = f"/install/{task_id}"
+            while True:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(f"install task {task_id} timed out")
+                remaining = max(1.0, min(10.0, deadline - time.monotonic()))
+                task_response = self._session.get(
+                    self._base.rstrip("/") + task_path,
+                    timeout=remaining,
+                )
+                if not task_response.ok:
+                    raise RuntimeError(
+                        f"install task {task_id}: HTTP {task_response.status_code}: {task_response.text[:200]!r}"
+                    )
+                try:
+                    task_result = task_response.json()
+                except Exception:
+                    task_result = {}
+                status = str(task_result.get("status") or "").strip().lower()
+                if not status and isinstance(task_result.get("data"), dict):
+                    status = str(task_result["data"].get("status") or "").strip().lower()
+                if status == "success":
+                    return
+                if status == "failure":
+                    message = task_result.get("message") or task_result.get("error")
+                    detail = str(message) if message else repr(task_result)
+                    raise RuntimeError(f"install task {task_id} failed: {detail}")
+                time.sleep(1.0)
+
+        if isinstance(result, dict):
+            if result.get("error") or result.get("success") is False:
+                raise RuntimeError(f"install failed: {result.get('error') or result!r}")
+            return
+        if isinstance(result, bool):
+            if not result:
+                raise RuntimeError("install failed: false")
+            return
+        if isinstance(result, int):
+            if result > 0:
+                wait_install_task(result)
+                return
+            if result != 0:
+                raise RuntimeError(f"install failed: exit code {result}")
+            return
+        if isinstance(result, str):
+            lowered = result.lower()
+            if "error" in lowered or "fail" in lowered:
+                raise RuntimeError(f"install failed: {result!r}")

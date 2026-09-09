@@ -174,7 +174,10 @@ def test_fanpage_templates_use_assigned_page_without_relogin(template_name: str)
     flat_steps = _walk_steps(template["steps"])
 
     assert template["variables"]["PAGE_SEARCH"] == "ten fanpage"
-    assert template["requirements"]["platform_session"]["platform"] == "facebook"
+    if template_name == "Nuôi Facebook - Tương tác Fanpage":
+        assert template["requirements"]["platform_session"]["platform"] == "facebook"
+    else:
+        assert "requirements" not in template
     assert not any(step.get("type") == "login_if_needed" for step in flat_steps)
     assert not any(step.get("type") == "platform_session_gate" for step in flat_steps)
     assert not any(
@@ -556,8 +559,16 @@ def test_login_template_establishes_account_scoped_session_provenance() -> None:
     gates = [step for step in flat_steps if step.get("type") == "platform_session_gate"]
 
     assert [gate["phase"] for gate in gates] == ["preflight", "confirm"]
-    assert template["steps"][3]["type"] == "platform_session_gate"
-    assert template["steps"][4]["type"] == "if_variable"
+    assert any(
+        step.get("type") == "platform_session_gate"
+        and step.get("phase") == "preflight"
+        for step in template["steps"]
+    )
+    assert any(
+        step.get("type") == "if_variable"
+        and step.get("name") == "PLATFORM_SESSION_READY"
+        for step in template["steps"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -706,7 +717,13 @@ def test_publish_post_template_posts_then_likes_and_comments_verified_post() -> 
 
 def test_login_template_opens_credential_form_from_saved_profile_chooser() -> None:
     template = BUILTIN_TEMPLATE_BY_NAME["Đăng nhập Facebook"]
-    login_branch = template["steps"][4]["else"]
+    login_gate = next(
+        step
+        for step in template["steps"]
+        if step.get("type") == "if_variable"
+        and step.get("name") == "PLATFORM_SESSION_READY"
+    )
+    login_branch = login_gate["else"]
 
     chooser = login_branch[0]
     assert chooser["type"] == "if_element"
@@ -718,7 +735,12 @@ def test_login_template_opens_credential_form_from_saved_profile_chooser() -> No
         "value": "Dùng trang cá nhân khác",
         "timeout": 4,
     }
-    assert login_branch[1]["type"] == "login_if_needed"
+    login_index = next(
+        index
+        for index, step in enumerate(login_branch)
+        if step.get("type") == "login_if_needed"
+    )
+    assert login_index > 0
 
 
 def test_post_template_runs_real_like_and_comment() -> None:

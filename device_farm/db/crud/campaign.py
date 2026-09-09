@@ -153,6 +153,7 @@ async def create_scenario(
     instructions: str = "",
     steps: list | None = None,
     variables: dict | None = None,
+    requirements: dict | None = None,
     order: int = 0,
     account_group_id: str | None = None,
 ) -> Scenario:
@@ -162,6 +163,7 @@ async def create_scenario(
         instructions=instructions,
         steps=steps or [],
         variables=variables or {},
+        requirements=requirements or {},
         order=order,
         account_group_id=account_group_id or None,
     )

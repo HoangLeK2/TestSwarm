@@ -114,6 +114,7 @@ export type ActionType =
   | 'social_scan_posts_interact'
   | 'social_open_author_from_post_match'
   | 'social_open_commenter_from_post_match'
+  | 'social_sync_connections'
   | 'content_interaction'
   | 'connection_request'
   | 'community_membership'
@@ -385,6 +386,8 @@ export function getStepLabel(step: FlowStep): string {
       return `${step.platform ?? 'auto'} · mở tác giả từ ${step.source_var ?? '_post_scan'}[${step.action_index ?? 0}]`;
     case 'social_open_commenter_from_post_match':
       return `${step.platform ?? 'auto'} · mở người bình luận từ ${step.source_var ?? '_post_scan'}[${step.action_index ?? 0}]`;
+    case 'social_sync_connections':
+      return `${step.platform ?? 'auto'} · đồng bộ ${step.metric ?? 'friends'}`;
     case 'content_interaction':
       return `${step.platform ?? 'auto'} · ${step.action ?? 'like'}`;
     case 'connection_request':
@@ -472,6 +475,11 @@ export const ALL_STEP_TYPES: {
   {
     value: 'social_open_commenter_from_post_match',
     label: 'Mở người bình luận đã khớp',
+    group: 'action'
+  },
+  {
+    value: 'social_sync_connections',
+    label: 'Đồng bộ số kết nối',
     group: 'action'
   },
   {
@@ -592,7 +600,7 @@ export function createDefaultStep(
         selector: { by: 'text', value: '' },
         by: 'text',
         value: '',
-        timeout: 3,
+        timeout: 2,
         then: [],
         else: []
       };
@@ -845,6 +853,16 @@ export function createDefaultStep(
         save_success_as: 'PEOPLE_PROFILE_SELECTED',
         save_opened_as: 'COMMENTER_PROFILE_OPENED',
         save_sheet_opened_as: 'COMMENT_SHEET_OPENED'
+      };
+    case 'social_sync_connections':
+      return {
+        ...base,
+        type,
+        platform: 'auto',
+        metric: 'friends',
+        timeout: 8,
+        persist: true,
+        save_as: 'ACCOUNT_FRIEND_COUNT'
       };
     case 'content_interaction':
       return {

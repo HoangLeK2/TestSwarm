@@ -218,9 +218,12 @@ async def _apply_platform_session_guard_to_accounts(
     platform: str,
     account_by_device: dict[str, ResolvedDeviceAccount],
     device_map: dict[str, Device],
+    require_session: bool = False,
     allow_login_recovery: bool = False,
 ) -> dict[str, ResolvedDeviceAccount]:
     guarded: dict[str, ResolvedDeviceAccount] = dict(account_by_device)
+    if not (require_session or allow_login_recovery):
+        return guarded
     from services.platform_session_guard import guard_platform_session
     from services.platform_session_runtime import guard_reason_allows_login_recovery
 
@@ -523,6 +526,7 @@ class CampaignDispatcher:
         dispatch_strategy: DispatchStrategy = "parallel",
         allow_partial: bool = False,
         require_online: bool = True,
+        requirements: dict[str, Any] | None = None,
         devices_by_id: dict[str, Device] | None = None,
     ) -> FanOutResult:
         if campaign.org_id != org_id:
@@ -605,6 +609,7 @@ class CampaignDispatcher:
             else {"by_id": {}, "by_campaign_name": {}, "by_template_name": {}}
         )
         from services.platform_session_runtime import (
+            platform_session_requirement_platforms,
             scenario_registry_has_platform_login_gate,
             scenario_registry_platform_session_requirements,
         )
@@ -617,7 +622,10 @@ class CampaignDispatcher:
             scenario_registry,
             scenario_refs,
         )
-        requires_facebook_session = "facebook" in platform_session_requirements
+        if isinstance(requirements, dict):
+            platform_session_requirements = platform_session_requirement_platforms(
+                {"requirements": requirements}
+            )
         effective_source_pool = source_pool
         if effective_source_pool is None and not external_entity_ids:
             effective_source_pool = source_pool_from_scenario_registry(scenario_registry)
@@ -642,6 +650,7 @@ class CampaignDispatcher:
 
         device_ids_ordered = [e.device_id for e in valid_entries]
         campaign_platform = resolve_campaign_platform(campaign, scenario_registry)
+        requires_platform_session = campaign_platform in platform_session_requirements
         account_by_device = await resolve_accounts_for_devices(
             db,
             campaign=campaign,
@@ -656,6 +665,7 @@ class CampaignDispatcher:
             platform=campaign_platform,
             account_by_device=account_by_device,
             device_map=device_map,
+            require_session=requires_platform_session,
             allow_login_recovery=allows_login_recovery,
         )
         try:
@@ -1467,11 +1477,20 @@ class CampaignDispatcher:
         from services.platform_session_runtime import (
             guard_reason_allows_login_recovery,
             scenario_registry_has_platform_login_gate,
+            scenario_registry_platform_session_requirements,
         )
 
         allows_login_recovery = scenario_registry_has_platform_login_gate(
             scenario_registry,
             scenario_refs,
+        )
+        platform_session_requirements = scenario_registry_platform_session_requirements(
+            scenario_registry,
+            scenario_refs,
+        )
+        requires_platform_session = (
+            resolve_campaign_platform(campaign, scenario_registry)
+            in platform_session_requirements
         )
 
         from services.campaign.account_resolver import (
@@ -1485,7 +1504,7 @@ class CampaignDispatcher:
             org_id=org_id,
             required=campaign_has_account_binding(campaign),
         )
-        if resolved.account_id:
+        if resolved.account_id and (requires_platform_session or allows_login_recovery):
             from services.platform_session_guard import guard_platform_session
 
             decision = await guard_platform_session(
@@ -1763,6 +1782,7 @@ async def dispatch_campaign(
     dispatch_strategy: DispatchStrategy = "parallel",
     allow_partial: bool = False,
     require_online: bool = True,
+    requirements: dict[str, Any] | None = None,
 ) -> FanOutResult:
     started = time.perf_counter()
     try:
@@ -1801,6 +1821,7 @@ async def dispatch_campaign(
             dispatch_strategy=dispatch_strategy,
             allow_partial=allow_partial,
             require_online=require_online,
+            requirements=requirements,
         )
     finally:
         campaign_dispatch_duration_seconds.observe(time.perf_counter() - started)

@@ -9,7 +9,9 @@ import {
   MousePointerClick,
   Move,
   ShieldCheck,
-  Info
+  Info,
+  Plus,
+  Trash2
 } from 'lucide-react';
 import { useLocale, useTranslations } from 'next-intl';
 import {
@@ -2681,7 +2683,9 @@ export function StepDetailPanel({
                       <input
                         type='checkbox'
                         checked={step.like_post ?? true}
-                        onChange={(e) => update({ like_post: e.target.checked })}
+                        onChange={(e) =>
+                          update({ like_post: e.target.checked })
+                        }
                       />
                       {tField('interactionLikeOption')}
                     </label>
@@ -3063,6 +3067,24 @@ export function StepDetailPanel({
                         />
                       </F>
                     </div>
+                    <F label={tField('settleSeconds')}>
+                      <Input
+                        type='number'
+                        min={0}
+                        max={10}
+                        step={0.05}
+                        className='h-8 w-28 text-xs'
+                        value={step.settle_seconds ?? 0.35}
+                        onChange={(e) =>
+                          update({
+                            settle_seconds: Math.max(
+                              0,
+                              Math.min(10, Number(e.target.value) || 0)
+                            )
+                          })
+                        }
+                      />
+                    </F>
                     <F label={tField('saveResultToVar')}>
                       <Input
                         className='h-8 font-mono text-xs'
@@ -3085,6 +3107,99 @@ export function StepDetailPanel({
                         }
                       />
                     </F>
+                    {(step.type === 'content_interaction' ||
+                      step.type === 'connection_request') && (
+                      <div className='grid gap-2 sm:grid-cols-2'>
+                        <F label={tField('candidateEntityId')}>
+                          <VariableTextInput
+                            availableVariables={availableVariables}
+                            t={t}
+                            className='h-8 font-mono text-xs'
+                            value={step.candidate_entity_id ?? ''}
+                            placeholder='${CANDIDATE_ENTITY_ID}'
+                            onValueChange={(value) =>
+                              update({
+                                candidate_entity_id: value || undefined
+                              })
+                            }
+                          />
+                        </F>
+                        <F label={tField('requireCandidateStatus')}>
+                          <Input
+                            className='h-8 font-mono text-xs'
+                            value={step.require_candidate_status ?? ''}
+                            placeholder='ready_to_connect'
+                            onChange={(e) =>
+                              update({
+                                require_candidate_status:
+                                  e.target.value || undefined
+                              })
+                            }
+                          />
+                        </F>
+                      </div>
+                    )}
+                    {step.type === 'connection_request' && (
+                      <F label={tField('candidateLeaseToken')}>
+                        <VariableTextInput
+                          availableVariables={availableVariables}
+                          t={t}
+                          className='h-8 font-mono text-xs'
+                          value={step.candidate_lease_token ?? ''}
+                          placeholder='${CANDIDATE_LEASE_TOKEN}'
+                          onValueChange={(value) =>
+                            update({
+                              candidate_lease_token: value || undefined
+                            })
+                          }
+                        />
+                      </F>
+                    )}
+                    {step.type === 'content_interaction' && (
+                      <F label={tField('accountActionId')}>
+                        <VariableTextInput
+                          availableVariables={availableVariables}
+                          t={t}
+                          className='h-8 font-mono text-xs'
+                          value={step.account_action_id ?? ''}
+                          placeholder='${TARGET_ACTION_ID}'
+                          onValueChange={(value) =>
+                            update({ account_action_id: value || undefined })
+                          }
+                        />
+                      </F>
+                    )}
+                    <StepPanelToggle
+                      label={tField('requireCompletion')}
+                      checked={step.require_completion ?? false}
+                      onCheckedChange={(checked) =>
+                        update({ require_completion: checked })
+                      }
+                    />
+                    {step.require_completion && (
+                      <>
+                        <JsonTextarea
+                          label={tField('completionStepsJson')}
+                          value={step.completion_steps}
+                          onCommit={(next) =>
+                            update({
+                              completion_steps: Array.isArray(next)
+                                ? next
+                                : undefined
+                            })
+                          }
+                          placeholder='[]'
+                        />
+                        <JsonTextarea
+                          label={tField('completionVerifyJson')}
+                          value={step.completion_verify}
+                          onCommit={(next) =>
+                            update({ completion_verify: next })
+                          }
+                          placeholder='{"element_exists":{"by":"text","value":"Done"}}'
+                        />
+                      </>
+                    )}
                   </StepPanelSection>
                 </>
               )}
@@ -3268,6 +3383,57 @@ export function StepDetailPanel({
                 </>
               )}
 
+              {step.type === 'social_sync_connections' && (
+                <div className='space-y-3'>
+                  <StepPanelHint>
+                    {t('socialSyncConnections.hint')}
+                  </StepPanelHint>
+                  <div className='grid gap-2 sm:grid-cols-2'>
+                    <F label={tField('metric')}>
+                      <Input
+                        className='h-8 font-mono text-xs'
+                        value={step.metric ?? 'friends'}
+                        onChange={(e) =>
+                          update({ metric: e.target.value || 'friends' })
+                        }
+                      />
+                    </F>
+                    <F label={tField('timeoutSeconds')}>
+                      <Input
+                        type='number'
+                        min={1}
+                        max={60}
+                        step={0.5}
+                        className='h-8 text-xs'
+                        value={step.timeout ?? 8}
+                        onChange={(e) =>
+                          update({
+                            timeout: Math.max(1, Number(e.target.value) || 8)
+                          })
+                        }
+                      />
+                    </F>
+                  </div>
+                  <F label={tField('saveResultToVar')}>
+                    <Input
+                      className='h-8 font-mono text-xs'
+                      value={step.save_as ?? 'ACCOUNT_FRIEND_COUNT'}
+                      onChange={(e) =>
+                        update({
+                          save_as: e.target.value || 'ACCOUNT_FRIEND_COUNT'
+                        })
+                      }
+                    />
+                  </F>
+                  <StepPanelToggle
+                    label={tField('persistMetric')}
+                    description={t('socialSyncConnections.persistHint')}
+                    checked={step.persist ?? true}
+                    onCheckedChange={(checked) => update({ persist: checked })}
+                  />
+                </div>
+              )}
+
               {step.type === 'tap_image' && (
                 <TapImageFields
                   step={step}
@@ -3357,6 +3523,90 @@ export function StepDetailPanel({
                 </F>
               )}
 
+              {step.type === 'random_pick' && (
+                <div className='space-y-2'>
+                  {(step.branches ?? []).map(
+                    (branch: any, branchIndex: number) => (
+                      <div
+                        key={branchIndex}
+                        className='rounded-md border border-dashed border-border/70 bg-muted/20 px-2.5 py-2'
+                      >
+                        <div className='flex items-center gap-2'>
+                          <span className='min-w-0 flex-1 text-xs font-medium text-foreground'>
+                            {tField('branchLabel', {
+                              name: String.fromCharCode(65 + branchIndex)
+                            })}
+                          </span>
+                          <label className='flex items-center gap-1.5 text-[11px] text-muted-foreground'>
+                            <span>{tField('weightLabel')}</span>
+                            <Input
+                              type='number'
+                              min={1}
+                              className='h-8 w-16 text-xs'
+                              value={branch.weight ?? 1}
+                              onChange={(e) => {
+                                const branches = [
+                                  ...(stepRef.current.branches ?? [])
+                                ];
+                                branches[branchIndex] = {
+                                  ...branches[branchIndex],
+                                  weight: Math.max(
+                                    1,
+                                    Number(e.target.value) || 1
+                                  )
+                                };
+                                update({ branches });
+                              }}
+                            />
+                          </label>
+                          <Button
+                            type='button'
+                            size='icon'
+                            variant='ghost'
+                            className='h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive'
+                            disabled={(step.branches ?? []).length <= 1}
+                            aria-label={tField('removeBranch')}
+                            onClick={() => {
+                              const branches = (
+                                stepRef.current.branches ?? []
+                              ).filter(
+                                (_branch: unknown, index: number) =>
+                                  index !== branchIndex
+                              );
+                              update({ branches });
+                            }}
+                          >
+                            <Trash2 className='h-4 w-4' />
+                          </Button>
+                        </div>
+                        <p className='mt-1 text-[11px] text-muted-foreground'>
+                          {tField('branchStepCount', {
+                            count: branch.steps?.length ?? 0
+                          })}
+                        </p>
+                      </div>
+                    )
+                  )}
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant='outline'
+                    className='h-8 text-xs'
+                    onClick={() =>
+                      update({
+                        branches: [
+                          ...(stepRef.current.branches ?? []),
+                          { weight: 1, steps: [] }
+                        ]
+                      })
+                    }
+                  >
+                    <Plus className='mr-1 h-3.5 w-3.5' />
+                    {tField('addBranch')}
+                  </Button>
+                </div>
+              )}
+
               {step.type === 'if_element' && (
                 <>
                   <SelectorFields
@@ -3372,7 +3622,7 @@ export function StepDetailPanel({
                       min={0.1}
                       step={0.1}
                       className='h-8 w-24 text-xs'
-                      value={step.timeout ?? 3}
+                      value={step.timeout ?? 2}
                       onChange={(e) =>
                         update({
                           timeout: Math.max(0.1, Number(e.target.value) || 0.1)
@@ -4563,6 +4813,36 @@ export function StepDetailPanel({
                         value={keywordInputValue(step.keywords)}
                         onValueChange={(value) => update({ keywords: value })}
                         placeholder={t('leaseTarget.keywordPlaceholder')}
+                      />
+                    </F>
+                  </div>
+                  <div className='grid gap-3 sm:grid-cols-2'>
+                    <F label={t('leaseTarget.actionType')}>
+                      <Input
+                        className='h-8 font-mono text-xs'
+                        value={step.action_type ?? 'content_interaction'}
+                        onChange={(event) =>
+                          update({
+                            action_type:
+                              event.target.value || 'content_interaction'
+                          })
+                        }
+                      />
+                    </F>
+                    <F label={t('leaseTarget.statuses')}>
+                      <VariableTextInput
+                        availableVariables={availableVariables}
+                        t={t}
+                        className='h-8 text-xs'
+                        value={keywordInputValue(step.statuses)}
+                        onValueChange={(value) =>
+                          update({
+                            statuses: isVarRef(value.trim())
+                              ? value.trim()
+                              : keywordListFromInput(value)
+                          })
+                        }
+                        placeholder={t('leaseTarget.statusesPlaceholder')}
                       />
                     </F>
                   </div>

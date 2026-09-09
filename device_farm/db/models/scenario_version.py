@@ -34,6 +34,7 @@ class ScenarioVersion(Base):
     nodes: Mapped[list] = mapped_column(JSON, default=list)
     edges: Mapped[list] = mapped_column(JSON, default=list)
     variables: Mapped[dict] = mapped_column(JSON, default=dict)
+    requirements: Mapped[dict] = mapped_column(JSON, default=dict)
     instructions: Mapped[str] = mapped_column(Text, default="")
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

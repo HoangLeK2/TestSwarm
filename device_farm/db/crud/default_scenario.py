@@ -23,6 +23,7 @@ def scenario_row_to_embedded_dict(s: Scenario) -> dict[str, Any]:
         "instructions": s.instructions or "",
         "steps": list(s.steps or []),
         "variables": variables,
+        "requirements": dict(getattr(s, "requirements", None) or {}),
     }
     if device_context is not None:
         out["device_context"] = device_context

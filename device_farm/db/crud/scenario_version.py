@@ -40,6 +40,7 @@ async def create_scenario_version(
         nodes=scenario.nodes,
         edges=scenario.edges,
         variables=scenario.variables,
+        requirements=scenario.requirements,
         instructions=scenario.instructions,
     )
     db.add(version)

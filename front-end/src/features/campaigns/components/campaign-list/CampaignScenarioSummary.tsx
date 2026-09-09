@@ -87,35 +87,40 @@ export function CampaignScenarioSummary({
   }
 
   return (
-    <ScenarioListDialog
-      campaign={campaign}
-      open={dialogOpen}
-      onOpenChange={setDialogOpen}
-    >
-      <Button
-        type='button'
-        variant='outline'
-        size='sm'
-        className={cn(
-          buttonClassName,
-          !hasScenario &&
-            'border-primary/40 text-primary hover:border-primary/50 hover:bg-primary/[0.06]'
-        )}
-        title={hasScenario ? t('summaryTitle') : t('emptyDescription')}
+    <>
+      <ScenarioListDialog
+        campaign={campaign}
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
       >
-        <FileText size={12} className='shrink-0 text-muted-foreground' />
-        <span
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
           className={cn(
-            'min-w-0 flex-1 truncate',
-            hasScenario ? 'font-medium text-foreground' : 'font-medium'
+            buttonClassName,
+            !hasScenario &&
+              'border-primary/40 text-primary hover:border-primary/50 hover:bg-primary/[0.06]'
           )}
+          title={hasScenario ? t('summaryTitle') : t('emptyDescription')}
         >
-          {label}
-        </span>
-        {hasScenario ? (
-          <ChevronRight size={12} className='shrink-0 text-muted-foreground' />
-        ) : null}
-      </Button>
-    </ScenarioListDialog>
+          <FileText size={12} className='shrink-0 text-muted-foreground' />
+          <span
+            className={cn(
+              'min-w-0 flex-1 truncate',
+              hasScenario ? 'font-medium text-foreground' : 'font-medium'
+            )}
+          >
+            {label}
+          </span>
+          {hasScenario ? (
+            <ChevronRight
+              size={12}
+              className='shrink-0 text-muted-foreground'
+            />
+          ) : null}
+        </Button>
+      </ScenarioListDialog>
+    </>
   );
 }

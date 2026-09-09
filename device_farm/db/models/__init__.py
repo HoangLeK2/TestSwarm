@@ -41,10 +41,12 @@ from .mcp_session import McpSession
 from .mcp_token import McpToken
 from .scenario_template import ScenarioTemplate
 from .account import Account, DeviceAccount
+from .account_import_format import AccountImportFormat
 from .account_discovery import ACCOUNT_DISCOVERY_STATUSES, AccountDiscoveryState
 from .account_action import AccountAction, AccountActionAttempt, AccountActionTransition
 from .device_platform_session import DevicePlatformSession
 from .device_platform_login_attempt import DevicePlatformLoginAttempt
+from .platform_app_release import PlatformAppRelease
 from .account_event import AccountEvent
 from .account_group import AccountGroup, AccountGroupMember
 from .content import ContentItem, ContentCollection, ContentType, ExecutionArtifact
@@ -116,6 +118,7 @@ __all__ = [
     "ScenarioTemplate",
     "Account",
     "DeviceAccount",
+    "AccountImportFormat",
     "ACCOUNT_DISCOVERY_STATUSES",
     "AccountDiscoveryState",
     "AccountAction",
@@ -125,6 +128,7 @@ __all__ = [
     "DevicePlatformSessionState",
     "DevicePlatformLoginAttempt",
     "DevicePlatformLoginAttemptState",
+    "PlatformAppRelease",
     "AccountEvent",
     "AccountEventType",
     "AccountGroup",

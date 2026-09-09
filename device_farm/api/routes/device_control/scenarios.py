@@ -269,6 +269,58 @@ async def _resolve_primary_device_account_vars(
         return {}
 
 
+async def _resolve_linked_account_vars(
+    serial_or_device_id: str,
+    account_id: str,
+) -> Dict[str, Any]:
+    """Resolve credentials for one explicitly requested account on this device.
+
+    The account must already be linked to the device. Running a login on a
+    phone the account was never attached to is what the caller almost never
+    means, and the account the *device* happens to carry would silently take
+    its place — so an unlinked account resolves to nothing and the login step
+    fails on an unresolved secret instead of signing in as somebody else.
+
+    Scoped by org, not by ``user_id``: the account console is org-wide, so the
+    phone an account is attached to is regularly one a teammate registered.
+    Device and Account are both ``TenantScopedModel``, so the caller's tenant
+    context already filters both lookups — an owner check on top of that would
+    only refuse a device the operator is allowed to see.
+    """
+    try:
+        from common.crypto import decrypt_password
+        from db.crud.account import list_device_accounts
+        from db.crud.device import get_device, get_device_by_serial
+    except Exception:
+        return {}
+    try:
+        async with AsyncSessionLocal() as db:
+            device = await get_device_by_serial(db, serial_or_device_id)
+            if not device:
+                device = await get_device(db, serial_or_device_id)
+            if not device:
+                return {}
+            link = next(
+                (
+                    row
+                    for row in await list_device_accounts(db, device.id)
+                    if str(row.account_id) == str(account_id)
+                ),
+                None,
+            )
+            if link is None or link.account is None:
+                log.warning(
+                    "preview account %s is not linked to device %s — no credentials injected",
+                    account_id,
+                    serial_or_device_id,
+                )
+                return {}
+            return _preview_account_vars(link.account, decrypt_password)
+    except Exception as exc:
+        log.warning("preview linked account resolve failed: %s", exc)
+        return {}
+
+
 async def _resolve_device_runtime_vars(
     serial_or_device_id: str,
     user_id: Optional[str],
@@ -370,9 +422,18 @@ async def _apply_preview_variables(
             device_vars=device_vars,
             account_vars={},
         )
+        requested_account_id = str(base_vars.get("__ACCOUNT_ID__") or "").strip()
         if body.account_group_id:
             acct_vars = await _resolve_account_group_vars(body.account_group_id, user_id)
-        elif not base_vars.get("__ACCOUNT_ID__"):
+        elif requested_account_id:
+            # Caller named the account (account console "Đăng nhập", per-account
+            # test runs). Without this the password never resolves and the run
+            # silently logs in as nobody.
+            acct_vars = await _resolve_linked_account_vars(
+                serial_or_device_id,
+                requested_account_id,
+            )
+        else:
             platform = str(
                 base_vars.get("__ACCOUNT_PLATFORM__")
                 or base_vars.get("__PLATFORM__")
@@ -383,8 +444,6 @@ async def _apply_preview_variables(
                 user_id,
                 platform,
             )
-        else:
-            acct_vars = {}
         body.variables = {**base_vars, **acct_vars}
 
 

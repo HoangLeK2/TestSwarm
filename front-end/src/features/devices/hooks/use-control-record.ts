@@ -60,6 +60,7 @@ import {
 } from '../lib/control-record-device-state';
 import { resolveInteractionHierarchyXml } from '../lib/control-record-hierarchy';
 import { mergeCampaignScenarioVariables } from '@/components/device-vars-json-model';
+import type { ScenarioRequirements } from '@/features/campaigns/components/scenario-requirements-summary';
 
 let _stepIdCounter = 0;
 function nextStepId() {
@@ -848,6 +849,8 @@ export function useControlRecord(
     /** Pre-loaded binding from the scenario so `saveTo` can round-trip it back. */
     accountGroupId?: string | null;
   } | null>(null);
+  const [scenarioRequirements, setScenarioRequirements] =
+    useState<ScenarioRequirements>({});
 
   // Template editing context — separate from campaign/scenario. Only one of
   // the two is active at a time; the page-level URL params route the user
@@ -875,6 +878,7 @@ export function useControlRecord(
     if (initialOrgScenarioId || initialTemplateId) return;
     if (!initialCampaignId || !initialScenarioId) {
       setEditingContext(null);
+      setScenarioRequirements({});
       return;
     }
 
@@ -921,6 +925,10 @@ export function useControlRecord(
             (sc as { account_group_id?: string | null }).account_group_id ??
             null
         });
+        setScenarioRequirements(
+          ((sc as { requirements?: ScenarioRequirements }).requirements ??
+            {}) as ScenarioRequirements
+        );
         if (loaded.length > 0)
           toast.info(
             t('toast.loadedScenario', { name: sc.name, count: loaded.length })
@@ -963,6 +971,7 @@ export function useControlRecord(
         if (cancelled) return;
         setEditingContext(null);
         setOrgScenarioContext(null);
+        setScenarioRequirements({});
         const loaded = Array.isArray(tpl.steps)
           ? tpl.steps.map(
               (s: any) => ({ ...s, _id: nextStepId() }) as StepWithId
@@ -1017,6 +1026,10 @@ export function useControlRecord(
         setEditingContext(null);
         setTemplateContext(null);
         const bodyJson = (bodyOut.body_json ?? {}) as Record<string, unknown>;
+        setScenarioRequirements(
+          ((bodyJson.requirements as ScenarioRequirements | undefined) ??
+            {}) as ScenarioRequirements
+        );
         const scenarioVariables = normalizeScenarioVariables(
           bodyJson.variables as Record<string, unknown> | undefined
         );
@@ -1196,6 +1209,7 @@ export function useControlRecord(
         nodes: payloadGraph.nodes,
         edges: payloadGraph.edges,
         variables,
+        requirements: scenarioRequirements,
         ...(accountGroupForEdit !== undefined
           ? { account_group_id: accountGroupForEdit }
           : {})
@@ -1215,6 +1229,10 @@ export function useControlRecord(
               (updated as { account_group_id?: string | null })
                 .account_group_id ?? null
           });
+          setScenarioRequirements(
+            ((updated as { requirements?: ScenarioRequirements })
+              .requirements ?? scenarioRequirements) as ScenarioRequirements
+          );
           toast.success(t('toast.saveStepsSuccess'));
           setSaveDialogOpen(false);
           setSelectedCampaignId(null);
@@ -1230,6 +1248,7 @@ export function useControlRecord(
       t,
       waitForPendingScreenshots,
       editingContext,
+      scenarioRequirements,
       queryClient
     ]
   );
@@ -1268,6 +1287,7 @@ export function useControlRecord(
         nodes: payloadGraph.nodes,
         edges: payloadGraph.edges,
         variables,
+        requirements: scenarioRequirements,
         ...(accountGroupIdOverride
           ? { account_group_id: accountGroupIdOverride }
           : {})
@@ -1287,6 +1307,10 @@ export function useControlRecord(
               (created as { account_group_id?: string | null })
                 .account_group_id ?? null
           });
+          setScenarioRequirements(
+            ((created as { requirements?: ScenarioRequirements })
+              .requirements ?? scenarioRequirements) as ScenarioRequirements
+          );
           toast.success(t('toast.createScenarioSuccess'));
           setSaveDialogOpen(false);
           setSelectedCampaignId(null);
@@ -1301,6 +1325,7 @@ export function useControlRecord(
       pendingScreenshotCount,
       t,
       waitForPendingScreenshots,
+      scenarioRequirements,
       queryClient
     ]
   );
@@ -1326,7 +1351,11 @@ export function useControlRecord(
         return null;
       }
 
-      const body = buildOrgScenarioBodyPayload(payloadSteps, variables ?? {});
+      const body = buildOrgScenarioBodyPayload(
+        payloadSteps,
+        variables ?? {},
+        scenarioRequirements
+      );
       setSavingCampaignId('org-new');
       try {
         const created = await orgScenariosApi.create({
@@ -1355,7 +1384,8 @@ export function useControlRecord(
       pendingScreenshotCount,
       queryClient,
       t,
-      waitForPendingScreenshots
+      waitForPendingScreenshots,
+      scenarioRequirements
     ]
   );
 
@@ -1724,7 +1754,9 @@ export function useControlRecord(
       templateContext,
       orgScenarioContext,
       savingTemplate,
-      saveToTemplate
+      saveToTemplate,
+      requirements: scenarioRequirements,
+      setRequirements: setScenarioRequirements
     },
 
     hierarchy: {

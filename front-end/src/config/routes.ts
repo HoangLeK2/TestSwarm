@@ -129,6 +129,7 @@ export const ROUTES = {
     WORKSPACE_ADMINS: '/dashboard/admin/workspace-admins',
     AGENTS: '/dashboard/admin/agents',
     DEVICES: '/dashboard/admin/devices',
+    PLATFORM_APPS: '/dashboard/admin/platform-apps',
     AUDIT: '/dashboard/admin/audit'
   },
   MCP: {

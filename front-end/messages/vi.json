@@ -575,6 +575,7 @@
     "admin_workspace_admins": "Workspace admin",
     "admin_agents": "Quản lý Agent",
     "admin_devices": "Quản lý thiết bị",
+    "admin_platform_apps": "App platform",
     "admin_audit": "Nhật ký quản trị",
     "activity_history": "Lịch sử hoạt động",
     "analytics": "Phân tích",
@@ -969,10 +970,17 @@
       "createFailed": "Tạo tài khoản thất bại"
     },
     "importDialog": {
-      "trigger": "Nhập CSV",
-      "title": "Nhập tài khoản từ CSV",
-      "description": "Tải lên file CSV với các cột sau:",
-      "selectFile": "Chọn file CSV",
+      "trigger": "Nhập",
+      "title": "Nhập tài khoản",
+      "description": "Tải lên account CSV hoặc TXT.",
+      "csv": "CSV",
+      "txt": "TXT",
+      "format": "Format",
+      "standardCsv": "Cột CSV chuẩn",
+      "txtFormatFallback": "uid|password|totp_secret|cookies|token|email",
+      "selectCsvFile": "Chọn file CSV",
+      "selectTxtFile": "Chọn file TXT",
+      "upload": "Upload",
       "importing": "Đang nhập...",
       "result": "Hoàn tất! Tạo mới: {created}, Bỏ qua: {skipped}, Tổng: {total}",
       "importFailed": "Nhập thất bại"
@@ -1022,6 +1030,23 @@
       "assignError": "Gán thiết bị thất bại",
       "removeSuccess": "Đã gỡ liên kết thiết bị",
       "removeError": "Gỡ liên kết thiết bị thất bại"
+    },
+    "loginDialog": {
+      "trigger": "Đăng nhập",
+      "title": "Chạy kịch bản đăng nhập",
+      "deviceSection": "Điện thoại đã gắn",
+      "primary": "Tài khoản chính",
+      "loading": "Đang tải...",
+      "noDevice": "Tài khoản này chưa gắn với điện thoại nào. Gắn vào điện thoại trước khi đăng nhập.",
+      "pickDevice": "Chọn điện thoại để chạy kịch bản đăng nhập.",
+      "deviceOffline": "Điện thoại đang ở trạng thái \"{state}\", chưa nhận lệnh được.",
+      "noTemplate": "Chưa có kịch bản đăng nhập cho nền tảng {platform}.",
+      "progress": "Tiến trình",
+      "submit": "Chạy đăng nhập",
+      "running": "Đang đăng nhập...",
+      "runSuccess": "Đăng nhập thành công, đã lưu phiên nền tảng",
+      "runFailed": "Kịch bản đăng nhập thất bại",
+      "hintAlreadySignedIn": "Điện thoại đang đăng nhập sẵn một tài khoản Facebook khác. Đăng xuất trên máy rồi chạy lại — hệ thống từ chối tự chuyển tài khoản."
     },
     "assignments": {
       "title": "Gắn tài khoản vào thiết bị",
@@ -2924,7 +2949,10 @@
         "comment": "Bình luận",
         "share": "Chia sẻ",
         "keywords": "Từ khóa bài viết",
-        "keywordPlaceholder": "AI, tuyển dụng, công nghệ"
+        "keywordPlaceholder": "AI, tuyển dụng, công nghệ",
+        "actionType": "Loại hoạt động",
+        "statuses": "Trạng thái được phép",
+        "statusesPlaceholder": "approved, active"
       },
       "adbShell": {
         "hint": "Chạy trên phone thật — nhập lệnh đầy đủ (vd. adb shell getprop …) hoặc chỉ phần shell (getprop …).",
@@ -3403,10 +3431,12 @@
         "branchIfEnd": "KẾT THÚC IF",
         "branchIfFalse": "NẾU SAI",
         "branchIfTrue": "NẾU ĐÚNG",
+        "branchLabel": "Nhánh {name}",
         "branchLoopBody": "NỘI DUNG LẶP",
         "branchLoopEnd": "KẾT THÚC VÒNG LẶP",
         "branchNumbered": "NHÁNH {number}",
         "branchPickEnd": "KẾT THÚC CHỌN NHÁNH",
+        "branchStepCount": "{count} bước trong nhánh",
         "branchWhenFound": "KHI TÌM THẤY",
         "branchWhenNotFound": "KHI KHÔNG TÌM THẤY",
         "breakLoopHint": "Nếu condition đúng thì break vòng lặp hiện tại.",
@@ -3421,6 +3451,7 @@
         "clipboardContent": "Nội dung clipboard",
         "close": "Đóng",
         "actionContent": "Nội dung hành động",
+        "addBranch": "Thêm nhánh",
         "advanced": "Nâng cao",
         "advancedBehavior": "Hành vi nâng cao",
         "capabilitySetup": "Tổng quan thiết lập",
@@ -3528,6 +3559,7 @@
         "requireCommonBeforeInvite": "Yêu cầu có điểm chung trước khi gửi lời mời",
         "requireUniqueCandidate": "Chỉ pass khi có đúng một candidate đạt điểm",
         "requireVerifiedTarget": "Yêu cầu target đã verify",
+        "removeBranch": "Xóa nhánh",
         "requiredKeywords": "Keyword bắt buộc",
         "requiredProfileKeywords": "Keyword bắt buộc trên profile",
         "ready": "Sẵn sàng",
@@ -3586,7 +3618,41 @@
         "waitAfterFilterSeconds": "Chờ sau khi đổi filter (giây)",
         "waitButtonMaxSeconds": "Chờ nút tối đa (giây)",
         "waitCommentSheetSeconds": "Chờ sheet bình luận mở (giây)",
-        "waitVerifySeconds": "Chờ verify (giây)"
+        "waitVerifySeconds": "Chờ verify (giây)",
+        "weightLabel": "trọng số",
+        "accountActionId": "ID action của account",
+        "candidateEntityId": "ID dữ liệu nguồn của candidate",
+        "candidateLeaseToken": "Token giữ candidate",
+        "completionStepsJson": "Các bước hoàn tất (JSON)",
+        "completionVerifyJson": "Điều kiện xác minh hoàn tất (JSON)",
+        "metric": "Chỉ số",
+        "persistMetric": "Lưu chỉ số vào account",
+        "requireCandidateStatus": "Trạng thái candidate bắt buộc",
+        "requireCompletion": "Yêu cầu xác minh hoàn tất",
+        "settleSeconds": "Chờ ổn định (giây)"
+      },
+      "socialSyncConnections": {
+        "hint": "Đọc số lượng kết nối hiện tại từ profile nền tảng và lưu lại cho account này.",
+        "persistHint": "Khi bật, worker ghi chỉ số này vào bản ghi account đang được gán."
+      },
+      "requirements": {
+        "title": "Yêu cầu chạy",
+        "sessionRequiredDescription": "Cần session {platform} từ account gắn với phone trước khi chạy.",
+        "sessionNotRequiredDescription": "Không yêu cầu session account.",
+        "sessionToggleLabel": "Cần session",
+        "platformLabel": "Nền tảng",
+        "platformFacebook": "Facebook",
+        "platformTiktok": "TikTok",
+        "platformZalo": "Zalo",
+        "accountSourceLabel": "Nguồn account",
+        "accountSourceDevicePrimary": "Account gắn với phone",
+        "accountSourceCampaignAccount": "Account của campaign",
+        "accountSourceAccountGroup": "Nhóm account",
+        "summarySession": "Cần session {platform}",
+        "summaryNoSession": "Không cần session",
+        "summarySessionHint": "Thiết bị phải có account/session hợp lệ trước khi chạy.",
+        "summaryNoSessionHint": "Kịch bản có thể chạy mà không cần session account.",
+        "done": "Xong"
       }
     },
     "flowInsert": {
@@ -3695,7 +3761,9 @@
         "social_open_comments": "Mở khu vực bình luận của nội dung hiện tại trong một bước",
         "extract_comments": "Mẫu sẵn: thu thập bình luận",
         "extract_posts": "Mẫu sẵn: thu thập bài viết",
-        "tap_image": "Chạm vào nơi tìm thấy ảnh mẫu trên màn hình"
+        "tap_image": "Chạm vào nơi tìm thấy ảnh mẫu trên màn hình",
+        "tap": "Chạm theo selector hoặc tọa độ dự phòng",
+        "social_sync_connections": "Đọc và lưu số lượng kết nối của account"
       },
       "groups": {
         "dataCollection": {
@@ -3787,7 +3855,9 @@
         "social_open_comments": "Mở bình luận",
         "extract_comments": "Thu thập bình luận",
         "extract_posts": "Thu thập bài viết",
-        "tap_image": "Chạm theo ảnh"
+        "tap_image": "Chạm theo ảnh",
+        "tap": "Chạm",
+        "social_sync_connections": "Đồng bộ kết nối"
       }
     },
     "flowStep": {
@@ -3862,7 +3932,8 @@
         "extract_text_ai": "TRÍCH XUẤT VĂN BẢN BẰNG AI",
         "extract_screen_data": "TRÍCH XUẤT DỮ LIỆU MÀN HÌNH",
         "tap_image": "CHẠM THEO ẢNH",
-        "key_back": "QUAY LẠI"
+        "key_back": "QUAY LẠI",
+        "social_sync_connections": "ĐỒNG BỘ KẾT NỐI"
       },
       "display": {
         "platformSessionPreflight": "Kiểm tra trước khi tiếp tục",
@@ -3913,7 +3984,8 @@
         "extractEntityComment": "Bình luận",
         "extractEntityGroup": "Nhóm",
         "extractEntityVisibleText": "Văn bản hiển thị",
-        "extractEntityPage": "Trang"
+        "extractEntityPage": "Trang",
+        "socialSyncConnections": "Đồng bộ {metric} · {platform}"
       },
       "systemVariable": {
         "platformSessionReady": "Phiên nền tảng sẵn sàng"
@@ -4382,6 +4454,18 @@
       "clear": "Xóa terminal",
       "installUrlRequired": "Nhập link file cài đặt",
       "installApkRunning": "Đang cài ứng dụng lên {serial}…",
+      "installApkSubmitted": "Đã cài APK xong",
+      "useStandardFacebookApk": "Dùng APK Facebook chuẩn",
+      "standardFacebookApkHint": "Cài bản Facebook APK active do superadmin publish. Link tải có chữ ký sẽ được ẩn.",
+      "standardFacebookApkUnavailable": "Chưa hỗ trợ cài APK Facebook chuẩn ở màn hình này.",
+      "manualApkTitle": "Link APK",
+      "manualApkDescription": "Dán link tải HTTP(S) thủ công.",
+      "standardFacebookApkOption": "Facebook {version}",
+      "standardFacebookApkMissing": "Facebook — chưa có version active",
+      "standardFacebookApkDescription": "Cài bản Facebook APK chuẩn của platform.",
+      "showManualApkUrl": "Dùng link APK khác",
+      "hideManualApkUrl": "Ẩn link APK",
+      "facebookApkSelected": "Đã chọn Facebook {version}",
       "shellRequired": "Nhập lệnh shell",
       "packageRequired": "Nhập package app",
       "shellEmpty": "Nhập lệnh để xem kết quả ở đây.",
@@ -4404,7 +4488,7 @@
         "quickLaunchSubmitted": "Đã gửi lệnh mở {app}",
         "adb_shell": "Lệnh ADB shell",
         "adb_shellHint": "Chạy lệnh shell trên thiết bị",
-        "install_apk": "Cài ứng dụng từ link",
+        "install_apk": "Cài ứng dụng",
         "install_apkHint": "Tải và cài ứng dụng lên thiết bị",
         "clear_app": "Xóa dữ liệu app",
         "clear_appHint": "Xóa cache và dữ liệu đăng nhập của ứng dụng"
@@ -5891,6 +5975,7 @@
         "dead": "Mất kết nối",
         "disabled": "Đã vô hiệu hóa",
         "disconnected": "Đã ngắt kết nối",
+        "draft": "Nháp",
         "error": "Lỗi",
         "offline": "Ngoại tuyến",
         "online": "Trực tuyến",
@@ -6509,6 +6594,48 @@
         "title": "Chuyển thiết bị",
         "destinationWorkspace": "Workspace đích",
         "transfer": "Chuyển"
+      }
+    },
+    "platformApps": {
+      "title": "App platform",
+      "description": "Quản lý một phiên bản APK Facebook chuẩn dùng chung toàn platform.",
+      "empty": "Chưa có bản phát hành Facebook.",
+      "upload": {
+        "file": "APK Facebook",
+        "notes": "Ghi chú",
+        "notesPlaceholder": "Ghi chú phiên bản",
+        "submit": "Upload APK"
+      },
+      "filters": {
+        "status": "Trạng thái",
+        "allStatuses": "Tất cả trạng thái"
+      },
+      "statuses": {
+        "draft": "Nháp",
+        "active": "Đang dùng",
+        "archived": "Đã lưu trữ"
+      },
+      "table": {
+        "release": "Bản phát hành",
+        "status": "Trạng thái",
+        "size": "Dung lượng",
+        "sha": "SHA",
+        "published": "Đã publish",
+        "actions": "Thao tác"
+      },
+      "actions": {
+        "copyUrl": "Copy URL",
+        "publish": "Publish",
+        "archive": "Lưu trữ"
+      },
+      "toast": {
+        "uploaded": "Đã upload APK",
+        "published": "Đã publish bản phát hành",
+        "archived": "Đã lưu trữ bản phát hành",
+        "copied": "Đã copy URL tải"
+      },
+      "errors": {
+        "fileRequired": "Chọn file APK trước."
       }
     },
     "audit": {

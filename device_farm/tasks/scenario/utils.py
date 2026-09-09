@@ -47,8 +47,14 @@ _POPUP_DISMISS_PATTERNS: Sequence[Tuple[str, str]] = (
     ("text", "ALLOW"),   ("text", "Allow"),   ("text", "Allow all"),
     ("text", "Allow only while using the app"),
     ("text", "Cho phép"), ("text", "Đồng ý"), ("text", "OK"), ("text", "Xác nhận"),
-    ("text", "Bỏ qua"), ("text", "Skip"),    ("text", "Not now"), ("text", "Later"),
+    ("text", "Bỏ qua"), ("text", "BỎ QUA"), ("text", "Skip"),    ("text", "Not now"), ("text", "Later"),
     ("text", "No thanks"), ("text", "Không, cảm ơn"),
+    # Vietnamese "maybe later" wording. Facebook uses these on the popups it
+    # stacks right after a login; every entry here is matched as an exact text
+    # attribute, never as a substring, so a short label cannot land inside a
+    # person's name.
+    ("text", "Để sau"), ("text", "Chưa phải bây giờ"),
+    ("text", "Không phải bây giờ"), ("text", "Lúc khác"),
     ("text", "Dismiss"),  ("text", "Close"),  ("text", "Got it"),  ("text", "Understood"),
     ("text", "Continue"), ("text", "Tiếp tục"),
     ("text", "Đóng"),

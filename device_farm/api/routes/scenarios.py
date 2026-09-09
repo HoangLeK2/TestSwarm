@@ -418,6 +418,8 @@ def _body_payload(body: OrgScenarioBodyIn) -> dict:
         payload["edges"] = body.edges
     if body.variables is not None:
         payload["variables"] = body.variables
+    if body.requirements is not None:
+        payload["requirements"] = body.requirements
     return payload
 
 

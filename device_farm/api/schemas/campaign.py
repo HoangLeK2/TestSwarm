@@ -13,6 +13,7 @@ class ScenarioCreate(BaseModel):
     instructions: str = ""
     steps: list = []
     variables: dict = {}
+    requirements: dict = {}
     order: int = 0
     nodes: List[FlowNodeModel] = []
     edges: List[FlowEdgeModel] = []
@@ -38,6 +39,7 @@ class ScenarioUpdate(BaseModel):
     instructions: str | None = None
     steps: list | None = None
     variables: dict | None = None
+    requirements: dict | None = None
     order: int | None = None
     nodes: Optional[List[FlowNodeModel]] = None
     edges: Optional[List[FlowEdgeModel]] = None
@@ -64,6 +66,7 @@ class ScenarioOut(BaseModel):
     instructions: str
     steps: list
     variables: dict
+    requirements: dict = {}
     order: int
     nodes: list = []
     edges: list = []

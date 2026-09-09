@@ -10,13 +10,22 @@ Tests cover:
 - bulk_create_accounts: batch insertion with mocked DB layer
 """
 
-import pytest
+from importlib import import_module
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from db.crud.account import (
     _BULK_BATCH_SIZE,
+    _insert_batch,
     _prepare_account_row,
     bulk_create_accounts,
+)
+from db.models.account_import_format import AccountImportFormat
+from services.account_import_formats import (
+    AccountImportFormatError,
+    parse_txt_accounts,
+    validate_account_import_fields,
 )
 
 
@@ -100,6 +109,13 @@ def test_prepare_user_id_injected():
     assert result["user_id"] == "owner-42"
 
 
+def test_prepare_org_id_injected():
+    row = {"platform": "facebook", "username": "frank"}
+    result = _prepare_account_row(row, user_id="owner-42", org_id="org-1")
+    assert result is not None
+    assert result["org_id"] == "org-1"
+
+
 def test_prepare_user_id_none():
     row = {"platform": "facebook", "username": "grace"}
     result = _prepare_account_row(row, user_id=None)
@@ -152,12 +168,166 @@ def test_prepare_metadata_aliases_are_normalised():
     }
 
 
+def test_txt_format_one_parses_cookies_token_and_email_metadata():
+    fmt = AccountImportFormat(
+        slug="facebook_uid_password_tfa_cookies_token_email",
+        name="Format 1",
+        delimiter="|",
+        platform="facebook",
+        fields=[
+            "username",
+            "password",
+            "totp_secret",
+            "cookies",
+            "token",
+            "email",
+            "metadata.email_password",
+            "ignore",
+        ],
+    )
+    parsed = parse_txt_accounts(
+        (
+            "61586957575493|pass123|N57C FFSN E7OE|c_user=1;xs=2|EAAB|"
+            "a@example.com|mailpass|\n"
+        ),
+        fmt,
+    )
+    assert parsed.total == 1
+    assert parsed.invalid == 0
+    assert parsed.rows == [
+        {
+            "platform": "facebook",
+            "username": "61586957575493",
+            "password": "pass123",
+            "totp_secret": "N57C FFSN E7OE",
+            "cookies": "c_user=1;xs=2",
+            "token": "EAAB",
+            "email": "a@example.com",
+            "account_metadata": {"email_password": "mailpass"},
+        }
+    ]
+
+
+def test_txt_format_two_parses_recovery_email_and_external_id():
+    fmt = AccountImportFormat(
+        slug="facebook_uid_password_tfa_email_token",
+        name="Format 2",
+        delimiter="|",
+        platform="facebook",
+        fields=[
+            "username",
+            "password",
+            "totp_secret",
+            "email",
+            "metadata.email_password",
+            "metadata.recovery_email",
+            "token",
+            "metadata.external_id",
+        ],
+    )
+    parsed = parse_txt_accounts(
+        (
+            "61566178707038|pass456|3BMW MSZ6 T4YW|login@example.com|"
+            "mailpass|recovery@example.com|M.C544_TOKEN|uuid-1"
+        ),
+        fmt,
+    )
+    assert parsed.total == 1
+    assert parsed.invalid == 0
+    assert parsed.rows[0]["username"] == "61566178707038"
+    assert parsed.rows[0]["account_metadata"] == {
+        "email_password": "mailpass",
+        "recovery_email": "recovery@example.com",
+        "external_id": "uuid-1",
+    }
+
+
+def test_txt_format_rejects_unknown_fields():
+    with pytest.raises(AccountImportFormatError) as exc:
+        validate_account_import_fields(["username", "secret"])
+    assert exc.value.code == "IMPORT_FORMAT_FIELD_UNSUPPORTED"
+
+
+@pytest.mark.asyncio
+async def test_account_import_formats_migration_seeds_timestamp_columns():
+    migration = import_module("db.migrations.125_account_import_formats")
+
+    class _Dialect:
+        name = "postgresql"
+
+    class _Conn:
+        dialect = _Dialect()
+
+        def __init__(self):
+            self.calls = []
+
+        async def execute(self, statement, params=None):
+            self.calls.append((str(statement), params))
+
+    conn = _Conn()
+
+    await migration.upgrade(conn)
+
+    sql_calls = [sql for sql, _params in conn.calls]
+    created_default_idx = next(
+        index
+        for index, sql in enumerate(sql_calls)
+        if "ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP" in sql
+    )
+    updated_default_idx = next(
+        index
+        for index, sql in enumerate(sql_calls)
+        if "ALTER COLUMN updated_at SET DEFAULT CURRENT_TIMESTAMP" in sql
+    )
+    seed_idx = next(
+        index
+        for index, sql in enumerate(sql_calls)
+        if "INSERT INTO account_import_formats" in sql
+    )
+
+    assert created_default_idx < seed_idx
+    assert updated_default_idx < seed_idx
+    assert "created_at, updated_at" in sql_calls[seed_idx]
+    assert "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP" in sql_calls[seed_idx]
+
+
 # ── bulk_create_accounts ───────────────────────────────────────────────────────
 
 
 def _make_db_session() -> AsyncMock:
     """Return a minimal async DB session mock."""
     return AsyncMock()
+
+
+@pytest.mark.asyncio
+async def test_insert_batch_accepts_metadata_column_key():
+    db = _make_db_session()
+    execute_result = MagicMock()
+    execute_result.rowcount = 1
+    db.execute.return_value = execute_result
+
+    created = await _insert_batch(
+        db,
+        [
+            {
+                "org_id": "org-1",
+                "platform": "facebook",
+                "username": "user1",
+                "password_encrypted": None,
+                "display_name": "",
+                "notes": "",
+                "tags": "",
+                "user_id": "u1",
+                "metadata": {"email": "user@example.com"},
+                "status": "active",
+                "state": "active",
+                "total_usage_minutes": 0.0,
+                "usage_today_minutes": 0.0,
+            }
+        ],
+    )
+
+    assert created == 1
 
 
 @pytest.mark.asyncio
@@ -281,6 +451,22 @@ async def test_bulk_password_encryption_called():
     # encrypt_password should have been invoked with the plaintext
     assert "plain123" in encrypted_calls
     assert inserted_batches[0][0]["password_encrypted"] == "ENCRYPTED:plain123"
+
+
+@pytest.mark.asyncio
+async def test_bulk_org_id_passed_to_insert_batch():
+    rows = [{"platform": "facebook", "username": "user1"}]
+    db = _make_db_session()
+    inserted_batches: list[list[dict]] = []
+
+    async def _capture_insert(db_, batch):
+        inserted_batches.append(list(batch))
+        return len(batch)
+
+    with patch("db.crud.account._insert_batch", side_effect=_capture_insert):
+        await bulk_create_accounts(db, rows, user_id="u1", org_id="org-1")
+
+    assert inserted_batches[0][0]["org_id"] == "org-1"
 
 
 @pytest.mark.asyncio

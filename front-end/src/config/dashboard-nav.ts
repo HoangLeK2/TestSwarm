@@ -157,6 +157,14 @@ const ADMIN_INFRASTRUCTURE_GROUP: NavGroupDef = {
       icon: 'smartphone',
       permission: { object: 'devices', action: 'read' },
       adminConsoleOnly: true
+    },
+    {
+      titleKey: 'admin_platform_apps',
+      url: ROUTES.ADMIN.PLATFORM_APPS,
+      icon: 'inventory',
+      roles: ['superadmin'],
+      permission: { object: 'devices', action: 'manage' },
+      adminConsoleOnly: true
     }
   ]
 };

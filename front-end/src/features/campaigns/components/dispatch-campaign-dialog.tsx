@@ -64,6 +64,7 @@ export type DispatchScenarioItem = {
   name: string;
   variables?: Record<string, unknown>;
   steps?: unknown[];
+  requirements?: Record<string, unknown>;
 };
 
 export function DispatchCampaignDialog({
@@ -447,7 +448,7 @@ export function DispatchCampaignDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className='grid grid-cols-4 border-b bg-muted/30 px-8 py-4'>
+        <div className='grid grid-cols-3 border-b bg-muted/30 px-8 py-4'>
           {dispatchSteps.map((item, index) => (
             <div key={item} className='flex min-w-0 items-center gap-3'>
               <span

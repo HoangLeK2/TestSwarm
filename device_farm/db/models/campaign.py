@@ -167,6 +167,7 @@ class Scenario(Base):
     nodes: Mapped[list] = mapped_column(JSON, default=list)
     edges: Mapped[list] = mapped_column(JSON, default=list)
     variables: Mapped[dict] = mapped_column(JSON, default=dict)
+    requirements: Mapped[dict] = mapped_column(JSON, default=dict)
     # Optional link to an account_groups row. NULL means "use the device's
     # primary account" (legacy path). When the group is deleted, the FK is
     # set to NULL so the scenario still runs.

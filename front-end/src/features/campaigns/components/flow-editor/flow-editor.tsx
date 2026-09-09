@@ -34,6 +34,7 @@ import { StepCard } from './step-card';
 import { BracketBlock } from './bracket-block';
 import { InsertGap } from './insert-button';
 import { InsertStepPicker } from './insert-step-picker';
+import { formatStepLabelForCard } from './constants';
 import {
   primaryProducedVariable,
   variablesProducedByStep
@@ -60,6 +61,7 @@ import { encodeFlowListRef, stableStepDnDId } from './flow-dnd-ids';
 import { applyFlowDragEnd } from './flow-tree-dnd';
 import { SortableFlowRow } from './sortable-flow-row';
 import { FlowStepRail } from './flow-step-rail';
+import { useCampaignFlowI18n } from './flow-i18n';
 import { encodeScenarioInlineRunKey } from './inline-run-key';
 import { FlowEditorEditSessionProvider } from './flow-editor-edit-session';
 import type { VariablePreviewValues } from './variable-preview';
@@ -88,6 +90,18 @@ import {
 // ── FlowEditor ───────────────────────────────────────────────────────────────
 
 type FlowEditorDetailMode = 'dialog' | 'inline';
+
+export type PlatformSessionRequirement = {
+  required?: boolean;
+  platform?: string;
+  account_source?: string;
+};
+
+export type ScenarioRequirements = {
+  platform_session?: PlatformSessionRequirement;
+  platformSession?: PlatformSessionRequirement;
+  [key: string]: unknown;
+};
 
 interface Props {
   steps: FlowStep[];
@@ -130,6 +144,8 @@ interface Props {
   /** In virtualized mode, render step config as a modal dialog or an inline inspector column. */
   detailMode?: FlowEditorDetailMode;
   sessionGateRuntimeContext?: SessionGateRuntimeContext;
+  scenarioRequirements?: ScenarioRequirements;
+  onScenarioRequirementsChange?: (requirements: ScenarioRequirements) => void;
 }
 
 const ROOT_SORTABLE_ID = encodeFlowListRef({ kind: 'root' });
@@ -745,6 +761,26 @@ function localStepNumber(path: BracketChildRef[]): string {
   return String((path.at(-1)?.ci ?? 0) + 1);
 }
 
+function scopeDepthNumber(path: BracketChildRef[]): string {
+  const depth = path.length;
+  const local = (path.at(-1)?.ci ?? 0) + 1;
+  return depth <= 1 ? String(depth) : `${depth}.${local}`;
+}
+
+function pathFromScopeId(scopeId?: string): BracketChildRef[] | null {
+  if (!scopeId) return null;
+  const path = scopeId
+    .split('/')
+    .map((segment) => {
+      const [listKey, index] = segment.split(':');
+      const ci = Number(index);
+      if (!listKey || !Number.isFinite(ci)) return null;
+      return { listKey, ci };
+    })
+    .filter((segment): segment is BracketChildRef => segment != null);
+  return path.length ? path : null;
+}
+
 type ScenarioLintRepairFix = Extract<
   StepVariableLineageQuickFix,
   { kind: 'patch_step' | 'insert_step_before' }
@@ -1279,6 +1315,10 @@ function VirtualizedFlowEditor({
                   ? (newSteps: FlowStep[]) =>
                       insertManyBeforePath(row.insertPath, newSteps)
                   : undefined;
+              const ownerPath = pathFromScopeId(row.scopes.at(-1)?.id);
+              const ownerStep = ownerPath
+                ? resolveStepAtPath(steps, ownerPath)
+                : null;
               return (
                 <div
                   key={virtualRow.key}
@@ -1293,6 +1333,8 @@ function VirtualizedFlowEditor({
                     deviceCapabilities={deviceCapabilities}
                     onInsert={onInsertIntoBranch}
                     onInsertMany={onInsertManyIntoBranch}
+                    ownerNumber={ownerPath ? scopeDepthNumber(ownerPath) : ''}
+                    ownerStep={ownerStep}
                   />
                 </div>
               );
@@ -1339,8 +1381,8 @@ function VirtualizedFlowEditor({
                     showLine={virtualRow.index < rows.length - 1}
                     root={row.depth === 0}
                   />
-                  <VirtualBranchRail
-                    listKey={row.path.at(-1)?.listKey}
+                  <VirtualDepthGuide
+                    branch={branchFromListKey(row.path.at(-1)?.listKey)}
                     depth={row.depth}
                   />
                   <div
@@ -1583,26 +1625,62 @@ function VirtualFlowStepRail({
   );
 }
 
-function VirtualBranchRail({
-  listKey,
-  depth
+type VirtualBranchKind = 'then' | 'else' | 'loop' | 'pick';
+
+function branchFromListKey(listKey?: string): VirtualBranchKind | undefined {
+  if (listKey === 'then') return 'then';
+  if (listKey === 'else') return 'else';
+  if (listKey?.startsWith('branches.')) return 'pick';
+  if (listKey === 'steps') return 'loop';
+  return undefined;
+}
+
+function scopeRailColor(branch?: VirtualBranchKind, terminal = false) {
+  if (terminal) return 'bg-amber-500/35';
+  if (branch === 'then') return 'bg-emerald-500/35';
+  if (branch === 'else') return 'bg-rose-500/30';
+  if (branch === 'pick') return 'bg-violet-500/32';
+  if (branch === 'loop') return 'bg-teal-500/32';
+  return 'bg-border/35';
+}
+
+function branchTint(branch?: VirtualBranchKind, terminal = false) {
+  if (terminal) {
+    return 'border-amber-500/25 bg-background text-amber-700/75 dark:border-amber-500/25 dark:text-amber-300/75';
+  }
+  if (branch === 'then') {
+    return 'border-emerald-500/25 bg-background text-emerald-700 dark:border-emerald-500/25 dark:text-emerald-300';
+  }
+  if (branch === 'else') {
+    return 'border-rose-500/25 bg-background text-rose-700 dark:border-rose-500/25 dark:text-rose-300';
+  }
+  if (branch === 'pick') {
+    return 'border-violet-500/25 bg-background text-violet-700 dark:border-violet-500/25 dark:text-violet-300';
+  }
+  return 'border-teal-500/25 bg-background text-teal-700 dark:border-teal-500/25 dark:text-teal-300';
+}
+
+function VirtualDepthGuide({
+  depth,
+  branch,
+  terminal = false
 }: {
-  listKey?: string;
   depth: number;
+  branch?: VirtualBranchKind;
+  terminal?: boolean;
 }) {
-  if (!listKey || depth === 0) return null;
-  const color =
-    listKey === 'then'
-      ? 'bg-emerald-500/55'
-      : listKey === 'else'
-        ? 'bg-rose-500/45'
-        : listKey.startsWith('branches.')
-          ? 'bg-violet-500/50'
-          : 'bg-teal-500/50';
+  if (depth <= 0) return null;
   return (
-    <div className='relative w-2 shrink-0 self-stretch' aria-hidden>
+    <div
+      className='relative shrink-0 self-stretch'
+      style={{ width: `${depth * 14}px` }}
+      aria-hidden
+    >
       <span
-        className={`absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 rounded-full ${color}`}
+        className={cn(
+          'absolute inset-y-0 right-1 w-px rounded-full',
+          scopeRailColor(branch, terminal)
+        )}
       />
     </div>
   );
@@ -1613,7 +1691,9 @@ function VirtualScopeMarker({
   nodeCapabilities,
   deviceCapabilities,
   onInsert,
-  onInsertMany
+  onInsertMany,
+  ownerNumber,
+  ownerStep
 }: {
   row: Exclude<
     ReturnType<typeof projectVirtualFlowRows>[number],
@@ -1623,95 +1703,63 @@ function VirtualScopeMarker({
   deviceCapabilities?: DeviceCapabilityMap;
   onInsert?: (step: FlowStep) => void;
   onInsertMany?: (steps: FlowStep[]) => void;
+  ownerNumber: string;
+  ownerStep: FlowStep | null;
 }) {
   const tField = useTranslations('campaignsFeature.stepEditor.stepFields');
+  const { getStepTypeName } = useCampaignFlowI18n();
   const conditional = row.scopes.at(-1)?.type;
   const isElse = row.kind === 'branch' && row.branch === 'else';
   const isThen = row.kind === 'branch' && row.branch === 'then';
   const marker = row.kind === 'end' ? '└' : isThen ? '✓' : isElse ? '×' : '↻';
+  const branch = row.kind === 'branch' ? row.branch : undefined;
+  const ownerTypeName = ownerStep
+    ? formatStepLabelForCard(getStepTypeName(ownerStep.type))
+    : '';
+  const ownerLabel = [ownerNumber, ownerTypeName].filter(Boolean).join(' ');
 
   return (
     <div className='flex min-h-8 min-w-0 items-stretch gap-2'>
       <div className='w-9 shrink-0' />
-      <div
-        className={cn(
-          'relative w-2 shrink-0 self-stretch',
-          row.kind === 'end' && 'opacity-70'
-        )}
-        aria-hidden
-      >
-        <span
-          className={cn(
-            'absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 rounded-full',
-            isThen
-              ? 'bg-emerald-500/55'
-              : isElse
-                ? 'bg-rose-500/45'
-                : row.kind === 'end'
-                  ? 'bg-amber-500/45'
-                  : 'bg-teal-500/50'
-          )}
-        />
-      </div>
+      <VirtualDepthGuide
+        branch={branch}
+        depth={row.depth}
+        terminal={row.kind === 'end'}
+      />
       <div className='min-w-0 flex-1'>
         <div
           className={cn(
             'flex min-h-8 items-center gap-2',
             row.kind === 'branch' &&
-              'rounded-md bg-muted/[0.22] px-2 transition-colors hover:bg-muted/35'
+              'rounded-md border border-transparent px-1.5 transition-colors hover:bg-muted/20',
+            row.kind === 'end' &&
+              'rounded-md px-1.5 text-muted-foreground/80 hover:bg-muted/15'
           )}
         >
-          {row.kind === 'end' ? (
-            <span
-              className='font-mono text-xs text-amber-700/65 dark:text-amber-300/65'
-              aria-hidden
-            >
-              {marker}
-            </span>
-          ) : (
-            <span
-              className={cn(
-                'relative z-10 flex size-5 shrink-0 items-center justify-center rounded-full border bg-background text-[11px] font-bold shadow-sm',
-                isThen &&
-                  'border-emerald-500/45 bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300',
-                isElse &&
-                  'border-rose-500/40 bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-300',
-                !isThen &&
-                  !isElse &&
-                  'border-teal-500/40 bg-teal-50 text-teal-700 dark:bg-teal-950 dark:text-teal-300'
-              )}
-              aria-hidden
-            >
-              {marker}
-            </span>
-          )}
           <span
             className={cn(
-              'truncate text-[10px] font-bold tracking-[0.08em]',
-              row.kind === 'end' &&
-                'font-medium normal-case tracking-normal text-muted-foreground',
-              isThen && 'text-emerald-800 dark:text-emerald-300',
-              isElse && 'text-rose-800 dark:text-rose-300',
-              row.kind === 'branch' &&
-                !isThen &&
-                !isElse &&
-                'text-teal-800 dark:text-teal-300'
+              'inline-flex max-w-full items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] font-semibold shadow-sm',
+              branchTint(branch, row.kind === 'end')
             )}
           >
-            {tField(row.labelKey, row.labelValues)}
-          </span>
-          <span
-            className={cn(
-              'h-px min-w-4 flex-1',
-              row.kind === 'end'
-                ? 'border-t border-dashed border-amber-500/35'
-                : isThen
-                  ? 'bg-emerald-500/25'
-                  : isElse
-                    ? 'bg-rose-500/20'
-                    : 'bg-teal-500/25'
+            <span className='shrink-0' aria-hidden>
+              {marker}
+            </span>
+            <span className='truncate'>
+              {tField(row.labelKey, row.labelValues)}
+            </span>
+            {ownerLabel && (
+              <span className='border-current/15 min-w-0 truncate border-l pl-1.5 font-medium opacity-75'>
+                {ownerLabel}
+              </span>
             )}
-          />
+            {row.kind === 'branch' && (
+              <span className='border-current/15 shrink-0 rounded-full border bg-background/60 px-1.5 py-0.5 text-[9px] font-medium tabular-nums opacity-75'>
+                {tField('stepCount', { count: row.count })}
+              </span>
+            )}
+          </span>
+          <span className='min-w-2 flex-1' />
           {row.kind === 'branch' && onInsert && (
             <InsertStepPicker
               contentSide='bottom'
@@ -1727,7 +1775,7 @@ function VirtualScopeMarker({
                   type='button'
                   variant='outline'
                   size='sm'
-                  className='h-6 shrink-0 gap-1 rounded-full border-dashed px-2 text-[10px] font-medium text-muted-foreground hover:border-primary/60 hover:bg-primary/5 hover:text-primary'
+                  className='h-6 shrink-0 gap-1 rounded-full border-dashed bg-background/80 px-2 text-[10px] font-medium text-muted-foreground hover:border-primary/60 hover:bg-primary/5 hover:text-primary'
                 >
                   <Plus className='size-3' strokeWidth={2} />
                   {tField('addStep')}
@@ -1735,13 +1783,8 @@ function VirtualScopeMarker({
               }
             />
           )}
-          {row.kind === 'branch' && (
-            <span className='shrink-0 rounded-full border border-border/70 bg-background px-2 py-0.5 text-[9px] font-semibold tabular-nums text-muted-foreground shadow-sm'>
-              {tField('stepCount', { count: row.count })}
-            </span>
-          )}
           {row.kind === 'end' && conditional && (
-            <span className='shrink-0 rounded-full bg-muted/70 px-2 py-0.5 text-[9px] font-medium text-muted-foreground'>
+            <span className='shrink-0 rounded-full bg-muted/45 px-2 py-0.5 text-[9px] font-medium text-muted-foreground/80'>
               {tField('continueLabel')}
             </span>
           )}

@@ -2,13 +2,14 @@
 
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
   type ComponentType,
   type ReactNode
 } from 'react';
-import { Trash2 } from 'lucide-react';
+import { Loader2, Trash2 } from 'lucide-react';
 import {
   IconApps,
   IconBrandFacebookFilled,
@@ -41,6 +42,7 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
+import { farmApi } from '@/lib/farm-api';
 import {
   createDefaultStep,
   type FlowStep
@@ -57,12 +59,24 @@ import {
 
 export type { DeviceShellResult };
 
+type FacebookAppInstallOut = {
+  release: {
+    version_name: string;
+    version_code?: string | null;
+  };
+};
+
+type FacebookAppReleaseOut = {
+  version_name: string;
+  version_code?: string | null;
+};
+
 export type DeviceOpsConfig = {
   disabled?: boolean;
   defaultPackage?: string;
   onRunStep: (step: FlowStep) => Promise<void>;
   onRunShell?: (cmd: string) => Promise<DeviceShellResult>;
-  onInstallApk: (url: string) => void;
+  onInstallStandardFacebookApk?: () => Promise<FacebookAppInstallOut>;
 };
 
 type OpKind = 'adb_shell' | 'install_apk' | 'clear_app';
@@ -192,6 +206,11 @@ export function DeviceOpsRailSection({
   const [quickLaunching, setQuickLaunching] = useState<QuickLaunchKey | null>(
     null
   );
+  const [loadingFacebookApk, setLoadingFacebookApk] = useState(false);
+  const [loadingFacebookRelease, setLoadingFacebookRelease] = useState(false);
+  const [facebookRelease, setFacebookRelease] =
+    useState<FacebookAppReleaseOut | null>(null);
+  const [showManualApkUrl, setShowManualApkUrl] = useState(false);
   const shellApiRef = useRef<{ clear: () => void } | null>(null);
 
   const defaultPkg = config?.defaultPackage?.trim() ?? '';
@@ -203,6 +222,8 @@ export function DeviceOpsRailSection({
       if (kind === 'clear_app' && defaultPkg) {
         (step as FlowStep).package = defaultPkg;
       }
+      setShowManualApkUrl(false);
+      setFacebookRelease(null);
       setDraft(step);
       setOpen(kind);
     },
@@ -217,6 +238,7 @@ export function DeviceOpsRailSection({
     setOpen(null);
     setDraft(null);
     setRunning(false);
+    setShowManualApkUrl(false);
     shellApiRef.current = null;
   }, []);
 
@@ -237,6 +259,26 @@ export function DeviceOpsRailSection({
     [config, draft, tRun, updateDraft]
   );
 
+  useEffect(() => {
+    if (open !== 'install_apk') return;
+    let cancelled = false;
+    setLoadingFacebookRelease(true);
+    farmApi
+      .get<FacebookAppReleaseOut>('/platform-apps/facebook/current')
+      .then(({ data }) => {
+        if (!cancelled) setFacebookRelease(data);
+      })
+      .catch(() => {
+        if (!cancelled) setFacebookRelease(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingFacebookRelease(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
   const runDraft = useCallback(async () => {
     if (!config || !draft) return;
     if (draft.type === 'install_apk') {
@@ -245,8 +287,16 @@ export function DeviceOpsRailSection({
         toast.warning(tRun('installUrlRequired'));
         return;
       }
-      config.onInstallApk(url);
-      close();
+      setRunning(true);
+      try {
+        await config.onRunStep({ ...draft, url, timeout: draft.timeout ?? 600 });
+        toast.success(tRun('installApkSubmitted'));
+        close();
+      } catch (e) {
+        toast.error(String(e));
+      } finally {
+        setRunning(false);
+      }
       return;
     }
     if (draft.type === 'adb_shell') {
@@ -270,6 +320,29 @@ export function DeviceOpsRailSection({
       setRunning(false);
     }
   }, [config, draft, close, tRun]);
+
+  const fillStandardFacebookApk = useCallback(async () => {
+    if (!config || !draft || draft.type !== 'install_apk') return;
+    if (!config.onInstallStandardFacebookApk) {
+      toast.error(tRun('standardFacebookApkUnavailable'));
+      return;
+    }
+    setLoadingFacebookApk(true);
+    try {
+      const data = await config.onInstallStandardFacebookApk();
+      toast.success(tRun('installApkSubmitted'));
+      toast.success(
+        tRun('facebookApkSelected', {
+          version: data.release.version_name
+        })
+      );
+      close();
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setLoadingFacebookApk(false);
+    }
+  }, [close, config, draft, tRun]);
 
   const launchQuickApp = useCallback(
     async (app: (typeof QUICK_LAUNCH_APPS)[number]) => {
@@ -436,18 +509,80 @@ export function DeviceOpsRailSection({
               ) : null}
 
               {open === 'install_apk' && draft.type === 'install_apk' ? (
-                <div className='space-y-2'>
+                <div className='space-y-3'>
                   <p className='text-[12px] text-muted-foreground'>
-                    {tApp('installApkHint', {
-                      varToken: SCENARIO_VAR_TOKENS.VAR
-                    })}
+                    {tRun('standardFacebookApkHint')}
                   </p>
-                  <Input
-                    placeholder={tApp('installApkUrlPlaceholder')}
-                    value={draft.url ?? ''}
-                    onChange={(e) => updateDraft({ url: e.target.value })}
-                    className='h-8 font-mono text-xs'
-                  />
+                  <div className='grid gap-2'>
+                    <button
+                      type='button'
+                      className={cn(
+                        'flex w-full items-center gap-3 rounded-md border bg-background p-3 text-left transition-colors hover:bg-muted/50',
+                        showManualApkUrl && 'border-primary bg-primary/5'
+                      )}
+                      onClick={() => setShowManualApkUrl((value) => !value)}
+                    >
+                      <span className='flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted/40 font-mono text-xs font-semibold text-muted-foreground'>
+                        1
+                      </span>
+                      <span className='min-w-0'>
+                        <span className='block text-sm font-medium'>
+                          {tRun('manualApkTitle')}
+                        </span>
+                        <span className='mt-0.5 block text-xs text-muted-foreground'>
+                          {tRun('manualApkDescription')}
+                        </span>
+                      </span>
+                    </button>
+                    <button
+                      type='button'
+                      className='flex w-full items-center gap-3 rounded-md border bg-background p-3 text-left transition-colors hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-60'
+                      disabled={
+                        loadingFacebookApk ||
+                        loadingFacebookRelease ||
+                        !facebookRelease ||
+                        config?.disabled
+                      }
+                      onClick={() => void fillStandardFacebookApk()}
+                    >
+                      <span className='flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted/40 text-blue-600'>
+                        {loadingFacebookApk || loadingFacebookRelease ? (
+                          <Loader2 className='size-4 animate-spin' />
+                        ) : (
+                          <IconBrandFacebookFilled className='size-5' aria-hidden />
+                        )}
+                      </span>
+                      <span className='min-w-0'>
+                        <span className='block truncate text-sm font-medium'>
+                          {facebookRelease
+                            ? tRun('standardFacebookApkOption', {
+                                version: facebookRelease.version_name
+                              })
+                            : tRun('standardFacebookApkMissing')}
+                        </span>
+                        <span className='mt-0.5 block text-xs text-muted-foreground'>
+                          {tRun('standardFacebookApkDescription')}
+                        </span>
+                      </span>
+                    </button>
+                  </div>
+                  {showManualApkUrl ? (
+                    <div className='rounded-md border bg-muted/30 p-3'>
+                      <div className='space-y-2'>
+                        <p className='text-[12px] text-muted-foreground'>
+                          {tApp('installApkHint', {
+                            varToken: SCENARIO_VAR_TOKENS.VAR
+                          })}
+                        </p>
+                        <Input
+                          placeholder={tApp('installApkUrlPlaceholder')}
+                          value={draft.url ?? ''}
+                          onChange={(e) => updateDraft({ url: e.target.value })}
+                          className='h-8 font-mono text-xs'
+                        />
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -464,13 +599,15 @@ export function DeviceOpsRailSection({
                   <Button type='button' variant='outline' onClick={close}>
                     {tRun('cancel')}
                   </Button>
-                  <Button
-                    type='button'
-                    disabled={running || config.disabled}
-                    onClick={() => void runDraft()}
-                  >
-                    {running ? tRun('running') : tRun('run')}
-                  </Button>
+                  {open !== 'install_apk' || showManualApkUrl ? (
+                    <Button
+                      type='button'
+                      disabled={running || config.disabled}
+                      onClick={() => void runDraft()}
+                    >
+                      {running ? tRun('running') : tRun('run')}
+                    </Button>
+                  ) : null}
                 </DialogFooter>
               ) : null}
             </>

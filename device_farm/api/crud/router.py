@@ -23,6 +23,7 @@ from api.routes.analytics import router as analytics_router
 from api.routes.preview import router as preview_router
 from api.routes.social_ext import router as social_ext_router
 from api.routes.mcp import router as mcp_router
+from api.routes.platform_apps import router as platform_apps_router
 from api.routes.external_entities import (
     device_target_groups_router,
     router as external_entities_router,
@@ -58,6 +59,7 @@ api_router.include_router(analytics_router)
 api_router.include_router(preview_router)
 api_router.include_router(social_ext_router)
 api_router.include_router(mcp_router)
+api_router.include_router(platform_apps_router)
 api_router.include_router(external_entities_router)
 api_router.include_router(device_target_groups_router)
 api_router.include_router(facebook_candidates_router)

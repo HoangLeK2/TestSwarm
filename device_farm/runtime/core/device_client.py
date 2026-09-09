@@ -4711,8 +4711,8 @@ class DeviceClient:
                 return
             except Exception as exc:
                 self._log(f"install via atx-agent failed: {exc}", level=logging.WARNING)
-        else:
-            self._log("install: no suitable transport available", level=logging.WARNING)
+                raise
+        raise RuntimeError("install: no suitable transport available")
 
     # ── uiautomator2 passthrough ──────────────────────────────────────────────
 

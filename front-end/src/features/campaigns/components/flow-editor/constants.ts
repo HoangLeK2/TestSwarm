@@ -53,6 +53,7 @@ export const STEP_COLORS: Record<string, string> = {
   social_scan_posts_interact: 'border-l-blue-600',
   social_open_author_from_post_match: 'border-l-emerald-700',
   social_open_commenter_from_post_match: 'border-l-emerald-700',
+  social_sync_connections: 'border-l-emerald-600',
   content_interaction: 'border-l-blue-500',
   connection_request: 'border-l-sky-500',
   community_membership: 'border-l-emerald-500',
@@ -294,6 +295,7 @@ export const INSERT_MENU_DEF = [
   {
     groupKey: 'actions' as const,
     items: [
+      'tap',
       'tap_selector',
       'tap_xml_match',
       'tap_ratio',
@@ -362,6 +364,8 @@ export const INSERT_MENU_DEF = [
       'social_scan_posts_interact',
       'social_open_author_from_post_match',
       'social_open_commenter_from_post_match',
+      'social_open_comments',
+      'social_sync_connections',
       'social_find_comment_button',
       'social_tap_comment_target',
       'social_apply_comment_filter',
@@ -574,7 +578,6 @@ export function getStepSummary(step: FlowStep, t?: FlowStepTranslator): string {
       return step.scenario_name || step.scenario_id || '';
     case 'loop':
       return `×${step.count ?? '?'}`;
-    case 'social_open_comments':
     case 'social_open_comments': {
       const thenN = Array.isArray(step.then) ? step.then.length : 0;
       const elseN = Array.isArray(step.else) ? step.else.length : 0;
@@ -633,6 +636,11 @@ export function getStepSummary(step: FlowStep, t?: FlowStepTranslator): string {
       return td('socialOpenCommenter', {
         source: step.source_var ?? '_post_scan',
         index: step.action_index ?? 0,
+        platform: step.platform ?? 'facebook'
+      });
+    case 'social_sync_connections':
+      return td('socialSyncConnections', {
+        metric: step.metric ?? 'friends',
         platform: step.platform ?? 'facebook'
       });
     case 'content_interaction':
@@ -876,7 +884,6 @@ export function getStepDisplay(
       };
     case 'loop':
       return { target: `×${step.count ?? '?'}` };
-    case 'social_open_comments':
     case 'social_open_comments': {
       const thenN = Array.isArray(step.then) ? step.then.length : 0;
       const elseN = Array.isArray(step.else) ? step.else.length : 0;
@@ -945,6 +952,10 @@ export function getStepDisplay(
     case 'social_open_commenter_from_post_match':
       return {
         target: `${step.platform ?? 'facebook'} · ${step.source_var ?? '_post_scan'}[${step.action_index ?? 0}]`
+      };
+    case 'social_sync_connections':
+      return {
+        target: `${step.platform ?? 'facebook'} · ${step.metric ?? 'friends'}`
       };
     case 'content_interaction':
       return {

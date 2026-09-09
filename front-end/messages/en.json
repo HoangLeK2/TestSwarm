@@ -572,6 +572,7 @@
     "admin_workspace_admins": "Workspace admins",
     "admin_agents": "Admin agents",
     "admin_devices": "Admin devices",
+    "admin_platform_apps": "Platform apps",
     "admin_audit": "Admin audit",
     "activity_history": "Activity History",
     "analytics": "Analytics",
@@ -968,10 +969,17 @@
       "createFailed": "Failed to create account"
     },
     "importDialog": {
-      "trigger": "Import CSV",
-      "title": "Import Accounts from CSV",
-      "description": "Upload a CSV file with the following columns:",
-      "selectFile": "Select CSV File",
+      "trigger": "Import",
+      "title": "Import Accounts",
+      "description": "Upload CSV or TXT accounts.",
+      "csv": "CSV",
+      "txt": "TXT",
+      "format": "Format",
+      "standardCsv": "Standard CSV columns",
+      "txtFormatFallback": "uid|password|totp_secret|cookies|token|email",
+      "selectCsvFile": "Select CSV File",
+      "selectTxtFile": "Select TXT File",
+      "upload": "Upload",
       "importing": "Importing...",
       "result": "Done! Created: {created}, Skipped: {skipped}, Total: {total}",
       "importFailed": "Import failed"
@@ -1021,6 +1029,23 @@
       "assignError": "Failed to assign device",
       "removeSuccess": "Device link removed",
       "removeError": "Failed to remove device link"
+    },
+    "loginDialog": {
+      "trigger": "Log in",
+      "title": "Run login scenario",
+      "deviceSection": "Linked phones",
+      "primary": "Primary account",
+      "loading": "Loading...",
+      "noDevice": "This account is not attached to any phone. Attach it to a phone before logging in.",
+      "pickDevice": "Pick the phone to run the login scenario on.",
+      "deviceOffline": "The phone is \"{state}\" and cannot take commands.",
+      "noTemplate": "No login scenario exists for the {platform} platform.",
+      "progress": "Progress",
+      "submit": "Run login",
+      "running": "Logging in...",
+      "runSuccess": "Logged in — platform session saved",
+      "runFailed": "Login scenario failed",
+      "hintAlreadySignedIn": "The phone is already signed into a different Facebook account. Sign out on the phone and run again — switching accounts automatically is refused."
     },
     "assignments": {
       "title": "Account assignments",
@@ -2922,7 +2947,10 @@
         "comment": "Comment",
         "share": "Share",
         "keywords": "Post keywords",
-        "keywordPlaceholder": "AI, recruiting, technology"
+        "keywordPlaceholder": "AI, recruiting, technology",
+        "actionType": "Action type",
+        "statuses": "Allowed statuses",
+        "statusesPlaceholder": "approved, active"
       },
       "adbShell": {
         "hint": "Runs on the real phone — enter the full command (e.g. adb shell getprop …) or shell-only (getprop …).",
@@ -3401,10 +3429,12 @@
         "branchIfEnd": "END OF IF",
         "branchIfFalse": "IF FALSE",
         "branchIfTrue": "IF TRUE",
+        "branchLabel": "Branch {name}",
         "branchLoopBody": "LOOP BODY",
         "branchLoopEnd": "END OF LOOP",
         "branchNumbered": "BRANCH {number}",
         "branchPickEnd": "END OF BRANCH PICK",
+        "branchStepCount": "{count} steps in this branch",
         "branchWhenFound": "WHEN FOUND",
         "branchWhenNotFound": "WHEN NOT FOUND",
         "breakLoopHint": "Breaks the current loop when the condition is true.",
@@ -3419,6 +3449,7 @@
         "clipboardContent": "Clipboard content",
         "close": "Close",
         "actionContent": "Action content",
+        "addBranch": "Add branch",
         "advanced": "Advanced",
         "advancedBehavior": "Advanced behavior",
         "capabilitySetup": "Setup overview",
@@ -3526,6 +3557,7 @@
         "requireCommonBeforeInvite": "Require something in common before sending the request",
         "requireUniqueCandidate": "Pass only when exactly one candidate scores high enough",
         "requireVerifiedTarget": "Require a verified target",
+        "removeBranch": "Remove branch",
         "requiredKeywords": "Required keywords",
         "requiredProfileKeywords": "Required keywords on the profile",
         "ready": "Ready",
@@ -3584,7 +3616,41 @@
         "waitAfterFilterSeconds": "Wait after switching the filter (seconds)",
         "waitButtonMaxSeconds": "Wait for the button, max (seconds)",
         "waitCommentSheetSeconds": "Wait for the comment sheet to open (seconds)",
-        "waitVerifySeconds": "Wait for verification (seconds)"
+        "waitVerifySeconds": "Wait for verification (seconds)",
+        "weightLabel": "weight",
+        "accountActionId": "Account action id",
+        "candidateEntityId": "Candidate source entity id",
+        "candidateLeaseToken": "Candidate lease token",
+        "completionStepsJson": "Completion steps (JSON)",
+        "completionVerifyJson": "Completion verification (JSON)",
+        "metric": "Metric",
+        "persistMetric": "Persist metric to account",
+        "requireCandidateStatus": "Required candidate status",
+        "requireCompletion": "Require completion verification",
+        "settleSeconds": "Settle delay (seconds)"
+      },
+      "socialSyncConnections": {
+        "hint": "Reads the current connection count from the platform profile and stores it for this account.",
+        "persistHint": "When enabled, the worker persists the metric on the bound account record."
+      },
+      "requirements": {
+        "title": "Run Requirements",
+        "sessionRequiredDescription": "Requires a {platform} session from the phone-bound account before running.",
+        "sessionNotRequiredDescription": "Does not require an account session.",
+        "sessionToggleLabel": "Require session",
+        "platformLabel": "Platform",
+        "platformFacebook": "Facebook",
+        "platformTiktok": "TikTok",
+        "platformZalo": "Zalo",
+        "accountSourceLabel": "Account source",
+        "accountSourceDevicePrimary": "Phone-bound account",
+        "accountSourceCampaignAccount": "Campaign account",
+        "accountSourceAccountGroup": "Account group",
+        "summarySession": "Requires {platform} session",
+        "summaryNoSession": "No session required",
+        "summarySessionHint": "The device must have a valid account session before running.",
+        "summaryNoSessionHint": "This scenario can run without an account session.",
+        "done": "Done"
       }
     },
     "flowInsert": {
@@ -3693,7 +3759,9 @@
         "social_open_comments": "Open the comment surface for the current content in one step",
         "extract_comments": "Preset: extract comments",
         "extract_posts": "Preset: extract posts",
-        "tap_image": "Tap where a sample image is found on screen"
+        "tap_image": "Tap where a sample image is found on screen",
+        "tap": "Tap by selector or fallback coordinates",
+        "social_sync_connections": "Read and store the account connection count"
       },
       "groups": {
         "dataCollection": {
@@ -3785,7 +3853,9 @@
         "social_open_comments": "Open comments",
         "extract_comments": "Collect comments",
         "extract_posts": "Collect posts",
-        "tap_image": "Tap by image"
+        "tap_image": "Tap by image",
+        "tap": "Tap",
+        "social_sync_connections": "Sync connections"
       }
     },
     "flowStep": {
@@ -3860,7 +3930,8 @@
         "extract_text_ai": "TEXT AI",
         "extract_screen_data": "SCREEN DATA",
         "tap_image": "TAP IMAGE",
-        "key_back": "BACK"
+        "key_back": "BACK",
+        "social_sync_connections": "SYNC CONNECTIONS"
       },
       "display": {
         "platformSessionPreflight": "Check before continuing",
@@ -3911,7 +3982,8 @@
         "extractEntityComment": "Comments",
         "extractEntityGroup": "Groups",
         "extractEntityVisibleText": "Visible text",
-        "extractEntityPage": "Pages"
+        "extractEntityPage": "Pages",
+        "socialSyncConnections": "Sync {metric} · {platform}"
       },
       "systemVariable": {
         "platformSessionReady": "Platform session is ready"
@@ -4378,6 +4450,18 @@
       "clear": "Clear terminal",
       "installUrlRequired": "Enter a download link",
       "installApkRunning": "Installing app on {serial}…",
+      "installApkSubmitted": "APK install completed",
+      "useStandardFacebookApk": "Use standard Facebook APK",
+      "standardFacebookApkHint": "Install the active Facebook APK published by the platform admin. The signed download URL stays hidden.",
+      "standardFacebookApkUnavailable": "Standard Facebook APK install is unavailable here.",
+      "manualApkTitle": "APK link",
+      "manualApkDescription": "Paste a custom HTTP(S) download link.",
+      "standardFacebookApkOption": "Facebook {version}",
+      "standardFacebookApkMissing": "Facebook — no active version",
+      "standardFacebookApkDescription": "Install the platform-approved Facebook APK.",
+      "showManualApkUrl": "Use another APK link",
+      "hideManualApkUrl": "Hide APK link",
+      "facebookApkSelected": "Selected Facebook {version}",
       "shellRequired": "Enter shell command",
       "packageRequired": "Enter app package",
       "shellEmpty": "Run a command to see output here.",
@@ -4400,7 +4484,7 @@
         "quickLaunchSubmitted": "Sent open command for {app}",
         "adb_shell": "ADB shell command",
         "adb_shellHint": "Run a shell command on the device",
-        "install_apk": "Install app from link",
+        "install_apk": "Install app",
         "install_apkHint": "Download and install an app on the device",
         "clear_app": "Clear app data",
         "clear_appHint": "Clear app cache and sign-in data"
@@ -6359,6 +6443,7 @@
         "dead": "Dead",
         "disabled": "Disabled",
         "disconnected": "Disconnected",
+        "draft": "Draft",
         "error": "Error",
         "offline": "Offline",
         "online": "Online",
@@ -6977,6 +7062,48 @@
         "title": "Transfer device",
         "destinationWorkspace": "Destination workspace",
         "transfer": "Transfer"
+      }
+    },
+    "platformApps": {
+      "title": "Platform apps",
+      "description": "Manage the single Facebook APK version used across the platform.",
+      "empty": "No Facebook releases found.",
+      "upload": {
+        "file": "Facebook APK",
+        "notes": "Notes",
+        "notesPlaceholder": "Version notes",
+        "submit": "Upload APK"
+      },
+      "filters": {
+        "status": "Status",
+        "allStatuses": "All statuses"
+      },
+      "statuses": {
+        "draft": "Draft",
+        "active": "Active",
+        "archived": "Archived"
+      },
+      "table": {
+        "release": "Release",
+        "status": "Status",
+        "size": "Size",
+        "sha": "SHA",
+        "published": "Published",
+        "actions": "Actions"
+      },
+      "actions": {
+        "copyUrl": "Copy URL",
+        "publish": "Publish",
+        "archive": "Archive"
+      },
+      "toast": {
+        "uploaded": "APK uploaded",
+        "published": "Release published",
+        "archived": "Release archived",
+        "copied": "Download URL copied"
+      },
+      "errors": {
+        "fileRequired": "Choose an APK file first."
       }
     },
     "audit": {

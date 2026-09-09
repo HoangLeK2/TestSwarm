@@ -25,6 +25,7 @@ from runtime.transports.u2_jsonrpc import (
     U2BatchError,
     U2JsonRpcClient,
     _BatchRelaySession,
+    _RelaySession,
     _WatcherBuilder,
     _WatcherContext,
     _WatcherEntry,
@@ -170,6 +171,47 @@ class TestBatchRelaySession(unittest.TestCase):
                 "deadline_ms": 120,
             },
         )])
+
+
+class TestRelaySession(unittest.TestCase):
+
+    def test_post_data_dict_is_form_encoded(self):
+        captured = {}
+
+        class Relay:
+            async def u2_http(self, serial, method, path, body, content_type, timeout):
+                captured.update(
+                    serial=serial,
+                    method=method,
+                    path=path,
+                    body=body,
+                    content_type=content_type,
+                    timeout=timeout,
+                )
+                return {"ok": True, "status": 200, "body": "0", "content_type": "application/json"}
+
+        import asyncio
+
+        loop = asyncio.new_event_loop()
+        thread = threading.Thread(target=loop.run_forever)
+        thread.start()
+        try:
+            session = _RelaySession("serial-1", Relay(), loop)
+            response = session.post(
+                "http://127.0.0.1:7912/install",
+                data={"url": "https://cdn.example/a b.apk"},
+                timeout=90,
+            )
+        finally:
+            loop.call_soon_threadsafe(loop.stop)
+            thread.join(timeout=2)
+            loop.close()
+
+        self.assertTrue(response.ok)
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(captured["path"], "/install")
+        self.assertEqual(captured["body"], "url=https%3A%2F%2Fcdn.example%2Fa+b.apk")
+        self.assertEqual(captured["content_type"], "application/x-www-form-urlencoded")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -342,7 +384,7 @@ class TestWatcherBoundsFromNode(unittest.TestCase):
 class TestWatcherFire(unittest.TestCase):
 
     def setUp(self):
-        self.client = _make_client()
+        self.client = _make_client(port=7912)
         self.ctx = self.client.watchers
 
     def test_check_and_fire_click(self):
@@ -424,7 +466,7 @@ class TestWatcherFire(unittest.TestCase):
 class TestWatcherLifecycle(unittest.TestCase):
 
     def setUp(self):
-        self.client = _make_client()
+        self.client = _make_client(port=7912)
         self.ctx = self.client.watchers
 
     def test_start_creates_daemon_thread(self):
@@ -501,6 +543,59 @@ class TestClientInit(unittest.TestCase):
         shell = Mock()
         c = _make_client(adb_shell=shell)
         self.assertIs(c._adb_shell, shell)
+
+
+class TestInstall(unittest.TestCase):
+
+    def setUp(self):
+        self.client = _make_client(port=7912)
+
+    def _mock_install_response(self, payload, status_code=200):
+        resp = Mock()
+        resp.ok = status_code < 400
+        resp.status_code = status_code
+        resp.text = json.dumps(payload)
+        resp.json = Mock(return_value=payload)
+        self.client._session.post = Mock(return_value=resp)
+
+    def test_install_accepts_atx_exit_code_zero(self):
+        self._mock_install_response(0)
+
+        self.client.install("https://cdn.example/facebook.apk")
+
+        self.client._session.post.assert_called_once_with(
+            "http://127.0.0.1:7912/install",
+            data={"url": "https://cdn.example/facebook.apk"},
+            timeout=90.0,
+        )
+
+    def test_install_polls_atx_job_success(self):
+        self._mock_install_response(9)
+        status = Mock()
+        status.ok = True
+        status.status_code = 200
+        status.text = json.dumps({"status": "success"})
+        status.json = Mock(return_value={"status": "success"})
+        self.client._session.get = Mock(return_value=status)
+
+        self.client.install("https://cdn.example/facebook.apk")
+
+        self.client._session.get.assert_called_once_with(
+            "http://127.0.0.1:7912/install/9",
+            timeout=10.0,
+        )
+
+    def test_install_rejects_atx_job_failure(self):
+        self._mock_install_response(1)
+        status = Mock()
+        status.ok = True
+        status.status_code = 200
+        status.text = json.dumps({"status": "failure", "error": "download failed"})
+        status.json = Mock(return_value={"status": "failure", "error": "download failed"})
+        self.client._session.get = Mock(return_value=status)
+
+        with self.assertRaisesRegex(RuntimeError, "install task 1 failed: download failed"):
+            self.client.install("https://cdn.example/facebook.apk")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

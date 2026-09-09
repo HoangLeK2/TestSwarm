@@ -194,11 +194,15 @@ async def test_grpc_relay_failure_reconnects_without_stopping_control_plane(
             return None
 
     class _ControlClient:
-        def __init__(self, *args, **kwargs) -> None:
-            return None
+        def __init__(self, grpc_channel, api_key, relay_agent) -> None:
+            self._agent = relay_agent
 
         async def run(self) -> None:
             control_started.set()
+            # The real client sets this when the server acks the control
+            # channel (control_client.py). The relay stream gates registration
+            # on it, so a fake that never sets it stalls for the full 30s.
+            self._agent._identity_ready.set()
             await asyncio.Event().wait()
 
         def stop(self) -> None:
@@ -291,10 +295,12 @@ async def test_grpc_relay_retry_does_not_replay_stale_registration(
             return None
 
     class _ControlClient:
-        def __init__(self, *args, **kwargs) -> None:
-            return None
+        def __init__(self, grpc_channel, api_key, relay_agent) -> None:
+            self._agent = relay_agent
 
         async def run(self) -> None:
+            # See the sibling test: registration is gated on this.
+            self._agent._identity_ready.set()
             await asyncio.Event().wait()
 
         def stop(self) -> None:

@@ -25,6 +25,7 @@ from services.campaign.dispatcher import (
     FanOutExecutionView,
     FanOutResult,
     finish_fan_out_execution,
+    resolve_campaign_platform,
 )
 from services.campaign.scenario_sources import (
     build_campaign_scenario_registry,
@@ -87,7 +88,7 @@ def _runtime_start_concurrency_limit() -> int:
 
 
 def _readiness_probe_concurrency_limit() -> int:
-    """Fan-out cap for the pre-dispatch Facebook readiness probes.
+    """Fan-out cap for the pre-dispatch platform readiness probes.
 
     Each probe launches an app and dumps the UI hierarchy on a real device, so
     this is deliberately far below CAMPAIGN_RUNTIME_START_CONCURRENCY.
@@ -102,26 +103,27 @@ def _readiness_probe_concurrency_limit() -> int:
     return max(1, min(value, 64))
 
 
-async def _prefetch_facebook_readiness(
+async def _prefetch_platform_readiness(
     db: AsyncSession,
     *,
     org_id: str,
+    platform: str,
     probe_plan: list[tuple[str, str, str]],
     manager: Any,
 ) -> dict[str, Any]:
-    """Probe Facebook readiness for many devices concurrently, keyed by serial.
+    """Probe platform readiness for many devices concurrently, keyed by serial.
 
     The guard itself writes to the shared AsyncSession, which is not
     concurrency-safe, so only the device-bound half is parallelised here. The
-    caller then feeds these results back into guard_facebook_session so its
+    caller then feeds these results back into guard_platform_session so its
     sequential DB pass never touches a device.
     """
     if manager is None or not probe_plan:
         return {}
 
-    from services.facebook_session_guard import (
-        facebook_session_live_probe_required,
-        observe_facebook_readiness_for_device,
+    from services.platform_session_guard import (
+        observe_platform_readiness_for_device,
+        platform_session_live_probe_required,
     )
 
     # Sequential, but these are cheap indexed reads — the point is to avoid
@@ -129,12 +131,16 @@ async def _prefetch_facebook_readiness(
     serials: list[str] = []
     for device_id, account_id, device_serial in probe_plan:
         try:
-            needed = await facebook_session_live_probe_required(
-                db, org_id=org_id, device_id=device_id, account_id=account_id
+            needed = await platform_session_live_probe_required(
+                db,
+                org_id=org_id,
+                device_id=device_id,
+                account_id=account_id,
+                platform=platform,
             )
         except Exception as exc:
             log.warning(
-                "facebook readiness pre-plan failed device=%s: %s", device_id, exc
+                "%s readiness pre-plan failed device=%s: %s", platform, device_id, exc
             )
             continue
         if needed and device_serial not in serials:
@@ -148,19 +154,20 @@ async def _prefetch_facebook_readiness(
     async def _probe(serial: str) -> tuple[str, Any]:
         async with sem:
             try:
-                return serial, await observe_facebook_readiness_for_device(
-                    device_serial=serial, manager=manager
+                return serial, await observe_platform_readiness_for_device(
+                    device_serial=serial, manager=manager, platform=platform
                 )
             except Exception as exc:
                 log.warning(
-                    "facebook readiness probe failed serial=%s: %s", serial, exc
+                    "%s readiness probe failed serial=%s: %s", platform, serial, exc
                 )
                 return serial, None
 
     started = time.perf_counter()
     probed = dict(await asyncio.gather(*(_probe(serial) for serial in serials)))
     log.info(
-        "facebook readiness prefetch devices=%d elapsed_ms=%d",
+        "%s readiness prefetch devices=%d elapsed_ms=%d",
+        platform,
         len(serials),
         int((time.perf_counter() - started) * 1000),
     )
@@ -758,7 +765,7 @@ async def start_execution_runtime(
         scenario_registry_has_platform_login_gate,
     )
 
-    allows_facebook_login_recovery = scenario_registry_has_platform_login_gate(
+    allows_login_recovery = scenario_registry_has_platform_login_gate(
         scenario_registry,
         scenario_refs,
     )
@@ -809,9 +816,10 @@ async def start_execution_runtime(
     )
     await persist_verification_results(db, verification_results.values())
 
-    # Probe every device that still needs a live Facebook readiness check up
+    # Probe every device that still needs a live platform readiness check up
     # front and in parallel. Without this the guard call inside the loop below
     # serialises one app-launch + UI dump (up to 6s) per device.
+    campaign_platform = resolve_campaign_platform(campaign, scenario_registry)
     probe_plan: list[tuple[str, str, str]] = []
     for view in running_views:
         execution = executions_by_id.get(view.execution_id)
@@ -821,8 +829,12 @@ async def start_execution_runtime(
         device_serial = _runtime_device_serial(execution, linked_serials)
         if account_id and device_serial and view.device_id:
             probe_plan.append((view.device_id, str(account_id), device_serial))
-    readiness_by_serial = await _prefetch_facebook_readiness(
-        db, org_id=org_id, probe_plan=probe_plan, manager=manager
+    readiness_by_serial = await _prefetch_platform_readiness(
+        db,
+        org_id=org_id,
+        platform=campaign_platform,
+        probe_plan=probe_plan,
+        manager=manager,
     )
 
     for view in running_views:
@@ -854,14 +866,14 @@ async def start_execution_runtime(
                     **verification.evidence(detailed=False),
                     **(
                         {"deferred_to_scenario_login": True}
-                        if allows_facebook_login_recovery
+                        if allows_login_recovery
                         and verification.status == VerificationStatus.INCONCLUSIVE
                         else {}
                     ),
                 },
             }
             verification_deferred = (
-                allows_facebook_login_recovery
+                allows_login_recovery
                 and verification.status == VerificationStatus.INCONCLUSIVE
             )
             if (
@@ -881,26 +893,27 @@ async def start_execution_runtime(
                 continue
 
         if account_id:
-            from services.facebook_session_guard import guard_facebook_session
+            from services.platform_session_guard import guard_platform_session
 
-            guard = await guard_facebook_session(
+            guard = await guard_platform_session(
                 db,
                 org_id=org_id,
                 device_id=view.device_id,
                 account_id=str(account_id),
+                platform=campaign_platform,
                 manager=manager,
                 device_serial=device_serial,
                 live_check=True,
                 readiness=readiness_by_serial.get(device_serial),
             )
             session_guard_deferred = (
-                allows_facebook_login_recovery
+                allows_login_recovery
                 and guard.blocks_execution
                 and guard_reason_allows_login_recovery(guard.reason)
             )
             execution.meta = {
                 **(execution.meta or {}),
-                "facebook_session_guard": {
+                "platform_session_guard": {
                     **guard.to_meta(),
                     **(
                         {"deferred_to_scenario_login": True}

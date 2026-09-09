@@ -16,6 +16,7 @@ from services.social_ext.contract import SOCIAL_ACCOUNT_BOUND_STEP_TYPES
 from db.models.campaign import Campaign
 from db.models.enums import AccountState
 from services.org_scenario_validation.step_index import OrgStepIndex
+from services.platform_session_guard import DEFAULT_PLATFORM
 from services.scenario_dsl.step_registry import StepRegistry
 
 log = logging.getLogger(__name__)
@@ -256,8 +257,9 @@ async def resolve_accounts_for_devices(
     campaign: Campaign,
     org_id: str,
     device_ids: list[str],
+    platform: str = DEFAULT_PLATFORM,
 ) -> dict[str, ResolvedDeviceAccount]:
-    """Resolve the effective Facebook account for each campaign device."""
+    """Resolve the effective account for each campaign device on ``platform``."""
     if not device_ids:
         return {}
 
@@ -335,7 +337,7 @@ async def resolve_accounts_for_devices(
     primary_accounts = await get_primary_accounts_for_devices(
         db,
         remaining_device_ids,
-        "facebook",
+        platform,
     )
     missing_primary_ids = [
         device_id for device_id in remaining_device_ids if device_id not in primary_accounts
@@ -348,7 +350,7 @@ async def resolve_accounts_for_devices(
                 .where(
                     DeviceAccount.device_id.in_(missing_primary_ids),
                     Account.org_id == org_id,
-                    Account.platform == "facebook",
+                    Account.platform == platform,
                     Account.state == AccountState.ACTIVE.value,
                 )
                 .order_by(DeviceAccount.assigned_at)

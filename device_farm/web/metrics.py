@@ -254,15 +254,17 @@ campaign_account_resolve_batch_size = Histogram(
     "Distinct accounts loaded per campaign dispatch fan-out",
     buckets=[0, 1, 2, 5, 10, 25, 50, 100, 250, 500],
 )
+# Metric names stay Facebook-flavoured so existing dashboards keep working;
+# the platform label is what carries the second platform.
 facebook_session_guard_decisions_total = Counter(
     "facebook_session_guard_decisions_total",
-    "Facebook session guard decisions",
-    ["mode", "outcome", "reason"],
+    "Platform session guard decisions",
+    ["platform", "mode", "outcome", "reason"],
 )
 facebook_readiness_checks_total = Counter(
     "facebook_readiness_checks_total",
-    "Facebook readiness checks",
-    ["status", "reason"],
+    "Platform readiness checks",
+    ["platform", "status", "reason"],
 )
 facebook_login_attempts_total = Counter(
     "facebook_login_attempts_total",

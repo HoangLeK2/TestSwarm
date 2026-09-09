@@ -1436,6 +1436,7 @@ class AdbRelayManager:
         timeout: float = 30.0,
         priority: str | int | None = None,
         deadline_ms: int | float | None = None,
+        cancel_event: Any = None,
     ) -> dict:
         """Send a u2_flow request to agent-boot and await result."""
         conn = await self._wait_for_relay(
@@ -1447,15 +1448,42 @@ class AdbRelayManager:
                     "error": f"no relay for serial={serial!r}"}
         actual = self.resolve_serial(serial)
         req_id = f"flow-{uuid.uuid4().hex[:8]}"
-        return await conn.send_json_request(
-            msg={
-                "type": "u2_flow", "id": req_id, "serial": actual,
-                "flow": flow, "params": params,
-                **({"priority": priority} if priority is not None else {}),
-                **({"deadline_ms": deadline_ms} if deadline_ms is not None else {}),
-            },
-            reply_id=req_id, timeout=timeout,
+        msg = {
+            "type": "u2_flow", "id": req_id, "serial": actual,
+            "flow": flow, "params": params,
+            **({"priority": priority} if priority is not None else {}),
+            **({"deadline_ms": deadline_ms} if deadline_ms is not None else {}),
+        }
+        request_task = asyncio.create_task(
+            conn.send_json_request(msg=msg, reply_id=req_id, timeout=timeout)
         )
+        try:
+            while True:
+                if request_task.done():
+                    return await request_task
+                if cancel_event is not None and cancel_event.is_set():
+                    with contextlib.suppress(Exception):
+                        await conn.send_json_message({
+                            "type": "u2_flow_cancel",
+                            "id": req_id,
+                            "serial": actual,
+                            "flow": flow,
+                        })
+                    request_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await request_task
+                    return {"ok": False, "error": "cancelled", "cancelled": True}
+                await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            with contextlib.suppress(Exception):
+                await conn.send_json_message({
+                    "type": "u2_flow_cancel",
+                    "id": req_id,
+                    "serial": actual,
+                    "flow": flow,
+                })
+            request_task.cancel()
+            raise
 
     async def extra_data(
         self,

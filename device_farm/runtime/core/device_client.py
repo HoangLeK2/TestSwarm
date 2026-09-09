@@ -4515,6 +4515,7 @@ class DeviceClient:
         timeout: float = 30.0,
         priority: str | int | None = None,
         deadline_ms: int | float | None = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> dict:
         """Run a high-level u2 flow, preferring agent-boot batch/flow relay."""
         if self._batch_enabled() and callable(getattr(self._u2_batch, "flow", None)):
@@ -4524,7 +4525,10 @@ class DeviceClient:
                 timeout=timeout,
                 priority=priority,
                 deadline_ms=deadline_ms,
+                cancel_event=cancel_event,
             )
+        if cancel_event is not None and cancel_event.is_set():
+            return {"ok": False, "error": "cancelled", "cancelled": True}
         with self._u2_lock:
             u2 = self._u2
         flow = getattr(u2, "flow", None)

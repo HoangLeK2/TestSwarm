@@ -3521,6 +3521,9 @@
         "position": "Vị trí",
         "postCount": "Số bài",
         "postKeywords": "Keyword bài viết",
+        "interactionCommentOption": "Comment bài viết khi match keyword",
+        "interactionLikeOption": "Like bài viết khi match keyword",
+        "interactionMode": "Tương tác khi match",
         "requireCommentSubmitted": "Chỉ tính thành công khi comment đã được submit",
         "requireCommonBeforeInvite": "Yêu cầu có điểm chung trước khi gửi lời mời",
         "requireUniqueCandidate": "Chỉ pass khi có đúng một candidate đạt điểm",
@@ -3598,6 +3601,12 @@
         "missing": "Thiếu",
         "unknown": "Chưa rõ",
         "none": "Không yêu cầu"
+      },
+      "recipes": {
+        "contentLikeComment": {
+          "label": "Chọn bài + like + bình luận",
+          "description": "Chèn cùng lúc bước xác minh target, like và bình luận"
+        }
       },
       "insertContext": {
         "label": "Chèn vào: {location}",

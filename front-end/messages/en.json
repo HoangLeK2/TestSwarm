@@ -3519,6 +3519,9 @@
         "position": "Position",
         "postCount": "Number of posts",
         "postKeywords": "Post keywords",
+        "interactionCommentOption": "Comment on matched posts",
+        "interactionLikeOption": "Like matched posts",
+        "interactionMode": "Interaction when matched",
         "requireCommentSubmitted": "Count as successful only once the comment is submitted",
         "requireCommonBeforeInvite": "Require something in common before sending the request",
         "requireUniqueCandidate": "Pass only when exactly one candidate scores high enough",
@@ -3596,6 +3599,12 @@
         "missing": "Missing",
         "unknown": "Unknown",
         "none": "No runtime requirement"
+      },
+      "recipes": {
+        "contentLikeComment": {
+          "label": "Select post + like + comment",
+          "description": "Insert the verified target, like, and comment steps together"
+        }
       },
       "insertContext": {
         "label": "Insert into: {location}",

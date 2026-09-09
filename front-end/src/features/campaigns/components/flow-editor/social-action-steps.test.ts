@@ -11,6 +11,10 @@ import {
   // @ts-expect-error Node --experimental-strip-types test files import TS sources by extension.
 } from './social-action-options.ts';
 import {
+  createContentLikeCommentFlow
+  // @ts-expect-error Node --experimental-strip-types test files import TS sources by extension.
+} from './social-action-recipes.ts';
+import {
   createDefaultStep
   // @ts-expect-error Node --experimental-strip-types test files import TS sources by extension.
 } from '../scenario-steps/types.ts';
@@ -61,6 +65,17 @@ for (const [locale, messages] of [
     const labels = messages.campaignsFeature?.stepEditor?.socialActions;
     for (const key of ['like', 'comment', 'share', 'request', 'join']) {
       assert.equal(typeof labels?.[key], 'string', `${locale}.${key}`);
+    }
+  });
+
+  test(`scan post interaction mode labels exist for ${locale}`, () => {
+    const fields = messages.campaignsFeature?.stepEditor?.stepFields;
+    for (const key of [
+      'interactionMode',
+      'interactionLikeOption',
+      'interactionCommentOption'
+    ]) {
+      assert.equal(typeof fields?.[key], 'string', `${locale}.${key}`);
     }
   });
 }
@@ -181,6 +196,23 @@ test('content interaction exposes like, comment, and share choices', () => {
     getSocialActionOptions('content_interaction').map((option) => option.value),
     ['like', 'comment', 'share']
   );
+});
+
+test('content like/comment recipe inserts a verified target and bound actions', () => {
+  const steps = createContentLikeCommentFlow();
+
+  assert.equal(steps.length, 3);
+  assert.equal(steps[0]?.type, 'social_select_target');
+  assert.equal(steps[0]?.platform, 'facebook');
+  assert.equal(steps[0]?.target_type, 'post');
+  assert.equal(steps[0]?.save_as, '_post_target');
+  assert.equal(steps[1]?.type, 'content_interaction');
+  assert.equal(steps[1]?.action, 'like');
+  assert.equal(steps[1]?.require_verified_target, '_post_target');
+  assert.equal(steps[2]?.type, 'content_interaction');
+  assert.equal(steps[2]?.action, 'comment');
+  assert.equal(steps[2]?.comment_text, '${COMMENT_TEXT}');
+  assert.equal(steps[2]?.require_verified_target, '_post_target');
 });
 
 test('content interaction filters actions from provider facets', () => {

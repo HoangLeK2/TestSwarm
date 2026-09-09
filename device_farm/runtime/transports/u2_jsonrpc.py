@@ -218,6 +218,7 @@ class _BatchRelaySession:
         timeout: float = 30.0,
         priority: str | int | None = None,
         deadline_ms: int | float | None = None,
+        cancel_event: object = None,
     ) -> dict:
         import asyncio
         fut = asyncio.run_coroutine_threadsafe(
@@ -228,6 +229,7 @@ class _BatchRelaySession:
                 timeout=timeout,
                 priority=priority,
                 deadline_ms=deadline_ms,
+                cancel_event=cancel_event,
             ),
             self._loop,
         )

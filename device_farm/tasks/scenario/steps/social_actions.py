@@ -91,6 +91,7 @@ def _u2_flow_with_recovery(
     timeout: float,
     priority: str = "visible",
     result: dict[str, Any] | None = None,
+    cancel_event: Any = None,
 ) -> Any:
     """Run an agent-boot flow, waiting out a u2 session that is being rebuilt.
 
@@ -100,8 +101,17 @@ def _u2_flow_with_recovery(
     """
     last_exc: Exception | None = None
     for attempt in range(_U2_RECOVERY_ATTEMPTS):
+        if cancel_event is not None and cancel_event.is_set():
+            return {"ok": False, "error": "cancelled", "cancelled": True}
         try:
-            return sc.device.u2_flow(name, params, timeout=timeout, priority=priority)
+            kwargs: dict[str, Any] = {"timeout": timeout, "priority": priority}
+            if cancel_event is not None:
+                kwargs["cancel_event"] = cancel_event
+            return sc.device.u2_flow(
+                name,
+                params,
+                **kwargs,
+            )
         except Exception as exc:
             if not _is_transient_u2_error(exc) or attempt == _U2_RECOVERY_ATTEMPTS - 1:
                 raise
@@ -1138,6 +1148,7 @@ def handle_social_connect_visible_people(
             },
             timeout=timeout,
             priority="visible",
+            cancel_event=sc.cancel_event,
         )
     except Exception as exc:
         _fail(
@@ -1558,6 +1569,7 @@ def _handle_social_scan_posts_interact(
             },
             timeout=timeout,
             priority="visible",
+            cancel_event=sc.cancel_event,
         )
     except Exception as exc:
         _fail(

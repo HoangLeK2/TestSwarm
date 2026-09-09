@@ -99,6 +99,10 @@ const ICON_MAP: Record<string, React.ComponentType<LucideProps>> = {
   social_scan_posts_interact: MessageCircle,
   social_open_author_from_post_match: UserPlus,
   social_open_commenter_from_post_match: UserPlus,
+  social_content_like_comment_flow: MessageCircle,
+  content_interaction: MousePointerClick,
+  connection_request: UserPlus,
+  community_membership: Users,
   extract_comments: Search,
   extract_posts: Search
 };

@@ -174,38 +174,39 @@ def test_fanpage_templates_use_assigned_page_without_relogin(template_name: str)
     flat_steps = _walk_steps(template["steps"])
 
     assert template["variables"]["PAGE_SEARCH"] == "ten fanpage"
-    assert template["steps"][3]["type"] == "platform_session_gate"
-    assert template["steps"][3]["phase"] == "preflight"
+    assert template["requirements"]["platform_session"]["platform"] == "facebook"
     assert not any(step.get("type") == "login_if_needed" for step in flat_steps)
-    assert any(
+    assert not any(step.get("type") == "platform_session_gate" for step in flat_steps)
+    assert not any(
         step.get("type") == "if_variable"
         and step.get("name") == "PLATFORM_SESSION_READY"
         for step in flat_steps
     )
-    assert any(
-        step.get("type") == "if_variable"
-        and step.get("name") == "TARGET_SELECTOR_VALUE"
-        for step in flat_steps
-    )
-    assert any(
-        step.get("type") == "tap_ratio"
-        and step.get("x") == 0.5
-        and step.get("y") == 0.22
-        for step in flat_steps
-    )
-    assert any(
-        step.get("type") == "tap_selector"
-        and step.get("value") == "${PAGE_ROW_TEXT}"
-        for step in flat_steps
-    )
-    tab_selectors = [
-        step
-        for step in flat_steps
-        if step.get("type") == "tap_selector"
-        and step.get("value") in {"tab Trang", "Trang", "Pages"}
-    ]
-    assert tab_selectors
-    assert all(step.get("ignore_error") is True for step in tab_selectors)
+    if template_name == "Crawl bài viết + bình luận Fanpage Facebook":
+        assert any(
+            step.get("type") == "if_variable"
+            and step.get("name") == "TARGET_SELECTOR_VALUE"
+            for step in flat_steps
+        )
+        assert any(
+            step.get("type") == "tap_ratio"
+            and step.get("x") == 0.5
+            and step.get("y") == 0.22
+            for step in flat_steps
+        )
+        assert any(
+            step.get("type") == "tap_selector"
+            and step.get("value") == "${PAGE_ROW_TEXT}"
+            for step in flat_steps
+        )
+        tab_selectors = [
+            step
+            for step in flat_steps
+            if step.get("type") == "tap_selector"
+            and step.get("value") in {"tab Trang", "Trang", "Pages"}
+        ]
+        assert tab_selectors
+        assert all(step.get("ignore_error") is True for step in tab_selectors)
 
 
 def test_fanpage_crawl_template_collects_posts_and_comments() -> None:
@@ -235,12 +236,7 @@ def test_fanpage_crawl_template_collects_posts_and_comments() -> None:
 def test_fanpage_nurture_template_follows_and_touches_feed() -> None:
     template = BUILTIN_TEMPLATE_BY_NAME["Nuôi Facebook - Tương tác Fanpage"]
     flat_steps = _walk_steps(template["steps"])
-    session_gate = next(
-        step
-        for step in template["steps"]
-        if step.get("id") == "fanpage_nurture_requires_ready_session"
-    )
-    page_loop = next(step for step in session_gate["then"] if step.get("type") == "loop")
+    page_loop = next(step for step in template["steps"] if step.get("type") == "loop")
     page_steps = page_loop["steps"]
 
     assert template["variables"]["FOLLOW_PAGE"] == "true"
@@ -428,13 +424,8 @@ def test_connection_template_uses_visible_common_context_scan() -> None:
     connector = next(
         step for step in flat_steps if step.get("type") == "social_connect_visible_people"
     )
-    open_surface = next(
-        step
-        for step in flat_steps
-        if step.get("id") == "candidate_profile_open_friends_surface"
-    )
 
-    assert open_surface["type"] == "if_element"
+    assert connector["open_surface"] is True
     assert connector["require_common"] is True
     assert connector["min_score"] == "${CONNECTION_MIN_COMMON_SCORE}"
     assert connector["common_keywords"] == "${CONNECTION_COMMON_KEYWORDS}"
@@ -580,7 +571,6 @@ def test_login_template_establishes_account_scoped_session_provenance() -> None:
 def test_candidate_nurture_templates_run_login_gate_first(template_name: str) -> None:
     template = BUILTIN_TEMPLATE_BY_NAME[template_name]
     flat_steps = _walk_steps(template["steps"])
-    gates = [step for step in flat_steps if step.get("type") == "platform_session_gate"]
     login_steps = [
         step for step in flat_steps if step.get("type") == "login_if_needed"
     ]
@@ -593,15 +583,18 @@ def test_candidate_nurture_templates_run_login_gate_first(template_name: str) ->
             "social_scan_posts_interact",
         }
     )
-    session_wrapper = template["steps"][4]
 
     assert template["steps"][0]["type"] == "launch_app"
-    assert [gate["phase"] for gate in gates] == ["preflight"]
+    assert template["requirements"]["platform_session"]["platform"] == "facebook"
+    assert not any(step.get("type") == "platform_session_gate" for step in flat_steps)
     assert login_steps == []
     assert all(step.get("type") != "run_scenario" for step in flat_steps)
-    assert first_work_index > 3
-    assert session_wrapper["type"] == "if_variable"
-    assert session_wrapper["name"] == "PLATFORM_SESSION_READY"
+    assert first_work_index >= 3
+    assert not any(
+        step.get("type") == "if_variable"
+        and step.get("name") == "PLATFORM_SESSION_READY"
+        for step in flat_steps
+    )
 
 
 def test_login_template_uses_facebook_credentials_only() -> None:
@@ -629,11 +622,9 @@ def test_publish_post_template_posts_then_likes_and_comments_verified_post() -> 
 
     assert template["variables"]["POST_TEXT"] == ""
     assert template["variables"]["COMMENT_TEXT"]
-    assert [step["phase"] for step in flat_steps if step.get("type") == "platform_session_gate"] == [
-        "preflight",
-        "confirm",
-    ]
-    assert any(step.get("type") == "login_if_needed" for step in flat_steps)
+    assert template["requirements"]["platform_session"]["platform"] == "facebook"
+    assert not any(step.get("type") == "platform_session_gate" for step in flat_steps)
+    assert not any(step.get("type") == "login_if_needed" for step in flat_steps)
     assert any(
         step.get("type") == "if_element"
         and step.get("by") == "text"

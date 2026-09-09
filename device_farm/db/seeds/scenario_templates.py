@@ -1180,12 +1180,18 @@ _FB_LOGIN_PROFILE_NATIVE: Dict[str, Any] = {
 }
 
 
-def _fb_session_guard_steps(
-    prefix: str,
-    *,
-    allow_login_recovery: bool = True,
-) -> List[Dict[str, Any]]:
-    steps: List[Dict[str, Any]] = [
+def _fb_platform_session_requirement() -> Dict[str, Any]:
+    return {
+        "platform_session": {
+            "required": True,
+            "platform": "facebook",
+            "account_source": "device_primary",
+        }
+    }
+
+
+def _fb_app_start_steps(prefix: str) -> List[Dict[str, Any]]:
+    return [
         {
             "id": f"{prefix}_launch",
             "type": "launch_app",
@@ -1203,6 +1209,16 @@ def _fb_session_guard_steps(
             "type": "dismiss_popup",
             "retries": 2,
         },
+    ]
+
+
+def _fb_session_guard_steps(
+    prefix: str,
+    *,
+    allow_login_recovery: bool = True,
+) -> List[Dict[str, Any]]:
+    steps: List[Dict[str, Any]] = [
+        *_fb_app_start_steps(prefix),
         {
             "id": f"{prefix}_session_preflight",
             "type": "platform_session_gate", "platform": "facebook",
@@ -1283,7 +1299,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "tìm lại bài vừa đăng theo chính nội dung đó rồi chạy like và comment bằng "
             "social-action node có sẵn. POST_TEXT để trống mặc định để tránh lỡ publish."
         ),
-        "tags": "facebook,post,publish,like,comment,app-automation",
+        "tags": "facebook,post,publish,like,comment,app-automation,requires-platform-session:facebook",
+        "requirements": _fb_platform_session_requirement(),
         "variables": {
             "POST_TEXT": "",
             "COMMENT_TEXT": "Bài viết rất hữu ích, cảm ơn bạn đã chia sẻ.",
@@ -1295,39 +1312,30 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "COMMENT_SUBMIT_LABEL": "Đăng",
         },
         "steps": [
-            *_fb_session_guard_steps("publish_post"),
+            *_fb_app_start_steps("publish_post"),
+            *_fb_publish_post_steps(),
+            *_fb_open_search_tab_steps(
+                search_var="POST_TEXT",
+                tab_vi="Bài viết",
+                tab_en="Posts",
+                tab_description_contains="tab Bài viết",
+            ),
             {
-                "id": "publish_post_requires_ready_session",
-                "type": "if_variable",
-                "name": "PLATFORM_SESSION_READY",
-                "equals": True,
-                "then": [
-                    *_fb_publish_post_steps(),
-                    *_fb_open_search_tab_steps(
-                        search_var="POST_TEXT",
-                        tab_vi="Bài viết",
-                        tab_en="Posts",
-                        tab_description_contains="tab Bài viết",
-                    ),
-                    {
-                        "id": "publish_post_select_created_post",
-                        "type": "social_select_target", "target_type": "post", "platform": "facebook",
-                        "search": "${POST_TEXT}",
-                        "display_text": "${POST_TEXT}",
-                        "required_keywords": ["${POST_TEXT}"],
-                        "min_score": 80,
-                        "require_unique": False,
-                        "timeout": 12,
-                        "save_as": "_published_post_target",
-                    },
-                    *_fb_post_like_and_comment_steps(
-                        require_verified_target="_published_post_target",
-                        save_prefix="_published_post",
-                    ),
-                    {"id": "publish_post_finish", "type": "key", "key": "home"},
-                ],
-                "else": [{"type": "wait", "seconds": 0.1}],
+                "id": "publish_post_select_created_post",
+                "type": "social_select_target", "target_type": "post", "platform": "facebook",
+                "search": "${POST_TEXT}",
+                "display_text": "${POST_TEXT}",
+                "required_keywords": ["${POST_TEXT}"],
+                "min_score": 80,
+                "require_unique": False,
+                "timeout": 12,
+                "save_as": "_published_post_target",
             },
+            *_fb_post_like_and_comment_steps(
+                require_verified_target="_published_post_target",
+                save_prefix="_published_post",
+            ),
+            {"id": "publish_post_finish", "type": "key", "key": "home"},
         ],
     },
 
@@ -1442,7 +1450,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "(có vuốt ngang tab nếu Trang đang nằm ngoài màn hình), cào các page "
             "đang thấy và lưu vào catalog Page để phân công cho phone."
         ),
-        "tags": "facebook,page,fanpage,discovery,catalog,keyword",
+        "tags": "facebook,page,fanpage,discovery,catalog,keyword,requires-platform-session:facebook",
+        "requirements": _fb_platform_session_requirement(),
         "variables": {
             "PAGE_KEYWORDS": [
                 "Go2Joy Vietnam",
@@ -1454,22 +1463,13 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "MAX_ITEMS_PER_KEYWORD": 120,
         },
         "steps": [
-            *_fb_session_guard_steps("page_discovery", allow_login_recovery=False),
+            *_fb_app_start_steps("page_discovery"),
             {
-                "id": "page_discovery_requires_ready_session",
-                "type": "if_variable",
-                "name": "PLATFORM_SESSION_READY",
-                "equals": True,
-                "then": [
-                    {
-                        "type": "loop",
-                        "count": "${PAGE_KEYWORD_COUNT}",
-                        "loop_var": "_PAGE_KEYWORD_INDEX",
-                        "steps": _fb_crawl_page_search_results_steps(),
-                    }
-                ],
-                "else": [{"type": "wait", "seconds": 0.1}],
-            },
+                "type": "loop",
+                "count": "${PAGE_KEYWORD_COUNT}",
+                "loop_var": "_PAGE_KEYWORD_INDEX",
+                "steps": _fb_crawl_page_search_results_steps(),
+            }
         ],
     },
 
@@ -1647,7 +1647,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "Mở Fanpage đã gắn cho phone hoặc fallback theo PAGE_SEARCH/PAGE_ROW_TEXT, "
             "crawl bài viết và bình luận để tạo kho post/page evidence dùng cho nuôi account."
         ),
-        "tags": "facebook,page,fanpage,crawl,feed,post,comment",
+        "tags": "facebook,page,fanpage,crawl,feed,post,comment,requires-platform-session:facebook",
+        "requirements": _fb_platform_session_requirement(),
         "variables": {
             "PAGE_SEARCH": "ten fanpage",
             "PAGE_ROW_TEXT": "Tên Fanpage",
@@ -1657,26 +1658,17 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "SAVE_COLLECTION": "fb_page_posts",
         },
         "steps": [
-            *_fb_session_guard_steps("fanpage_crawl", allow_login_recovery=False),
-            {
-                "id": "fanpage_crawl_requires_ready_session",
-                "type": "if_variable",
-                "name": "PLATFORM_SESSION_READY",
-                "equals": True,
-                "then": [
-                    *_fb_set_page_context_steps(),
-                    *_fb_open_page_target_steps(
-                        search_var="PAGE_SEARCH",
-                        row_text_var="PAGE_ROW_TEXT",
-                    ),
-                    *_fb_crawl_current_target_feed_steps(
-                        context_var="PAGE_CONTEXT",
-                        collection_var="SAVE_COLLECTION",
-                        tag_prefix="page",
-                    ),
-                ],
-                "else": [{"type": "wait", "seconds": 0.1}],
-            },
+            *_fb_app_start_steps("fanpage_crawl"),
+            *_fb_set_page_context_steps(),
+            *_fb_open_page_target_steps(
+                search_var="PAGE_SEARCH",
+                row_text_var="PAGE_ROW_TEXT",
+            ),
+            *_fb_crawl_current_target_feed_steps(
+                context_var="PAGE_CONTEXT",
+                collection_var="SAVE_COLLECTION",
+                tag_prefix="page",
+            ),
         ],
     },
 
@@ -1688,7 +1680,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "Đi tuần tự từng Fanpage trong PAGE_TARGETS: search đúng page, mở đúng row, "
             "follow nếu còn nút theo dõi, tương tác đủ vòng rồi back để sang page kế tiếp."
         ),
-        "tags": "facebook,page,fanpage,nurture,interaction",
+        "tags": "facebook,page,fanpage,nurture,interaction,requires-platform-session:facebook",
+        "requirements": _fb_platform_session_requirement(),
         "variables": {
             "PAGE_SEARCH": "ten fanpage",
             "PAGE_ROW_TEXT": "Tên Fanpage",
@@ -1704,42 +1697,33 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "TARGET_SEARCH_QUERY": "",
         },
         "steps": [
-            *_fb_session_guard_steps("fanpage_nurture", allow_login_recovery=False),
+            *_fb_app_start_steps("fanpage_nurture"),
             {
-                "id": "fanpage_nurture_requires_ready_session",
-                "type": "if_variable",
-                "name": "PLATFORM_SESSION_READY",
-                "equals": True,
-                "then": [
+                "type": "loop",
+                "count": "${PAGE_COUNT}",
+                "loop_var": "PAGE_INDEX",
+                "steps": [
                     {
-                        "type": "loop",
-                        "count": "${PAGE_COUNT}",
-                        "loop_var": "PAGE_INDEX",
-                        "steps": [
-                            {
-                                "type": "set_variable",
-                                "name": "PAGE_SEARCH_CURRENT",
-                                "from_list": "${PAGE_TARGETS}",
-                                "from_list_index": "${PAGE_INDEX}",
-                            },
-                            {
-                                "type": "set_variable",
-                                "name": "PAGE_ROW_TEXT_CURRENT",
-                                "from_list": "${PAGE_ROW_TEXTS}",
-                                "from_list_index": "${PAGE_INDEX}",
-                            },
-                            *_fb_nurture_page_by_search_steps(
-                                search_var="PAGE_SEARCH_CURRENT",
-                                row_text_var="PAGE_ROW_TEXT_CURRENT",
-                                id_prefix="fanpage_page_${PAGE_INDEX}",
-                            ),
-                            *_fb_back_to_page_search_before_next_page_steps(),
-                        ],
+                        "type": "set_variable",
+                        "name": "PAGE_SEARCH_CURRENT",
+                        "from_list": "${PAGE_TARGETS}",
+                        "from_list_index": "${PAGE_INDEX}",
                     },
-                    {"id": "fanpage_nurture_finish", "type": "key", "key": "home"},
+                    {
+                        "type": "set_variable",
+                        "name": "PAGE_ROW_TEXT_CURRENT",
+                        "from_list": "${PAGE_ROW_TEXTS}",
+                        "from_list_index": "${PAGE_INDEX}",
+                    },
+                    *_fb_nurture_page_by_search_steps(
+                        search_var="PAGE_SEARCH_CURRENT",
+                        row_text_var="PAGE_ROW_TEXT_CURRENT",
+                        id_prefix="fanpage_page_${PAGE_INDEX}",
+                    ),
+                    *_fb_back_to_page_search_before_next_page_steps(),
                 ],
-                "else": [{"type": "wait", "seconds": 0.1}],
             },
+            {"id": "fanpage_nurture_finish", "type": "key", "key": "home"},
         ],
     },
 
@@ -1914,7 +1898,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "được mở 'xem thêm' trước, chỉ khi nội dung đầy đủ khớp keyword mới "
             "like thật và comment thật."
         ),
-        "tags": "facebook,nurture,post,feed,keyword,interaction",
+        "tags": "facebook,nurture,post,feed,keyword,interaction,requires-platform-session:facebook",
+        "requirements": _fb_platform_session_requirement(),
         "variables": {
             "POST_RUN_HOURS": 8,
             "POST_RUN_SECONDS": 28800,
@@ -1928,43 +1913,34 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "POST_SCAN_TIMEOUT_SECONDS": 300,
         },
         "steps": [
-            *_fb_session_guard_steps("feed_post_nurture", allow_login_recovery=False),
+            *_fb_app_start_steps("feed_post_nurture"),
             {
-                "id": "feed_post_requires_ready_session",
-                "type": "if_variable",
-                "name": "PLATFORM_SESSION_READY",
-                "equals": True,
-                "then": [
+                "id": "feed_post_scan_8h_loop",
+                "type": "loop",
+                "count": "${POST_SCAN_CYCLES}",
+                "duration_seconds": "${POST_RUN_SECONDS}",
+                "stall_after": 40,
+                "idle_delay_seconds": 30,
+                "loop_var": "POST_SCAN_CYCLE",
+                "steps": [
                     {
-                        "id": "feed_post_scan_8h_loop",
-                        "type": "loop",
-                        "count": "${POST_SCAN_CYCLES}",
-                        "duration_seconds": "${POST_RUN_SECONDS}",
-                        "stall_after": 40,
-                        "idle_delay_seconds": 30,
-                        "loop_var": "POST_SCAN_CYCLE",
-                        "steps": [
-                            {
-                                "id": "feed_post_scan_and_interact",
-                                "type": "social_scan_posts_interact",
-                                "platform": "facebook",
-                                "keywords": "${POST_KEYWORDS}",
-                                "keywords_var": "POST_KEYWORDS",
-                                "match_mode": "${POST_MATCH_MODE}",
-                                "comment_text": "${COMMENT_TEXT}",
-                                "target_count": "${POST_TARGET_COUNT}",
-                                "max_scrolls": "${MAX_SCROLLS}",
-                                "scroll_x_ratio": "${SCROLL_X_RATIO}",
-                                "timeout": "${POST_SCAN_TIMEOUT_SECONDS}",
-                                "require_comment": True,
-                                "save_as": "_post_scan",
-                            }
-                        ],
-                    },
-                    {"id": "feed_post_finish", "type": "key", "key": "home"},
+                        "id": "feed_post_scan_and_interact",
+                        "type": "social_scan_posts_interact",
+                        "platform": "facebook",
+                        "keywords": "${POST_KEYWORDS}",
+                        "keywords_var": "POST_KEYWORDS",
+                        "match_mode": "${POST_MATCH_MODE}",
+                        "comment_text": "${COMMENT_TEXT}",
+                        "target_count": "${POST_TARGET_COUNT}",
+                        "max_scrolls": "${MAX_SCROLLS}",
+                        "scroll_x_ratio": "${SCROLL_X_RATIO}",
+                        "timeout": "${POST_SCAN_TIMEOUT_SECONDS}",
+                        "require_comment": True,
+                        "save_as": "_post_scan",
+                    }
                 ],
-                "else": [{"type": "wait", "seconds": 0.1}],
             },
+            {"id": "feed_post_finish", "type": "key", "key": "home"},
         ],
     },
 
@@ -1977,7 +1953,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "keyword, bấm Bình luận để mở comment sheet, mở profile commenter phù "
             "hợp rồi mới gửi lời mời kết bạn. Back về feed rồi mới cuộn tiếp."
         ),
-        "tags": "facebook,nurture,home-feed,post,commenter,profile,connection,keyword",
+        "tags": "facebook,nurture,home-feed,post,commenter,profile,connection,keyword,requires-platform-session:facebook",
+        "requirements": _fb_platform_session_requirement(),
         "variables": {
             "POST_RUN_SECONDS": 28800,
             "FEED_ITERATIONS": 9999,
@@ -2005,70 +1982,55 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "ENABLE_CONNECTION_REQUEST": True,
         },
         "steps": [
-            *_fb_session_guard_steps("home_post_author_connect", allow_login_recovery=False),
+            *_fb_app_start_steps("home_post_author_connect"),
             {
-                "id": "home_post_author_requires_ready_session",
-                "type": "if_variable",
-                "name": "PLATFORM_SESSION_READY",
-                "equals": True,
-                "then": [
+                "id": "home_post_author_cycle",
+                "type": "loop",
+                "count": "${FEED_ITERATIONS}",
+                # Ngưỡng tính theo thang 8 tiếng, không phải 5 phút. idle_delay_seconds
+                # 30s: run 20/08 bị limiter từ chối 46 lần trong 5 phút và lặp lại ngay,
+                # tức ~4.400 lần dump hierarchy trong một ca 8 tiếng chỉ để bị từ chối.
+                # Với 30s nghỉ, 40 vòng mù ~ 20 phút không làm gì mới dừng.
+                "duration_seconds": "${POST_RUN_SECONDS}",
+                "stall_after": 40,
+                "idle_delay_seconds": 30,
+                "loop_var": "FEED_CYCLE",
+                "steps": [
                     {
-                        "id": "home_post_author_cycle",
-                        "type": "loop",
-                        "count": "${FEED_ITERATIONS}",
-                        # Ngưỡng tính theo thang 8 tiếng, không phải 5 phút. idle_delay_seconds
-                        # 30s: run 20/08 bị limiter từ chối 46 lần trong 5 phút và lặp lại ngay,
-                        # tức ~4.400 lần dump hierarchy trong một ca 8 tiếng chỉ để bị từ chối.
-                        # Với 30s nghỉ, 40 vòng mù ~ 20 phút không làm gì mới dừng.
-                        "duration_seconds": "${POST_RUN_SECONDS}",
-                        "stall_after": 40,
-                        "idle_delay_seconds": 30,
-                        "loop_var": "FEED_CYCLE",
-                        "steps": [
-                            {
-                                "id": "home_post_author_scan",
-                                "type": "social_scan_posts_interact",
-                                "platform": "facebook",
-                                "keywords": "${POST_KEYWORDS}",
-                                "keywords_var": "POST_KEYWORDS",
-                                "match_mode": "${POST_MATCH_MODE}",
-                                "comment_text": "",
-                                "target_count": "${POSTS_PER_BATCH}",
-                                "max_scrolls": 0,
-                                "timeout": "${POST_SCAN_TIMEOUT_SECONDS}",
-                                "require_comment": False,
-                                "like_post": False,
-                                "save_as": "_post_scan",
-                            },
-                            *_fb_commenter_connect_steps(
-                                prefix="home_post_author",
-                                action_index=0,
-                            ),
-                            *_fb_commenter_connect_steps(
-                                prefix="home_post_author",
-                                action_index=1,
-                            ),
-                            {
-                                "id": "home_post_author_scroll_next",
-                                "type": "scroll_down",
-                                "repeats": 1,
-                                "start_y_ratio": 0.72,
-                                "end_y_ratio": 0.34,
-                                "duration_ms": 520,
-                                "pause_seconds": 0.7,
-                            },
-                        ],
+                        "id": "home_post_author_scan",
+                        "type": "social_scan_posts_interact",
+                        "platform": "facebook",
+                        "keywords": "${POST_KEYWORDS}",
+                        "keywords_var": "POST_KEYWORDS",
+                        "match_mode": "${POST_MATCH_MODE}",
+                        "comment_text": "",
+                        "target_count": "${POSTS_PER_BATCH}",
+                        "max_scrolls": 0,
+                        "timeout": "${POST_SCAN_TIMEOUT_SECONDS}",
+                        "require_comment": False,
+                        "like_post": False,
+                        "save_as": "_post_scan",
                     },
-                    {"id": "home_post_author_finish", "type": "key", "key": "home"},
-                ],
-                "else": [
+                    *_fb_commenter_connect_steps(
+                        prefix="home_post_author",
+                        action_index=0,
+                    ),
+                    *_fb_commenter_connect_steps(
+                        prefix="home_post_author",
+                        action_index=1,
+                    ),
                     {
-                        "id": "home_post_session_not_ready",
-                        "type": "wait",
-                        "seconds": 0.1,
-                    }
+                        "id": "home_post_author_scroll_next",
+                        "type": "scroll_down",
+                        "repeats": 1,
+                        "start_y_ratio": 0.72,
+                        "end_y_ratio": 0.34,
+                        "duration_ms": 520,
+                        "pause_seconds": 0.7,
+                    },
                 ],
             },
+            {"id": "home_post_author_finish", "type": "key", "key": "home"},
         ],
     },
 
@@ -2085,7 +2047,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "cá nhân của họ — nơi nhìn thấy ngữ cảnh chung trước khi gửi, và nơi "
             "trạng thái nút tự xác nhận đã gửi hay chưa."
         ),
-        "tags": "facebook,nurture,cold-start,group,commenter,profile,connection,seed",
+        "tags": "facebook,nurture,cold-start,group,commenter,profile,connection,seed,requires-platform-session:facebook",
+        "requirements": _fb_platform_session_requirement(),
         "variables": {
             "POST_RUN_SECONDS": 5400,
             "GROUP_SCAN_SECONDS": 2400,
@@ -2128,143 +2091,128 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "ENABLE_CONNECTION_REQUEST": True,
         },
         "steps": [
-            *_fb_session_guard_steps("seed_friends", allow_login_recovery=False),
+            *_fb_app_start_steps("seed_friends"),
             {
-                "id": "seed_friends_requires_ready_session",
-                "type": "if_variable",
-                "name": "PLATFORM_SESSION_READY",
-                "equals": True,
-                "then": [
+                "id": "seed_friends_group_loop",
+                "type": "loop",
+                "count": "${GROUP_COUNT}",
+                "loop_var": "GROUP_INDEX",
+                "duration_seconds": "${POST_RUN_SECONDS}",
+                "stall_after": 40,
+                "idle_delay_seconds": 30,
+                "steps": [
+                    # Start every group from the feed, not from wherever
+                    # the previous iteration happened to stop.
+                    *_fb_return_to_feed_steps("seed_friends"),
                     {
-                        "id": "seed_friends_group_loop",
+                        "id": "seed_friends_pick_group_search",
+                        "type": "set_variable",
+                        "name": "GROUP_SEARCH_CURRENT",
+                        "from_list": "${GROUP_SEARCHES}",
+                        "from_list_index": "${GROUP_INDEX}",
+                    },
+                    {
+                        "id": "seed_friends_pick_group_row_text",
+                        "type": "set_variable",
+                        "name": "GROUP_ROW_TEXT_CURRENT",
+                        "from_list": "${GROUP_ROW_TEXTS}",
+                        "from_list_index": "${GROUP_INDEX}",
+                    },
+                    *_fb_open_search_tab_steps(
+                        search_var="GROUP_SEARCH_CURRENT",
+                        tab_vi="Nhóm",
+                        tab_en="Groups",
+                        tab_description_contains="tab Nhóm",
+                        id_prefix="seed_friends",
+                    ),
+                    {
+                        "id": "seed_friends_open_group_row",
+                        "type": "tap_xml_match",
+                        "attr": "content-desc",
+                        "contains": "${GROUP_ROW_TEXT_CURRENT}",
+                        "clickable": True,
+                        "timeout": 10,
+                    },
+                    {
+                        "id": "seed_friends_group_ready",
+                        "type": "wait_stable",
+                        "timeout": 6,
+                        "stable_duration": 0.5,
+                    },
+                    # Tham gia nếu chưa là thành viên. Đã vào rồi thì
+                    # community_membership tự nhận trạng thái và bỏ qua.
+                    {
+                        "id": "seed_friends_join_group",
+                        "type": "community_membership",
+                        "platform": "facebook",
+                        "action": "join",
+                        "timeout": 6,
+                        "verify_timeout": 6,
+                        "settle_seconds": 0.4,
+                        "ignore_error": True,
+                        "save_as": "_group_join_action",
+                    },
+                    {
+                        "id": "seed_friends_cycle",
                         "type": "loop",
-                        "count": "${GROUP_COUNT}",
-                        "loop_var": "GROUP_INDEX",
-                        "duration_seconds": "${POST_RUN_SECONDS}",
+                        "count": "${SEED_CYCLES}",
+                        "duration_seconds": "${GROUP_SCAN_SECONDS}",
                         "stall_after": 40,
                         "idle_delay_seconds": 30,
+                        "loop_var": "SEED_CYCLE",
                         "steps": [
-                            # Start every group from the feed, not from wherever
-                            # the previous iteration happened to stop.
-                            *_fb_return_to_feed_steps("seed_friends"),
+                            # Bước này làm hai việc cùng lúc: tạo sự hiện
+                            # diện thật trong group, và sinh ra chính kho
+                            # người bình luận để kết bạn ngay bên dưới.
                             {
-                                "id": "seed_friends_pick_group_search",
-                                "type": "set_variable",
-                                "name": "GROUP_SEARCH_CURRENT",
-                                "from_list": "${GROUP_SEARCHES}",
-                                "from_list_index": "${GROUP_INDEX}",
+                                "id": "seed_friends_scan_and_interact",
+                                "type": "social_scan_posts_interact",
+                                "platform": "facebook",
+                                "keywords": "${POST_KEYWORDS}",
+                                "keywords_var": "POST_KEYWORDS",
+                                "match_mode": "${POST_MATCH_MODE}",
+                                "comment_text": "${COMMENT_TEXT}",
+                                "like_post": True,
+                                "require_comment": True,
+                                "target_count": "${POSTS_PER_BATCH}",
+                                "max_scrolls": "${MAX_SCROLLS}",
+                                "scroll_x_ratio": "${SCROLL_X_RATIO}",
+                                "timeout": "${POST_SCAN_TIMEOUT_SECONDS}",
+                                "save_as": "_post_scan",
                             },
-                            {
-                                "id": "seed_friends_pick_group_row_text",
-                                "type": "set_variable",
-                                "name": "GROUP_ROW_TEXT_CURRENT",
-                                "from_list": "${GROUP_ROW_TEXTS}",
-                                "from_list_index": "${GROUP_INDEX}",
-                            },
-                            *_fb_open_search_tab_steps(
-                                search_var="GROUP_SEARCH_CURRENT",
-                                tab_vi="Nhóm",
-                                tab_en="Groups",
-                                tab_description_contains="tab Nhóm",
-                                id_prefix="seed_friends",
+                            *_fb_commenter_connect_steps(
+                                prefix="seed_friends",
+                                action_index=0,
                             ),
                             {
-                                "id": "seed_friends_open_group_row",
-                                "type": "tap_xml_match",
-                                "attr": "content-desc",
-                                "contains": "${GROUP_ROW_TEXT_CURRENT}",
-                                "clickable": True,
-                                "timeout": 10,
-                            },
-                            {
-                                "id": "seed_friends_group_ready",
-                                "type": "wait_stable",
-                                "timeout": 6,
-                                "stable_duration": 0.5,
-                            },
-                            # Tham gia nếu chưa là thành viên. Đã vào rồi thì
-                            # community_membership tự nhận trạng thái và bỏ qua.
-                            {
-                                "id": "seed_friends_join_group",
-                                "type": "community_membership",
-                                "platform": "facebook",
-                                "action": "join",
-                                "timeout": 6,
-                                "verify_timeout": 6,
-                                "settle_seconds": 0.4,
-                                "ignore_error": True,
-                                "save_as": "_group_join_action",
-                            },
-                            {
-                                "id": "seed_friends_cycle",
-                                "type": "loop",
-                                "count": "${SEED_CYCLES}",
-                                "duration_seconds": "${GROUP_SCAN_SECONDS}",
-                                "stall_after": 40,
-                                "idle_delay_seconds": 30,
-                                "loop_var": "SEED_CYCLE",
-                                "steps": [
-                                    # Bước này làm hai việc cùng lúc: tạo sự hiện
-                                    # diện thật trong group, và sinh ra chính kho
-                                    # người bình luận để kết bạn ngay bên dưới.
-                                    {
-                                        "id": "seed_friends_scan_and_interact",
-                                        "type": "social_scan_posts_interact",
-                                        "platform": "facebook",
-                                        "keywords": "${POST_KEYWORDS}",
-                                        "keywords_var": "POST_KEYWORDS",
-                                        "match_mode": "${POST_MATCH_MODE}",
-                                        "comment_text": "${COMMENT_TEXT}",
-                                        "like_post": True,
-                                        "require_comment": True,
-                                        "target_count": "${POSTS_PER_BATCH}",
-                                        "max_scrolls": "${MAX_SCROLLS}",
-                                        "scroll_x_ratio": "${SCROLL_X_RATIO}",
-                                        "timeout": "${POST_SCAN_TIMEOUT_SECONDS}",
-                                        "save_as": "_post_scan",
-                                    },
+                                "id": "seed_friends_second_connect",
+                                "type": "if_variable",
+                                "name": "CONNECTS_PER_CYCLE",
+                                "greater_than": 1,
+                                "then": [
                                     *_fb_commenter_connect_steps(
                                         prefix="seed_friends",
-                                        action_index=0,
-                                    ),
-                                    {
-                                        "id": "seed_friends_second_connect",
-                                        "type": "if_variable",
-                                        "name": "CONNECTS_PER_CYCLE",
-                                        "greater_than": 1,
-                                        "then": [
-                                            *_fb_commenter_connect_steps(
-                                                prefix="seed_friends",
-                                                action_index=1,
-                                            )
-                                        ],
-                                        "else": [],
-                                    },
-                                    {
-                                        "id": "seed_friends_scroll_next_batch",
-                                        "type": "scroll_down",
-                                        "repeats": 1,
-                                        "start_x_ratio": "${SCROLL_X_RATIO}",
-                                        "start_y_ratio": 0.65,
-                                        "end_y_ratio": 0.45,
-                                    },
+                                        action_index=1,
+                                    )
                                 ],
+                                "else": [],
                             },
-                            *_fb_back_to_page_search_before_next_page_steps(
-                                id_prefix="seed_friends",
-                            ),
+                            {
+                                "id": "seed_friends_scroll_next_batch",
+                                "type": "scroll_down",
+                                "repeats": 1,
+                                "start_x_ratio": "${SCROLL_X_RATIO}",
+                                "start_y_ratio": 0.65,
+                                "end_y_ratio": 0.45,
+                            },
                         ],
                     },
-                    {"id": "seed_friends_finish", "type": "key", "key": "home"},
-                ],
-                "else": [
-                    {
-                        "id": "seed_friends_session_not_ready",
-                        "type": "wait",
-                        "seconds": 0.1,
-                    }
+                    *_fb_back_to_page_search_before_next_page_steps(
+                        id_prefix="seed_friends",
+                    ),
                 ],
             },
+            {"id": "seed_friends_finish", "type": "key", "key": "home"},
         ],
     },
 
@@ -2278,7 +2226,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "theo. Mỗi bài được mở 'xem thêm' trước, chỉ nội dung đầy đủ khớp keyword "
             "mới được like thật và comment thật."
         ),
-        "tags": "facebook,nurture,post,group,multi-group,keyword,interaction",
+        "tags": "facebook,nurture,post,group,multi-group,keyword,interaction,requires-platform-session:facebook",
+        "requirements": _fb_platform_session_requirement(),
         "variables": {
             "POST_RUN_HOURS": 8,
             "POST_RUN_SECONDS": 28800,
@@ -2298,78 +2247,69 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "POST_SCAN_TIMEOUT_SECONDS": 300,
         },
         "steps": [
-            *_fb_session_guard_steps("group_post_nurture", allow_login_recovery=False),
+            *_fb_app_start_steps("group_post_nurture"),
             {
-                "id": "group_post_requires_ready_session",
-                "type": "if_variable",
-                "name": "PLATFORM_SESSION_READY",
-                "equals": True,
-                "then": [
+                "id": "group_post_multi_group_loop",
+                "type": "loop",
+                "count": "${GROUP_COUNT}",
+                "loop_var": "GROUP_INDEX",
+                "steps": [
                     {
-                        "id": "group_post_multi_group_loop",
+                        "type": "set_variable",
+                        "name": "GROUP_SEARCH_CURRENT",
+                        "from_list": "${GROUP_SEARCHES}",
+                        "from_list_index": "${GROUP_INDEX}",
+                    },
+                    {
+                        "type": "set_variable",
+                        "name": "GROUP_ROW_TEXT_CURRENT",
+                        "from_list": "${GROUP_ROW_TEXTS}",
+                        "from_list_index": "${GROUP_INDEX}",
+                    },
+                    *_fb_open_search_tab_steps(
+                        search_var="GROUP_SEARCH_CURRENT",
+                        tab_vi="Nhóm",
+                        tab_en="Groups",
+                        tab_description_contains="tab Nhóm",
+                    ),
+                    {
+                        "type": "tap_xml_match",
+                        "attr": "content-desc",
+                        "contains": "${GROUP_ROW_TEXT_CURRENT}",
+                        "clickable": True,
+                        "timeout": 10,
+                    },
+                    {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+                    {
+                        "id": "group_post_scan_8h_loop",
                         "type": "loop",
-                        "count": "${GROUP_COUNT}",
-                        "loop_var": "GROUP_INDEX",
+                        "count": "${POST_SCAN_CYCLES}",
+                        "duration_seconds": "${GROUP_SCAN_SECONDS}",
+                        "stall_after": 40,
+                        "idle_delay_seconds": 30,
+                        "loop_var": "POST_SCAN_CYCLE",
                         "steps": [
                             {
-                                "type": "set_variable",
-                                "name": "GROUP_SEARCH_CURRENT",
-                                "from_list": "${GROUP_SEARCHES}",
-                                "from_list_index": "${GROUP_INDEX}",
-                            },
-                            {
-                                "type": "set_variable",
-                                "name": "GROUP_ROW_TEXT_CURRENT",
-                                "from_list": "${GROUP_ROW_TEXTS}",
-                                "from_list_index": "${GROUP_INDEX}",
-                            },
-                            *_fb_open_search_tab_steps(
-                                search_var="GROUP_SEARCH_CURRENT",
-                                tab_vi="Nhóm",
-                                tab_en="Groups",
-                                tab_description_contains="tab Nhóm",
-                            ),
-                            {
-                                "type": "tap_xml_match",
-                                "attr": "content-desc",
-                                "contains": "${GROUP_ROW_TEXT_CURRENT}",
-                                "clickable": True,
-                                "timeout": 10,
-                            },
-                            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-                            {
-                                "id": "group_post_scan_8h_loop",
-                                "type": "loop",
-                                "count": "${POST_SCAN_CYCLES}",
-                                "duration_seconds": "${GROUP_SCAN_SECONDS}",
-                                "stall_after": 40,
-                                "idle_delay_seconds": 30,
-                                "loop_var": "POST_SCAN_CYCLE",
-                                "steps": [
-                                    {
-                                        "id": "group_post_scan_and_interact",
-                                        "type": "social_scan_posts_interact",
-                                        "platform": "facebook",
-                                        "keywords": "${POST_KEYWORDS}",
-                                        "keywords_var": "POST_KEYWORDS",
-                                        "match_mode": "${POST_MATCH_MODE}",
-                                        "comment_text": "${COMMENT_TEXT}",
-                                        "target_count": "${POST_TARGET_COUNT}",
-                                        "max_scrolls": "${MAX_SCROLLS}",
-                                        "scroll_x_ratio": "${SCROLL_X_RATIO}",
-                                        "timeout": "${POST_SCAN_TIMEOUT_SECONDS}",
-                                        "require_comment": True,
-                                        "save_as": "_group_post_scan",
-                                    }
-                                ],
-                            },
-                            *_fb_back_to_page_search_before_next_page_steps(),
+                                "id": "group_post_scan_and_interact",
+                                "type": "social_scan_posts_interact",
+                                "platform": "facebook",
+                                "keywords": "${POST_KEYWORDS}",
+                                "keywords_var": "POST_KEYWORDS",
+                                "match_mode": "${POST_MATCH_MODE}",
+                                "comment_text": "${COMMENT_TEXT}",
+                                "target_count": "${POST_TARGET_COUNT}",
+                                "max_scrolls": "${MAX_SCROLLS}",
+                                "scroll_x_ratio": "${SCROLL_X_RATIO}",
+                                "timeout": "${POST_SCAN_TIMEOUT_SECONDS}",
+                                "require_comment": True,
+                                "save_as": "_group_post_scan",
+                            }
                         ],
                     },
-                    {"id": "group_post_finish", "type": "key", "key": "home"},
+                    *_fb_back_to_page_search_before_next_page_steps(),
                 ],
-                "else": [{"type": "wait", "seconds": 0.1}],
             },
+            {"id": "group_post_finish", "type": "key", "key": "home"},
         ],
     },
 
@@ -2382,7 +2322,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "nút Thêm bạn bè, chỉ gửi lời mời khi UI có điểm chung như bạn chung, cùng "
             "nhóm hoặc keyword ngữ cảnh. Không search tên từng người."
         ),
-        "tags": "facebook,nurture,profile,connection,common-context,visible-scan",
+        "tags": "facebook,nurture,profile,connection,common-context,visible-scan,requires-platform-session:facebook",
+        "requirements": _fb_platform_session_requirement(),
         "variables": {
             "CONNECTION_TARGET_COUNT": 20,
             "CONNECTION_MAX_SCROLLS": 30,
@@ -2390,40 +2331,31 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "CONNECTION_COMMON_KEYWORDS": ["bạn chung", "mutual friends", "cùng nhóm"],
         },
         "steps": [
-            *_fb_session_guard_steps("candidate_profile", allow_login_recovery=False),
+            *_fb_app_start_steps("candidate_profile"),
             {
-                "id": "candidate_profile_requires_ready_session",
-                "type": "if_variable",
-                "name": "PLATFORM_SESSION_READY",
-                "equals": True,
-                "then": [
-                    {
-                        "id": "candidate_profile_connect_visible_common_batch",
-                        "type": "social_connect_visible_people",
-                        "platform": "facebook",
-                        "open_surface": True,
-                        "target_count": "${CONNECTION_TARGET_COUNT}",
-                        "max_scrolls": "${CONNECTION_MAX_SCROLLS}",
-                        "no_more_common_limit": 4,
-                        "min_score": "${CONNECTION_MIN_COMMON_SCORE}",
-                        "require_common": True,
-                        "common_keywords": "${CONNECTION_COMMON_KEYWORDS}",
-                        "forbidden_keywords": [
-                            "trang",
-                            "page",
-                            "người tham gia ẩn danh",
-                            "anonymous",
-                        ],
-                        "timeout": 150,
-                        "verify_wait_s": 0.8,
-                        "scroll_wait_s": 0.7,
-                        "stop_on_unverified": True,
-                        "save_as": "_visible_connection_action",
-                    },
-                    {"id": "candidate_profile_finish", "type": "key", "key": "home"},
+                "id": "candidate_profile_connect_visible_common_batch",
+                "type": "social_connect_visible_people",
+                "platform": "facebook",
+                "open_surface": True,
+                "target_count": "${CONNECTION_TARGET_COUNT}",
+                "max_scrolls": "${CONNECTION_MAX_SCROLLS}",
+                "no_more_common_limit": 4,
+                "min_score": "${CONNECTION_MIN_COMMON_SCORE}",
+                "require_common": True,
+                "common_keywords": "${CONNECTION_COMMON_KEYWORDS}",
+                "forbidden_keywords": [
+                    "trang",
+                    "page",
+                    "người tham gia ẩn danh",
+                    "anonymous",
                 ],
-                "else": [{"type": "wait", "seconds": 0.1}],
+                "timeout": 150,
+                "verify_wait_s": 0.8,
+                "scroll_wait_s": 0.7,
+                "stop_on_unverified": True,
+                "save_as": "_visible_connection_action",
             },
+            {"id": "candidate_profile_finish", "type": "key", "key": "home"},
         ],
     },
 

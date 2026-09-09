@@ -39,6 +39,92 @@ def guard_reason_allows_login_recovery(reason: str | None) -> bool:
     return str(reason or "").endswith(_LOGIN_RECOVERABLE_GUARD_SUFFIXES)
 
 
+def platform_session_requirement_platforms(scenario: dict[str, Any]) -> set[str]:
+    """Return platforms whose session is a precondition for this scenario.
+
+    Canonical org-scenario shape:
+        {"requirements": {"platform_session": {"required": true, "platform": "facebook"}}}
+
+    Builtin ScenarioTemplate has no requirements column yet, so templates use a
+    tag token: ``requires-platform-session:<platform>``. This keeps the model
+    platform-neutral without a database migration.
+    """
+    platforms: set[str] = set()
+    requirements = scenario.get("requirements")
+    if isinstance(requirements, dict):
+        raw = requirements.get("platform_session") or requirements.get(
+            "platformSession"
+        )
+        entries = raw if isinstance(raw, list) else [raw]
+        for entry in entries:
+            if not isinstance(entry, dict) or entry.get("required") is False:
+                continue
+            platform = str(
+                entry.get("platform") or scenario.get("platform") or ""
+            ).strip()
+            if platform:
+                platforms.add(platform)
+
+    tags = str(scenario.get("tags") or "")
+    for token in tags.replace(",", " ").split():
+        marker = "requires-platform-session:"
+        if token.startswith(marker):
+            platform = token[len(marker) :].strip()
+            if platform:
+                platforms.add(platform)
+    return platforms
+
+
+def scenario_registry_platform_session_requirements(
+    registry: dict[str, Any],
+    scenario_refs: list[dict[str, Any]],
+) -> set[str]:
+    """Follow selected scenarios and dependencies, collecting required platforms."""
+    by_id = registry.get("by_id") or {}
+    by_campaign_name = registry.get("by_campaign_name") or {}
+    by_template_name = registry.get("by_template_name") or {}
+    pending = [
+        by_id.get(str(ref.get("scenario_id") or ""))
+        for ref in scenario_refs
+        if ref.get("scenario_id")
+    ]
+    seen: set[int] = set()
+    platforms: set[str] = set()
+
+    def walk_steps(steps: list[Any]) -> list[dict[str, Any]]:
+        nested_refs: list[dict[str, Any]] = []
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            if step.get("type") == "run_scenario":
+                nested_refs.append(step)
+            for key in ("steps", "then", "else"):
+                nested_refs.extend(walk_steps(step.get(key) or []))
+            for branch in step.get("branches") or []:
+                if isinstance(branch, dict):
+                    nested_refs.extend(walk_steps(branch.get("steps") or []))
+        return nested_refs
+
+    while pending:
+        scenario = pending.pop()
+        if not isinstance(scenario, dict) or id(scenario) in seen:
+            continue
+        seen.add(id(scenario))
+        platforms.update(platform_session_requirement_platforms(scenario))
+        for step in walk_steps(scenario.get("steps") or []):
+            nested = None
+            scenario_id = str(step.get("scenario_id") or "").strip()
+            scenario_name = str(step.get("scenario_name") or "").strip()
+            if scenario_id:
+                nested = by_id.get(scenario_id)
+            if nested is None and scenario_name:
+                nested = by_campaign_name.get(scenario_name) or by_template_name.get(
+                    scenario_name
+                )
+            pending.append(nested)
+    return platforms
+
+
 def scenario_registry_has_platform_login_gate(
     registry: dict[str, Any],
     scenario_refs: list[dict[str, Any]],

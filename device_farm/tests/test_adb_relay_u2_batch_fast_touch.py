@@ -249,6 +249,42 @@ async def test_u2_flow_forwards_priority_and_deadline_to_agent():
 
 
 @pytest.mark.asyncio
+async def test_u2_flow_cancel_sends_agent_cancel_message():
+    conn = _FakeRelayConn()
+    cancel_event = threading.Event()
+    started = asyncio.Event()
+
+    async def _blocked_request(*_args):
+        started.set()
+        await asyncio.sleep(30.0)
+        return {"type": "u2_flow_result", "ok": True, "value": {}, "error": None}
+
+    conn.on_json_request = _blocked_request
+    manager = _manager_with_conn(conn)
+
+    task = asyncio.create_task(
+        manager.u2_flow(
+            "serial-1",
+            "social_scan_posts_interact",
+            {"keywords": ["AI"], "max_scrolls": 30},
+            timeout=4.0,
+            cancel_event=cancel_event,
+        )
+    )
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+    cancel_event.set()
+    result = await asyncio.wait_for(task, timeout=1.0)
+
+    assert result == {"ok": False, "error": "cancelled", "cancelled": True}
+    assert len(conn.json_messages) == 1
+    cancel_msg = conn.json_messages[0]
+    assert cancel_msg["type"] == "u2_flow_cancel"
+    assert cancel_msg["id"] == conn.json_requests[0]["id"]
+    assert cancel_msg["serial"] == "serial-1"
+    assert cancel_msg["flow"] == "social_scan_posts_interact"
+
+
+@pytest.mark.asyncio
 async def test_u2_batch_non_touch_cancel_sends_agent_cancel_message():
     conn = _FakeRelayConn()
     cancel_event = threading.Event()

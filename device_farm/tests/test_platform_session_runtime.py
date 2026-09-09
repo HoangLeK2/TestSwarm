@@ -25,7 +25,9 @@ from services.platform_session_runtime import (
     _resolve_runtime_target,
     apply_platform_session_gate,
     guard_reason_allows_login_recovery,
+    platform_session_requirement_platforms,
     scenario_registry_has_platform_login_gate,
+    scenario_registry_platform_session_requirements,
 )
 from tenancy.context import tenant_context, use_tenant_scope
 from tasks.scenario.steps.platform_session import handle_platform_session_gate
@@ -260,6 +262,61 @@ def test_registry_gate_detection_follows_selected_run_scenario_only():
         scenario_registry_has_platform_login_gate(registry, [{"scenario_id": "other"}])
         is False
     )
+
+
+def test_platform_session_requirements_are_platform_neutral():
+    assert platform_session_requirement_platforms(
+        {
+            "requirements": {
+                "platform_session": {
+                    "required": True,
+                    "platform": "facebook",
+                }
+            }
+        }
+    ) == {"facebook"}
+    assert platform_session_requirement_platforms(
+        {"tags": "facebook,nurture,requires-platform-session:facebook"}
+    ) == {"facebook"}
+
+
+def test_registry_collects_platform_session_requirements_from_dependencies():
+    selected = {
+        "steps": [{"type": "run_scenario", "scenario_name": "Child"}],
+        "requirements": {
+            "platform_session": {"required": True, "platform": "facebook"}
+        },
+    }
+    child = {"steps": [], "tags": "requires-platform-session:tiktok"}
+    registry = {
+        "by_id": {"selected": selected},
+        "by_campaign_name": {},
+        "by_template_name": {"Child": child},
+    }
+
+    assert scenario_registry_platform_session_requirements(
+        registry, [{"scenario_id": "selected"}]
+    ) == {"facebook", "tiktok"}
+
+
+def test_template_clone_body_preserves_platform_session_requirement():
+    from services.org_scenario_io.service import _template_body_json
+
+    body = _template_body_json(
+        SimpleNamespace(
+            steps=[{"type": "wait", "seconds": 1}],
+            nodes=[],
+            edges=[],
+            variables={},
+            tags="facebook,requires-platform-session:facebook",
+        )
+    )
+
+    assert body["requirements"]["platform_session"] == {
+        "required": True,
+        "platform": "facebook",
+        "account_source": "device_primary",
+    }
 
 
 @pytest.mark.asyncio

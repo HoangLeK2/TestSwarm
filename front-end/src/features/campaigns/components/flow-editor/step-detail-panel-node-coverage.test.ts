@@ -64,6 +64,21 @@ test('step cards and detail panel render configuration status metadata', () => {
   );
 });
 
+test('scan posts detail panel exposes visible like and comment toggles', () => {
+  const detailSource = readFileSync(
+    new URL('./step-detail-panel.tsx', import.meta.url),
+    'utf8'
+  );
+
+  assert.match(detailSource, /tField\('interactionMode'\)/);
+  assert.match(detailSource, /tField\('interactionLikeOption'\)/);
+  assert.match(detailSource, /tField\('interactionCommentOption'\)/);
+  assert.match(detailSource, /update\(\{ like_post: e\.target\.checked \}\)/);
+  assert.match(detailSource, /update\(\{ require_comment: e\.target\.checked \}\)/);
+  assert.doesNotMatch(detailSource, /socialScanInteractionMode/);
+  assert.doesNotMatch(detailSource, />\\s*Like post khi match\\s*</);
+});
+
 test('flow editor renders variable lineage warnings on cards and detail panels', () => {
   const flowSource = readFileSync(
     new URL('./flow-editor.tsx', import.meta.url),
@@ -134,7 +149,7 @@ test('insert picker receives capability context from root and nested flow insert
   ).length;
   const flowInsertGaps = (
     flowSource.match(
-      /<InsertGap[\s\S]{0,240}nodeCapabilities=\{nodeCapabilities\}/g
+      /<InsertGap[\s\S]{0,320}nodeCapabilities=\{nodeCapabilities\}/g
     ) ?? []
   ).length;
   const bracketInsertGaps = (
@@ -144,7 +159,7 @@ test('insert picker receives capability context from root and nested flow insert
   ).length;
   const wrapperPickers = (
     insertSource.match(
-      /<InsertStepPicker[\s\S]{0,220}nodeCapabilities=\{nodeCapabilities\}/g
+      /<InsertStepPicker[\s\S]{0,320}nodeCapabilities=\{nodeCapabilities\}/g
     ) ?? []
   ).length;
 
@@ -273,6 +288,10 @@ test('tap_xml_match is available from the action insert menu', () => {
   assert.equal(
     actions?.items.some((item) => item.type === 'tap_xml_match'),
     true
+  );
+  assert.equal(
+    actions?.items.some((item) => item.type === 'platform_session_gate'),
+    false
   );
 });
 

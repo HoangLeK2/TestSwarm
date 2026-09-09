@@ -604,12 +604,20 @@ class CampaignDispatcher:
             if scenario_refs
             else {"by_id": {}, "by_campaign_name": {}, "by_template_name": {}}
         )
-        from services.platform_session_runtime import scenario_registry_has_platform_login_gate
+        from services.platform_session_runtime import (
+            scenario_registry_has_platform_login_gate,
+            scenario_registry_platform_session_requirements,
+        )
 
         allows_login_recovery = scenario_registry_has_platform_login_gate(
             scenario_registry,
             scenario_refs,
         )
+        platform_session_requirements = scenario_registry_platform_session_requirements(
+            scenario_registry,
+            scenario_refs,
+        )
+        requires_facebook_session = "facebook" in platform_session_requirements
         effective_source_pool = source_pool
         if effective_source_pool is None and not external_entity_ids:
             effective_source_pool = source_pool_from_scenario_registry(scenario_registry)

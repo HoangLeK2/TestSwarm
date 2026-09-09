@@ -10,12 +10,21 @@ export function insertStepAtPath(
   path: BracketChildRef[],
   step: FlowStep
 ): FlowStep[] {
+  return insertStepsAtPath(rootSteps, path, [step]);
+}
+
+export function insertStepsAtPath(
+  rootSteps: FlowStep[],
+  path: BracketChildRef[],
+  steps: FlowStep[]
+): FlowStep[] {
+  if (steps.length === 0) return rootSteps;
   const last = path[path.length - 1];
-  if (!last) return [...rootSteps, step];
+  if (!last) return [...rootSteps, ...steps];
 
   if (path.length === 1) {
     const next = [...rootSteps];
-    next.splice(last.ci, 0, step);
+    next.splice(last.ci, 0, ...steps);
     return next;
   }
 
@@ -32,14 +41,14 @@ export function insertStepAtPath(
     const branch = branches[bi];
     if (!branch) return rootSteps;
     const branchSteps = [...(branch.steps ?? [])];
-    branchSteps.splice(last.ci, 0, step);
+    branchSteps.splice(last.ci, 0, ...steps);
     branches[bi] = { ...branch, steps: branchSteps };
     nextParent.branches = branches;
   } else {
     const siblings = [
       ...((nextParent[last.listKey] as FlowStep[] | undefined) ?? [])
     ];
-    siblings.splice(last.ci, 0, step);
+    siblings.splice(last.ci, 0, ...steps);
     nextParent[last.listKey] = siblings;
   }
 

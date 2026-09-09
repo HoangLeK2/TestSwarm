@@ -15,6 +15,7 @@ import type { StepTreeInsertLocation } from '../../lib/step-tree-intelligence';
 
 interface Props {
   onInsert: (step: FlowStep) => void;
+  onInsertMany?: (steps: FlowStep[]) => void;
   label?: string;
   nodeCapabilities?: NodeCapabilityRegistry;
   deviceCapabilities?: DeviceCapabilityMap;
@@ -23,6 +24,7 @@ interface Props {
 
 export function InsertButton({
   onInsert,
+  onInsertMany,
   nodeCapabilities,
   deviceCapabilities,
   insertLocation
@@ -32,6 +34,7 @@ export function InsertButton({
     <div className='flex min-h-7 justify-end py-0.5 pr-0.5'>
       <InsertStepPicker
         onInsert={onInsert}
+        onInsertMany={onInsertMany}
         nodeCapabilities={nodeCapabilities}
         deviceCapabilities={deviceCapabilities}
         insertLocation={insertLocation}
@@ -58,6 +61,7 @@ export function InsertButton({
  */
 export function InsertGap({
   onInsert,
+  onInsertMany,
   alignWithDragHandle = true,
   label,
   persistent = false,
@@ -75,6 +79,7 @@ export function InsertGap({
       <div className='px-0.5 pb-1 pt-1.5'>
         <InsertStepPicker
           onInsert={onInsert}
+          onInsertMany={onInsertMany}
           nodeCapabilities={nodeCapabilities}
           deviceCapabilities={deviceCapabilities}
           insertLocation={insertLocation}
@@ -116,6 +121,7 @@ export function InsertGap({
       <div className='flex shrink-0 items-center gap-1 px-0.5'>
         <InsertStepPicker
           onInsert={onInsert}
+          onInsertMany={onInsertMany}
           nodeCapabilities={nodeCapabilities}
           deviceCapabilities={deviceCapabilities}
           insertLocation={insertLocation}

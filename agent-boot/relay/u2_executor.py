@@ -2830,6 +2830,10 @@ def _fb_scan_keyword_terms(raw: Any) -> list[str]:
     return [term for term in (_fb_fold(item) for item in terms) if term]
 
 
+def _fb_scan_keyword_in_text(term: str, folded_text: str) -> bool:
+    return bool(re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", folded_text))
+
+
 def _fb_scan_post_keyword_match(
     text: str,
     *,
@@ -2839,7 +2843,11 @@ def _fb_scan_post_keyword_match(
     if not terms:
         return True, []
     folded = _fb_fold(text)
-    matched = [term for term in terms if term in folded]
+    matched = [
+        term
+        for term in terms
+        if _fb_scan_keyword_in_text(term, folded)
+    ]
     if match_mode == "all":
         return len(matched) == len(terms), matched
     return bool(matched), matched
@@ -3447,6 +3455,11 @@ def _fb_visible_post_candidates(
 
 def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
     """Scan visible social posts and like/comment only keyword matches."""
+    cancel_event = p.get("_cancel_event")
+
+    def _cancelled() -> bool:
+        return bool(cancel_event is not None and cancel_event.is_set())
+
     keywords = _fb_scan_keyword_terms(p.get("keywords") or p.get("post_keywords"))
     terms = _social_post_terms(p)
     input_classes = _social_input_classes(p)
@@ -3480,7 +3493,11 @@ def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
     stuck_surface: dict[str, Any] | None = None
 
     for screen_index in range(max_scrolls + 1):
+        if _cancelled():
+            return {"ok": False, "error": "cancelled", "cancelled": True}
         xml = dev.dump_hierarchy(compressed=False)
+        if _cancelled():
+            return {"ok": False, "error": "cancelled", "cancelled": True}
 
         # This flow never asked what screen it was on. That is how it spent 88
         # iterations swiping a group-join form: no post rows to find, nothing
@@ -3534,10 +3551,14 @@ def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
         screens_scanned += 1
 
         for candidate in qualified:
+            if _cancelled():
+                return {"ok": False, "error": "cancelled", "cancelled": True}
             seen_fingerprints.add(str(candidate["fingerprint"]))
             liked = bool(candidate.get("already_liked"))
             like_verified = liked
             if like_post and not liked:
+                if _cancelled():
+                    return {"ok": False, "error": "cancelled", "cancelled": True}
                 left, top, right, bottom = candidate["like_bounds"]
                 dev.click((left + right) // 2, (top + bottom) // 2)
                 time.sleep(submit_wait_s)
@@ -3560,6 +3581,8 @@ def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
             commented = False
             comment_error = ""
             if comment_text:
+                if _cancelled():
+                    return {"ok": False, "error": "cancelled", "cancelled": True}
                 left, top, right, bottom = candidate["comment_bounds"]
                 dev.click((left + right) // 2, (top + bottom) // 2)
                 time.sleep(comment_wait_s)
@@ -3688,6 +3711,8 @@ def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
             break
         if screen_index >= max_scrolls:
             break
+        if _cancelled():
+            return {"ok": False, "error": "cancelled", "cancelled": True}
         if not _fb_scroll_people_surface(dev, p):
             break
         scrolls += 1
@@ -7589,10 +7614,15 @@ class U2Executor:
         *,
         priority: str | int | None = None,
         deadline_ms: int | float | None = None,
+        cancel_event: Any = None,
     ) -> dict:
         fn = _FLOW_TABLE.get(flow)
         if fn is None:
             return {"ok": False, "value": None, "error": f"unknown flow: {flow}"}
+        if cancel_event is not None and cancel_event.is_set():
+            return {"ok": False, "value": None, "error": "cancelled", "cancelled": True}
+        if cancel_event is not None:
+            params = {**params, "_cancel_event": cancel_event}
         if self._breaker_is_open(serial, priority=priority):
             self._bump("breaker_drops")
             return {"ok": False, "value": None, "error": self._breaker_error(serial)}
@@ -7614,10 +7644,24 @@ class U2Executor:
                 priority=priority,
                 deadline_ms=deadline_ms,
             ):
+                if cancel_event is not None and cancel_event.is_set():
+                    return {
+                        "ok": False,
+                        "value": None,
+                        "error": "cancelled",
+                        "cancelled": True,
+                    }
                 value = await _run_with_retry(
                     self._pool, self._loop, serial,
                     lambda d, _fn=fn, _p=params: _fn(d, _p),
                 )
+            if isinstance(value, dict) and value.get("cancelled"):
+                return {
+                    "ok": False,
+                    "value": None,
+                    "error": "cancelled",
+                    "cancelled": True,
+                }
             self._record_outcome(serial, True)
             return {"ok": True, "value": value, "error": None}
         except TimeoutError as exc:

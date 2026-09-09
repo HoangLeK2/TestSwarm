@@ -681,6 +681,8 @@ class RelayAgent:
         self._template_cache: "OrderedDict[str, bytes]" = OrderedDict()
         self._u2_batch_tasks: dict[str, asyncio.Task] = {}
         self._u2_batch_cancel_events: dict[str, asyncio.Event] = {}
+        self._u2_flow_tasks: dict[str, asyncio.Task] = {}
+        self._u2_flow_cancel_events: dict[str, asyncio.Event] = {}
         self._command_max_queue = max(8, _env_int("COMMAND_MAX_QUEUE_PER_DEVICE", 128))
         self._command_state: dict[str, dict[str, Any]] = {}
         self._loop_watchdog: Optional[LoopWatchdog] = None
@@ -2049,14 +2051,31 @@ class RelayAgent:
             self._cancel_u2_batch(str(message_get(msg, "id", "") or ""))
 
         elif mtype == "u2_flow":
-            self._stream_tasks.add(
+            msg_dict = message_to_dict(msg)
+            req_id = str(msg_dict.get("id", "") or "")
+            if req_id:
+                cancel_event = asyncio.Event()
+                msg_dict["_cancel_event"] = cancel_event
+                self._u2_flow_cancel_events[req_id] = cancel_event
+            task = self._stream_tasks.add(
                 self._guarded(
                     u2_flow_sem(),
-                    self._handle_u2_flow(message_to_dict(msg), send_queue),
+                    self._handle_u2_flow(msg_dict, send_queue),
                     label="u2_flow",
                 ),
                 name="u2-flow",
             )
+            if req_id:
+                self._u2_flow_tasks[req_id] = task
+                task.add_done_callback(
+                    lambda _task, _req_id=req_id: (
+                        self._u2_flow_tasks.pop(_req_id, None),
+                        self._u2_flow_cancel_events.pop(_req_id, None),
+                    )
+                )
+
+        elif mtype == "u2_flow_cancel":
+            self._cancel_u2_flow(str(message_get(msg, "id", "") or ""))
 
         elif mtype == "extra_data":
             msg_dict = message_to_dict(msg)
@@ -3380,6 +3399,7 @@ class RelayAgent:
                 priority=msg.get("priority")
                 or ("visible" if msg.get("visible") or msg.get("focused") else None),
                 deadline_ms=msg.get("deadline_ms") or msg.get("timeout_ms"),
+                cancel_event=msg.get("_cancel_event"),
             )
         result["type"] = "u2_flow_result"
         result["id"] = msg.get("id", "")
@@ -3898,6 +3918,18 @@ class RelayAgent:
         if task is None or task.done():
             return event is not None
         logger.info("u2_batch cancel requested request_id=%s", req_id)
+        return True
+
+    def _cancel_u2_flow(self, req_id: str) -> bool:
+        if not req_id:
+            return False
+        event = self._u2_flow_cancel_events.get(req_id)
+        if event is not None:
+            event.set()
+        task = self._u2_flow_tasks.get(req_id)
+        if task is None or task.done():
+            return event is not None
+        logger.info("u2_flow cancel requested request_id=%s", req_id)
         return True
 
     async def _enqueue_command(

@@ -30,17 +30,17 @@ import { TablePaginationControls } from '@/components/ui/table/data-table-pagina
 import { CoreEmptyState } from '@/components/core-empty-state';
 import { RefreshCw, Search, Smartphone, X } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import { isVisibleDeviceFarmActiveDevice } from '../lib/device-farm-visible-devices';
+import {
+  filterDeviceFarmActiveGridDevices,
+  isVisibleDeviceFarmActiveDevice
+} from '../lib/device-farm-visible-devices';
 import {
   ALL_RUNS,
   filterDeviceFarmDevices,
   listDeviceFarmRuns,
   type DeviceFarmActivityFilter
 } from '../lib/device-farm-filter';
-import {
-  hasMediaPlanePreview,
-  isGridWebRtcPreviewEnabled
-} from '../lib/device-tile-preview-policy';
+import { isGridWebRtcPreviewEnabled } from '../lib/device-tile-preview-policy';
 import {
   DEVICE_GRID_ESTIMATED_ROW_HEIGHT_PX,
   DEVICE_GRID_GAP_PX,
@@ -101,33 +101,32 @@ export function DeviceFarm() {
     liveSnapshotAuthoritative: true
   });
 
-  const activeDeviceCount = useMemo(
-    () =>
-      devices.filter(
-        (device) =>
-          isVisibleDeviceFarmActiveDevice(device) ||
-          hasMediaPlanePreview(device)
-      ).length,
-    [devices]
+  const visibleDevices = useMemo(
+    () => (error ? [] : filterDeviceFarmActiveGridDevices(devices)),
+    [devices, error]
   );
+  const activeDeviceCount = visibleDevices.length;
   const readyDeviceCount = useMemo(
     () =>
-      devices.filter((device) =>
+      visibleDevices.filter((device) =>
         device.health
           ? device.health.command.status === 'ready'
           : isVisibleDeviceFarmActiveDevice(device) &&
             device.state?.toUpperCase() !== 'BUSY'
       ).length,
-    [devices]
+    [visibleDevices]
   );
 
   const [query, setQuery] = useState('');
   const [activity, setActivity] = useState<DeviceFarmActivityFilter>('all');
   const [runKey, setRunKey] = useState<string>(ALL_RUNS);
-  const runs = useMemo(() => listDeviceFarmRuns(devices), [devices]);
+  const runs = useMemo(
+    () => listDeviceFarmRuns(visibleDevices),
+    [visibleDevices]
+  );
   const filteredDevices = useMemo(
-    () => filterDeviceFarmDevices(devices, { query, activity, runKey }),
-    [devices, query, activity, runKey]
+    () => filterDeviceFarmDevices(visibleDevices, { query, activity, runKey }),
+    [activity, query, runKey, visibleDevices]
   );
   const isFiltered =
     query.trim().length > 0 || activity !== 'all' || runKey !== ALL_RUNS;
@@ -151,7 +150,7 @@ export function DeviceFarm() {
   const renderMode = getDeviceGridRenderMode({
     isInitialError,
     isInitialLoading,
-    deviceCount: devices.length,
+    deviceCount: visibleDevices.length,
     filteredCount: filteredDevices.length
   });
 

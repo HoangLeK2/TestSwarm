@@ -114,6 +114,25 @@ def scenario_requires_account(steps: list[dict]) -> bool:
     return any(_step_requires_account(step) for step, _, _ in idx.entries)
 
 
+def scenario_body_requires_account(body: dict[str, Any]) -> bool:
+    if not isinstance(body, dict):
+        return False
+    requirements = body.get("requirements")
+    if isinstance(requirements, dict):
+        platform_session = requirements.get("platform_session") or requirements.get(
+            "platformSession"
+        )
+        entries = (
+            platform_session if isinstance(platform_session, list) else [platform_session]
+        )
+        if any(
+            isinstance(entry, dict) and entry.get("required") is not False
+            for entry in entries
+        ):
+            return True
+    return scenario_requires_account(body.get("steps") or [])
+
+
 def _step_references_account_vars(step: dict) -> bool:
     config = step.get("config")
     if isinstance(config, dict):
@@ -130,11 +149,24 @@ async def load_pinned_scenario_steps(
     campaign: Campaign,
     org_id: str,
 ) -> list[dict]:
+    steps, _requires_account = await _load_pinned_scenario_steps_and_account_requirement(
+        db,
+        campaign,
+        org_id,
+    )
+    return steps
+
+
+async def _load_pinned_scenario_steps_and_account_requirement(
+    db: AsyncSession,
+    campaign: Campaign,
+    org_id: str,
+) -> tuple[list[dict], bool]:
     from db.crud.campaign_entity import loaded_org_scenario_refs
 
     refs = loaded_org_scenario_refs(campaign)
     if not refs:
-        return []
+        return [], False
     from db.crud import org_scenario as org_scenario_repo
 
     ordered = sorted(refs, key=lambda r: int(r.order_index or 0))
@@ -142,13 +174,15 @@ async def load_pinned_scenario_steps(
     bodies = await org_scenario_repo.get_org_scenario_bodies_by_ids(db, org_id, scenario_ids)
     body_map = {scenario_id: body for scenario_id, _kind, body in bodies}
     steps: list[dict] = []
+    requires_account = False
     for ref in ordered:
         body = body_map.get(ref.org_scenario_id) or {}
         if isinstance(body, dict):
+            requires_account = requires_account or scenario_body_requires_account(body)
             raw = body.get("steps") or []
             if isinstance(raw, list):
                 steps.extend(raw)
-    return steps
+    return steps, requires_account
 
 
 async def assert_dispatch_account_guard(
@@ -264,8 +298,10 @@ async def resolve_accounts_for_devices(
         return {}
 
     now = datetime.now(timezone.utc)
-    requires_account = scenario_requires_account(
-        await load_pinned_scenario_steps(db, campaign, org_id)
+    _steps, requires_account = await _load_pinned_scenario_steps_and_account_requirement(
+        db,
+        campaign,
+        org_id,
     )
 
     per_device_accounts = {

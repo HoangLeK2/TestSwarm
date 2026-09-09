@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, call
 
@@ -1505,6 +1506,307 @@ async def test_fb_scan_posts_interact_likes_and_comments_keyword_post(
         description="Viết bình luận công khai",
     )
     dev.return_value.set_text.assert_called_once_with("Quan điểm rất hữu ích")
+
+
+@pytest.mark.asyncio
+async def test_fb_scan_posts_interact_can_like_without_comment(executor_with_device):
+    exc, dev = executor_with_device
+    feed_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Một bài viết về tuyển dụng AI trong doanh nghiệp" clickable="false" bounds="[42,520][1218,690]" />
+        <node text="" content-desc="Nút Thích. Hãy nhấn đúp và giữ để bày tỏ cảm xúc về bình luận." clickable="true" bounds="[42,820][227,910]" />
+        <node text="" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." clickable="true" bounds="[227,820][457,910]" />
+      </node>
+    </hierarchy>
+    """
+    liked_xml = feed_xml.replace("Nút Thích.", "Đã thích.")
+    dev.dump_hierarchy.side_effect = [feed_xml, liked_xml]
+
+    result = await exc.execute_flow(
+        "serial",
+        "social_scan_posts_interact",
+        {
+            "keywords": ["tuyển dụng AI"],
+            "target_count": 1,
+            "max_scrolls": 0,
+            "like_post": True,
+            "require_comment": False,
+        },
+    )
+
+    assert result["ok"] is True
+    value = result["value"]
+    assert value["verified"] is True
+    assert value["liked_count"] == 1
+    assert value["commented_count"] == 0
+    assert dev.click.call_args_list == [call(134, 865)]
+
+
+@pytest.mark.asyncio
+async def test_fb_scan_posts_interact_can_comment_without_like(executor_with_device):
+    exc, dev = executor_with_device
+    feed_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Một bài viết về tuyển dụng AI trong doanh nghiệp" clickable="false" bounds="[42,520][1218,690]" />
+        <node text="" content-desc="Nút Thích. Hãy nhấn đúp và giữ để bày tỏ cảm xúc về bình luận." clickable="true" bounds="[42,820][227,910]" />
+        <node text="" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." clickable="true" bounds="[227,820][457,910]" />
+      </node>
+    </hierarchy>
+    """
+    comment_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node class="android.widget.EditText" text="" content-desc="Viết bình luận công khai" clickable="true" bounds="[42,2470][980,2590]" />
+      </node>
+    </hierarchy>
+    """
+    submit_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node class="android.widget.EditText" text="Quan điểm rất hữu ích" content-desc="Viết bình luận công khai" clickable="true" bounds="[42,2470][980,2590]" />
+        <node text="Đăng" clickable="true" bounds="[1030,2470][1218,2590]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.side_effect = [feed_xml, comment_xml, submit_xml]
+
+    result = await exc.execute_flow(
+        "serial",
+        "social_scan_posts_interact",
+        {
+            "verify_like": False,
+            "keywords": ["tuyển dụng AI"],
+            "comment_text": "Quan điểm rất hữu ích",
+            "target_count": 1,
+            "max_scrolls": 0,
+            "like_post": False,
+            "require_comment": True,
+        },
+    )
+
+    assert result["ok"] is True
+    value = result["value"]
+    assert value["verified"] is True
+    assert value["liked_count"] == 0
+    assert value["commented_count"] == 1
+    assert dev.click.call_args_list == [
+        call(342, 865),
+        call(511, 2530),
+        call(1124, 2530),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fb_scan_posts_interact_keyword_match_modes_are_precise(
+    executor_with_device,
+):
+    exc, dev = executor_with_device
+    first_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Bài viết tuyển dụng Python cho backend" clickable="false" bounds="[42,520][1218,690]" />
+        <node text="" content-desc="Nút Thích. Hãy nhấn đúp và giữ để bày tỏ cảm xúc về bình luận." clickable="true" bounds="[42,820][227,910]" />
+        <node text="" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." clickable="true" bounds="[227,820][457,910]" />
+      </node>
+    </hierarchy>
+    """
+    second_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Doanh nghiệp cần tuyển dụng kỹ sư AI" clickable="false" bounds="[42,520][1218,690]" />
+        <node text="" content-desc="Nút Thích. Hãy nhấn đúp và giữ để bày tỏ cảm xúc về bình luận." clickable="true" bounds="[42,820][227,910]" />
+        <node text="" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." clickable="true" bounds="[227,820][457,910]" />
+      </node>
+    </hierarchy>
+    """
+    liked_xml = second_xml.replace("Nút Thích.", "Đã thích.")
+    dev.dump_hierarchy.side_effect = [first_xml, second_xml, liked_xml]
+
+    result = await exc.execute_flow(
+        "serial",
+        "social_scan_posts_interact",
+        {
+            "keywords": ["tuyển dụng", "AI"],
+            "match_mode": "all",
+            "target_count": 1,
+            "max_scrolls": 1,
+            "like_post": True,
+            "require_comment": False,
+            "scroll_wait_s": 0,
+        },
+    )
+
+    assert result["ok"] is True
+    value = result["value"]
+    assert value["verified"] is True
+    assert value["screens_scanned"] == 2
+    assert value["actions"][0]["matched_keywords"] == ["tuyen dung", "ai"]
+    assert dev.swipe.called
+    assert dev.click.call_args_list == [call(134, 865)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("post_text", "keywords", "match_mode", "expected_terms"),
+    [
+        (
+            "Tuyển dụng, AI, automation trong cùng một post",
+            ["tuyển dụng", "AI"],
+            "all",
+            ["tuyen dung", "ai"],
+        ),
+        (
+            "Team đang tuyển dụng AI-engineer remote",
+            ["tuyển dụng", "AI"],
+            "all",
+            ["tuyen dung", "ai"],
+        ),
+        (
+            "Backend C++ và Python đều cần automation",
+            ["C++", "Python"],
+            "all",
+            ["c++", "python"],
+        ),
+        (
+            "Bài viết chỉ nhắc tuyển dụng backend",
+            ["tuyển dụng AI", "backend"],
+            "any",
+            ["backend"],
+        ),
+    ],
+)
+async def test_fb_scan_posts_interact_keyword_positive_boundaries(
+    executor_with_device,
+    post_text,
+    keywords,
+    match_mode,
+    expected_terms,
+):
+    exc, dev = executor_with_device
+    feed_xml = f"""<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="{post_text}" clickable="false" bounds="[42,520][1218,690]" />
+        <node text="" content-desc="Nút Thích. Hãy nhấn đúp và giữ để bày tỏ cảm xúc về bình luận." clickable="true" bounds="[42,820][227,910]" />
+        <node text="" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." clickable="true" bounds="[227,820][457,910]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.return_value = feed_xml
+
+    result = await exc.execute_flow(
+        "serial",
+        "social_scan_posts_interact",
+        {
+            "verify_like": False,
+            "keywords": keywords,
+            "match_mode": match_mode,
+            "target_count": 1,
+            "max_scrolls": 0,
+            "like_post": True,
+            "require_comment": False,
+        },
+    )
+
+    assert result["ok"] is True
+    value = result["value"]
+    assert value["verified"] is True
+    assert value["interacted_count"] == 1
+    assert value["actions"][0]["matched_keywords"] == expected_terms
+    assert dev.click.call_args_list == [call(134, 865)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("post_text", "keywords", "match_mode"),
+    [
+        ("OpenAI workflow cần kiểm thử thêm", ["AI"], "any"),
+        ("Bài toán tuyển dụng senior engineer", ["AI"], "any"),
+        ("Không tuyển dụng frontend tuần này", ["tuyển dụng AI"], "any"),
+        ("Bài viết tuyển dụng Python cho backend", ["tuyển dụng", "AI"], "all"),
+    ],
+)
+async def test_fb_scan_posts_interact_keyword_negative_boundaries_do_not_click(
+    executor_with_device,
+    post_text,
+    keywords,
+    match_mode,
+):
+    exc, dev = executor_with_device
+    feed_xml = f"""<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="{post_text}" clickable="false" bounds="[42,520][1218,690]" />
+        <node text="" content-desc="Nút Thích. Hãy nhấn đúp và giữ để bày tỏ cảm xúc về bình luận." clickable="true" bounds="[42,820][227,910]" />
+        <node text="" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." clickable="true" bounds="[227,820][457,910]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.return_value = feed_xml
+
+    result = await exc.execute_flow(
+        "serial",
+        "social_scan_posts_interact",
+        {
+            "verify_like": False,
+            "keywords": keywords,
+            "match_mode": match_mode,
+            "target_count": 1,
+            "max_scrolls": 0,
+            "like_post": True,
+            "require_comment": False,
+        },
+    )
+
+    assert result["ok"] is True
+    value = result["value"]
+    assert value["verified"] is False
+    assert value["reason"] == "no_matching_post"
+    assert value["interacted_count"] == 0
+    assert value["candidate_count"] == 0
+    dev.click.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fb_scan_posts_interact_stops_when_cancelled_between_screens(
+    executor_with_device,
+):
+    exc, dev = executor_with_device
+    cancel_event = threading.Event()
+    feed_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Bài viết không khớp keyword" clickable="false" bounds="[42,520][1218,690]" />
+        <node text="" content-desc="Nút Thích. Hãy nhấn đúp và giữ để bày tỏ cảm xúc về bình luận." clickable="true" bounds="[42,820][227,910]" />
+        <node text="" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." clickable="true" bounds="[227,820][457,910]" />
+      </node>
+    </hierarchy>
+    """
+
+    def _cancel_after_first_dump(*_args, **_kwargs):
+        cancel_event.set()
+        return feed_xml
+
+    dev.dump_hierarchy.side_effect = _cancel_after_first_dump
+
+    result = await exc.execute_flow(
+        "serial",
+        "social_scan_posts_interact",
+        {
+            "keywords": ["AI"],
+            "target_count": 1,
+            "max_scrolls": 10,
+            "_cancel_event": cancel_event,
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["cancelled"] is True
+    assert result["error"] == "cancelled"
+    dev.click.assert_not_called()
+    dev.swipe.assert_not_called()
 
 
 @pytest.mark.asyncio

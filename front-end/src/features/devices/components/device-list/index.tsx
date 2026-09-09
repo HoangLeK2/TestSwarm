@@ -36,7 +36,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
-const DEFAULT_FILTER: DeviceFsmFilterKey = 'all';
+const DEFAULT_FILTER: DeviceFsmFilterKey = 'transport_online';
 
 export function DeviceList() {
   const locale = useLocale();

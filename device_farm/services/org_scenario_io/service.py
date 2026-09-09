@@ -70,6 +70,20 @@ def _template_body_json(template) -> dict[str, Any]:
     edges = template.edges if isinstance(template.edges, list) else []
     variables = template.variables if isinstance(template.variables, dict) else {}
     body: dict[str, Any] = {"variables": variables}
+    tags = str(getattr(template, "tags", "") or "")
+    for token in tags.replace(",", " ").split():
+        marker = "requires-platform-session:"
+        if token.startswith(marker):
+            platform = token[len(marker) :].strip()
+            if platform:
+                body["requirements"] = {
+                    "platform_session": {
+                        "required": True,
+                        "platform": platform,
+                        "account_source": "device_primary",
+                    }
+                }
+                break
     # Runtime / org library: sequence only. Template graph mirror (nodes/edges) is
     # stored on scenario_templates for a future flow editor — not cloned to org.
     if steps:

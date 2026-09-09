@@ -246,6 +246,7 @@ export const DEVICE_RAIL_STEP_TYPES = new Set<string>([
 ]);
 
 const _INSERT_MENU_HIDDEN_TYPES = new Set<string>([
+  'platform_session_gate',
   'pull_file',
   'extract_text_hierarchy',
   'extract_text_ai',

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -54,8 +55,9 @@ class _FakeDevice:
         timeout: float = 30.0,
         priority: object = None,
         deadline_ms: object = None,
+        cancel_event: object = None,
     ) -> dict[str, object]:
-        self.flows.append((name, params, timeout, priority, deadline_ms))
+        self.flows.append((name, params, timeout, priority, deadline_ms, cancel_event))
         if self.flow_result is None:
             raise RuntimeError("u2 flow not configured")
         return self.flow_result
@@ -853,6 +855,34 @@ def test_fb_scan_posts_interact_delegates_to_agent_boot() -> None:
     assert sc.ctx["vars"]["_post_scan"]["interacted_count"] == 2
 
 
+def test_fb_scan_posts_interact_forwards_cancel_event() -> None:
+    from tasks.scenario.steps import dispatch_step
+
+    device = _FakeDevice(_xml())
+    device.flow_result = {
+        "verified": False,
+        "batch": True,
+        "reason": "no_matching_post",
+        "interacted_count": 0,
+    }
+    cancel_event = threading.Event()
+    sc = _context(device)
+    sc.cancel_event = cancel_event
+
+    dispatch_step(
+        sc,
+        {
+            "type": "social_scan_posts_interact",
+            "keywords": ["AI"],
+            "target_count": 1,
+            "max_scrolls": 6,
+        },
+        0,
+    )
+
+    assert device.flows[0][5] is cancel_event
+
+
 def test_fb_scan_posts_interact_resolves_runtime_variable_fields() -> None:
     from tasks.scenario.steps import dispatch_step
 
@@ -891,7 +921,7 @@ def test_fb_scan_posts_interact_resolves_runtime_variable_fields() -> None:
         0,
     )
 
-    flow_name, params, timeout, priority, _deadline_ms = device.flows[0]
+    flow_name, params, timeout, priority, _deadline_ms, _cancel_event = device.flows[0]
     assert result["ok"] is True
     assert flow_name == "social_scan_posts_interact"
     assert priority == "visible"

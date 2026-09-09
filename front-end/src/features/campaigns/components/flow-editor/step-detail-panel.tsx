@@ -1040,11 +1040,9 @@ export function StepDetailPanel({
   );
   const {
     optionsForStep,
-    isLoading: platformsLoading,
-    isError: platformsError
+    isLoading: platformCapabilitiesLoading,
+    isError: platformCapabilitiesError
   } = usePlatformCapabilities();
-  // No matrix yet is not the same as "this provider cannot run the node".
-  const platformSupportUnknown = platformsLoading || platformsError;
   const variableInfoT = useVariableInfoTranslator();
   const fallbackText = (value: string, key: string, vi: string, en: string) =>
     value.endsWith(`.${key}`) ? (locale.startsWith('vi') ? vi : en) : value;
@@ -1206,6 +1204,11 @@ export function StepDetailPanel({
       : 'Auto');
   const selectedSocialPlatformSupported =
     selectedSocialPlatform?.supported ?? false;
+  const socialPlatformCapabilityUnknown =
+    platformCapabilitiesLoading ||
+    platformCapabilitiesError ||
+    socialPlatformOptions.length === 0 ||
+    !selectedSocialPlatform;
   const socialActionOptions = getSocialActionOptions(
     step.type,
     selectedSocialPlatform?.facets
@@ -1228,12 +1231,13 @@ export function StepDetailPanel({
   ].includes(step.type);
   const missingCommentText =
     showContentCommentText && !String(step.comment_text ?? '').trim();
-  const socialSetupState = platformSupportUnknown
-    ? 'needs_setup'
-    : !selectedSocialPlatformSupported
-      ? 'unsupported'
-      : !currentSocialActionSupported || missingCommentText
-        ? 'needs_setup'
+  const socialSetupState =
+    socialPlatformCapabilityUnknown ||
+    !currentSocialActionSupported ||
+    missingCommentText
+      ? 'needs_setup'
+      : !selectedSocialPlatformSupported
+        ? 'unsupported'
         : 'ready';
   const socialSetupBadgeClassName =
     socialSetupState === 'ready'
@@ -2669,24 +2673,29 @@ export function StepDetailPanel({
                       />
                     </F>
                   </div>
-                  <label className='flex items-center gap-2 text-xs text-muted-foreground'>
-                    <input
-                      type='checkbox'
-                      checked={step.like_post ?? true}
-                      onChange={(e) => update({ like_post: e.target.checked })}
-                    />
-                    Like post khi match
-                  </label>
-                  <label className='flex items-center gap-2 text-xs text-muted-foreground'>
-                    <input
-                      type='checkbox'
-                      checked={step.require_comment ?? true}
-                      onChange={(e) =>
-                        update({ require_comment: e.target.checked })
-                      }
-                    />
-                    {tField('requireCommentSubmitted')}
-                  </label>
+                  <div className='space-y-1.5'>
+                    <div className='text-xs font-medium'>
+                      {tField('interactionMode')}
+                    </div>
+                    <label className='flex items-center gap-2 text-xs text-muted-foreground'>
+                      <input
+                        type='checkbox'
+                        checked={step.like_post ?? true}
+                        onChange={(e) => update({ like_post: e.target.checked })}
+                      />
+                      {tField('interactionLikeOption')}
+                    </label>
+                    <label className='flex items-center gap-2 text-xs text-muted-foreground'>
+                      <input
+                        type='checkbox'
+                        checked={step.require_comment ?? true}
+                        onChange={(e) =>
+                          update({ require_comment: e.target.checked })
+                        }
+                      />
+                      {tField('interactionCommentOption')}
+                    </label>
+                  </div>
                 </>
               )}
 
@@ -2850,69 +2859,77 @@ export function StepDetailPanel({
                     <StepPanelHint>
                       {tField('capabilitySetupHint')}
                     </StepPanelHint>
-                    <div className='grid gap-2 sm:grid-cols-3'>
-                      <div className='rounded-md border bg-background/80 p-2.5'>
-                        <div className='mb-1 flex items-center justify-between gap-2'>
-                          <span className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>
-                            1 · {tField('runTarget')}
-                          </span>
-                          <Badge
-                            variant='secondary'
-                            className='max-w-24 truncate'
-                          >
-                            {selectedSocialPlatformLabel}
-                          </Badge>
-                        </div>
-                        <p className='text-[11px] leading-relaxed text-muted-foreground'>
-                          {selectedSocialPlatform?.coverage ??
-                            tField('selectProviderAbove')}
-                        </p>
-                      </div>
-                      <div className='rounded-md border bg-background/80 p-2.5'>
-                        <div className='mb-1 flex items-center justify-between gap-2'>
-                          <span className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>
-                            2 · {tField('target')}
-                          </span>
-                          <Badge
-                            variant='outline'
-                            className='max-w-24 truncate'
-                          >
-                            {step.require_verified_target
-                              ? tField('verified')
-                              : tField('currentScreen')}
-                          </Badge>
-                        </div>
-                        <p className='truncate font-mono text-[11px] text-muted-foreground'>
-                          {step.require_verified_target ??
-                            tField('currentScreenTarget')}
-                        </p>
-                      </div>
-                      <div className='rounded-md border bg-background/80 p-2.5'>
-                        <div className='mb-1 flex items-center justify-between gap-2'>
-                          <span className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>
-                            3 · {tField('action')}
-                          </span>
-                          <Badge
-                            variant={
-                              currentSocialActionSupported
-                                ? 'secondary'
-                                : 'destructive'
-                            }
-                            className='max-w-24 truncate'
-                          >
-                            {socialActionLabel}
-                          </Badge>
-                        </div>
-                        <p className='text-[11px] leading-relaxed text-muted-foreground'>
-                          {showContentCommentText
+                    <div className='space-y-1.5'>
+                      {[
+                        {
+                          number: 1,
+                          label: tField('runTarget'),
+                          value: selectedSocialPlatformLabel,
+                          detail:
+                            selectedSocialPlatform?.coverage ??
+                            tField('selectProviderAbove'),
+                          mono: false,
+                          tone: 'secondary' as const
+                        },
+                        {
+                          number: 2,
+                          label: tField('target'),
+                          value: step.require_verified_target
+                            ? tField('verified')
+                            : tField('currentScreen'),
+                          detail:
+                            step.require_verified_target ??
+                            tField('currentScreenTarget'),
+                          mono: Boolean(step.require_verified_target),
+                          tone: 'outline' as const
+                        },
+                        {
+                          number: 3,
+                          label: tField('action'),
+                          value: socialActionLabel,
+                          detail: showContentCommentText
                             ? missingCommentText
                               ? tField('commentTextRequired')
                               : tField('commentTextReady')
-                            : tField('providerActionResolved')}
-                        </p>
-                      </div>
+                            : tField('providerActionResolved'),
+                          mono: false,
+                          tone: currentSocialActionSupported
+                            ? ('secondary' as const)
+                            : ('destructive' as const)
+                        }
+                      ].map((item) => (
+                        <div
+                          key={item.number}
+                          className='grid min-w-0 grid-cols-[1.4rem_minmax(0,1fr)_auto] items-center gap-2 rounded-md border bg-background/80 px-2 py-1.5'
+                        >
+                          <span className='flex size-5 items-center justify-center rounded-full border bg-muted text-[10px] font-semibold text-muted-foreground'>
+                            {item.number}
+                          </span>
+                          <span className='min-w-0'>
+                            <span className='block truncate text-[11px] font-semibold text-foreground'>
+                              {item.label}
+                            </span>
+                            <span
+                              className={cn(
+                                'block truncate text-[10px] text-muted-foreground',
+                                item.mono && 'font-mono'
+                              )}
+                              title={item.detail}
+                            >
+                              {item.detail}
+                            </span>
+                          </span>
+                          <Badge
+                            variant={item.tone}
+                            className='max-w-24 shrink-0 truncate px-1.5 text-[10px]'
+                            title={item.value}
+                          >
+                            {item.value}
+                          </Badge>
+                        </div>
+                      ))}
                     </div>
-                    {!platformSupportUnknown &&
+                    {!socialPlatformCapabilityUnknown &&
                       !selectedSocialPlatformSupported && (
                         <p className='rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-[11px] leading-relaxed text-destructive'>
                           {tField('unsupportedProviderHint')}

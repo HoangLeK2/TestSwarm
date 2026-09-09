@@ -190,6 +190,7 @@ def _build_scenario_registry(
             "steps": s.steps or [],
             "variables": _vars,
             "name": s.name,
+            "tags": getattr(s, "tags", "") or "",
         }
         registry["by_id"][s.id] = entry
         # Last writer wins for duplicate names (same campaign, shouldn't happen).
@@ -200,6 +201,7 @@ def _build_scenario_registry(
             "steps": t.steps or [],
             "variables": t.variables or {},
             "name": t.name,
+            "tags": t.tags or "",
         }
     return registry
 

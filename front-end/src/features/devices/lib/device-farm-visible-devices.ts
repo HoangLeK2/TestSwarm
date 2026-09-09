@@ -65,3 +65,17 @@ export function filterVisibleDeviceFarmDevices(
     return true;
   });
 }
+
+export function filterDeviceFarmActiveGridDevices(devices: Device[]): Device[] {
+  return devices.filter((device) => {
+    if (device.health) {
+      return (
+        device.health.agent.status !== 'offline' &&
+        device.health.command.status !== 'unavailable'
+      );
+    }
+    return (
+      isVisibleDeviceFarmActiveDevice(device) && hasLiveTransportEvidence(device)
+    );
+  });
+}

@@ -36,6 +36,7 @@ class TestU2FlowWrapper:
         d._u2_batch = MagicMock()
         d._u2_batch.flow.return_value = {"found": True, "swipes": 2}
         d._u2 = MagicMock()
+        cancel_event = threading.Event()
 
         result = d.u2_flow(
             "swipe_until_found",
@@ -43,6 +44,7 @@ class TestU2FlowWrapper:
             timeout=7.0,
             priority="visible",
             deadline_ms=250,
+            cancel_event=cancel_event,
         )
 
         assert result == {"found": True, "swipes": 2}
@@ -52,6 +54,7 @@ class TestU2FlowWrapper:
             timeout=7.0,
             priority="visible",
             deadline_ms=250,
+            cancel_event=cancel_event,
         )
         d._u2.flow.assert_not_called()
 

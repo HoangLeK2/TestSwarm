@@ -200,6 +200,9 @@ async def build_org_scenario_registry(
             "steps": payload.get("steps") or [],
             "variables": dict(payload.get("variables") or {}),
             "name": name,
+            "requirements": dict(payload.get("requirements") or {}),
+            "platform": payload.get("platform"),
+            "tags": str(payload.get("tags") or ""),
         }
         registry["by_id"][scenario_id] = entry
         registry["by_campaign_name"][name] = entry
@@ -763,12 +766,18 @@ async def start_execution_runtime(
     from services.platform_session_runtime import (
         guard_reason_allows_login_recovery,
         scenario_registry_has_platform_login_gate,
+        scenario_registry_platform_session_requirements,
     )
 
     allows_login_recovery = scenario_registry_has_platform_login_gate(
         scenario_registry,
         scenario_refs,
     )
+    platform_session_requirements = scenario_registry_platform_session_requirements(
+        scenario_registry,
+        scenario_refs,
+    )
+    requires_facebook_session = "facebook" in platform_session_requirements
     campaign_vars = _runtime_campaign_vars(campaign)
     scenario_ids = [
         str(ref["scenario_id"])

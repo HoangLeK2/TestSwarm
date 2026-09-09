@@ -82,6 +82,95 @@ def _fb_node(
     )
 
 
+def test_fb_scan_post_keyword_match_uses_word_boundaries_for_short_terms():
+    matched, terms = u2_exec_mod._fb_scan_post_keyword_match(
+        "Bài viết tuyển dụng Python cho backend",
+        terms=["tuyen dung", "ai"],
+        match_mode="all",
+    )
+
+    assert matched is False
+    assert terms == ["tuyen dung"]
+
+
+@pytest.mark.parametrize(
+    ("text", "terms", "match_mode", "expected_matched", "expected_terms"),
+    [
+        (
+            "Bài viết tuyển dụng AI cho doanh nghiệp",
+            ["tuyen dung", "ai"],
+            "all",
+            True,
+            ["tuyen dung", "ai"],
+        ),
+        (
+            "Bai viet tuyen dung Python cho backend",
+            ["tuyen dung", "ai"],
+            "any",
+            True,
+            ["tuyen dung"],
+        ),
+        (
+            "OpenAI workflow cần kiểm thử thêm",
+            ["ai"],
+            "any",
+            False,
+            [],
+        ),
+        (
+            "Bài toán tuyển dụng senior engineer",
+            ["ai"],
+            "any",
+            False,
+            [],
+        ),
+        (
+            "Tuyển dụng, AI, automation trong cùng một post",
+            ["tuyen dung", "ai"],
+            "all",
+            True,
+            ["tuyen dung", "ai"],
+        ),
+        (
+            "Team đang tuyển dụng AI-engineer remote",
+            ["tuyen dung", "ai"],
+            "all",
+            True,
+            ["tuyen dung", "ai"],
+        ),
+        (
+            "Backend C++ và Python đều cần automation",
+            ["c++", "python"],
+            "all",
+            True,
+            ["c++", "python"],
+        ),
+        (
+            "Không tuyển dụng frontend tuần này",
+            ["tuyen dung ai"],
+            "any",
+            False,
+            [],
+        ),
+    ],
+)
+def test_fb_scan_post_keyword_match_handles_real_keyword_boundaries(
+    text,
+    terms,
+    match_mode,
+    expected_matched,
+    expected_terms,
+):
+    matched, matched_terms = u2_exec_mod._fb_scan_post_keyword_match(
+        text,
+        terms=terms,
+        match_mode=match_mode,
+    )
+
+    assert matched is expected_matched
+    assert matched_terms == expected_terms
+
+
 def test_flow_fb_connect_visible_people_clicks_only_common_context_row(monkeypatch):
     monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
     before = _fb_xml(

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  filterDeviceFarmActiveGridDevices,
   filterVisibleDeviceFarmDevices,
   isVisibleDeviceFarmActiveDevice
 } from './device-farm-visible-devices.ts';
@@ -14,7 +15,8 @@ function live(serial: string): Device {
     brand: '',
     model: '',
     state: 'ONLINE',
-    battery: -1
+    battery: -1,
+    agent_connected: true
   };
 }
 
@@ -177,10 +179,62 @@ test('dashboard active check drops explicit offline devices without live transpo
     isVisibleDeviceFarmActiveDevice({
       ...live('offline-1'),
       state: 'DeviceState.DISCONNECTED',
+      agent_connected: false,
       touch_method: 'none',
       u2_ready: false,
       minitouch_ready: false
     }),
     false
+  );
+});
+
+test('device farm active grid drops dead phones even with stale media-plane flags', () => {
+  const devices = [
+    live('active-1'),
+    {
+      ...live('10AE7S00HD002JK'),
+      state: 'DEAD',
+      agent_connected: false,
+      stf_connected: false,
+      media_adapter_connected: true,
+      media_stream_active: true,
+      media_stream_connected: true
+    }
+  ];
+
+  assert.deepEqual(
+    filterDeviceFarmActiveGridDevices(devices).map((device) => device.serial),
+    ['active-1']
+  );
+});
+
+test('device farm active grid drops media-only phones without command channel', () => {
+  const devices = [
+    live('active-1'),
+    {
+      ...live('10AE7S00HD002JK'),
+      state: 'MEDIA_READY',
+      agent_connected: false,
+      stf_connected: false,
+      u2_ready: false,
+      minitouch_ready: false,
+      touch_method: 'none',
+      media_adapter_connected: true,
+      media_stream_active: true,
+      media_stream_connected: true,
+      health: {
+        overall: 'offline',
+        agent: { status: 'offline' },
+        stream: { status: 'starting' },
+        command: { status: 'unavailable' },
+        evaluated_at: '',
+        reason_codes: []
+      }
+    }
+  ];
+
+  assert.deepEqual(
+    filterDeviceFarmActiveGridDevices(devices).map((device) => device.serial),
+    ['active-1']
   );
 });

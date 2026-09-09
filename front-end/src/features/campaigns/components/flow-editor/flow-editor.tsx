@@ -73,7 +73,7 @@ import {
   updateStepAtPath,
   type BracketChildRef
 } from './step-tree-walk';
-import { insertStepAtPath } from './insert-step-at-path';
+import { insertStepAtPath, insertStepsAtPath } from './insert-step-at-path';
 import { projectVirtualFlowRows } from './virtual-flow-rows';
 import {
   analyzeStepVariableLineage,
@@ -370,6 +370,16 @@ export function FlowEditor({
     [onChange]
   );
 
+  const insertManyAt = useCallback(
+    (index: number, newSteps: FlowStep[]) => {
+      if (newSteps.length === 0) return;
+      const next = [...stepsRef.current];
+      next.splice(index, 0, ...newSteps);
+      onChange(next);
+    },
+    [onChange]
+  );
+
   const removeAt = useCallback(
     (index: number) => {
       onChange(stepsRef.current.filter((_, i) => i !== index));
@@ -616,6 +626,7 @@ export function FlowEditor({
                 <div key={stepIds[i]}>
                   <InsertGap
                     onInsert={(s) => insertAt(i, s)}
+                    onInsertMany={(newSteps) => insertManyAt(i, newSteps)}
                     nodeCapabilities={nodeCapabilities}
                     deviceCapabilities={deviceCapabilities}
                     insertLocation={insertLocationFromPath([
@@ -666,6 +677,9 @@ export function FlowEditor({
               <InsertGap
                 persistent
                 onInsert={(s) => insertAt(stepsRef.current.length, s)}
+                onInsertMany={(newSteps) =>
+                  insertManyAt(stepsRef.current.length, newSteps)
+                }
                 nodeCapabilities={nodeCapabilities}
                 deviceCapabilities={deviceCapabilities}
                 insertLocation={insertLocationFromPath([
@@ -1149,6 +1163,12 @@ function VirtualizedFlowEditor({
     },
     [onChange]
   );
+  const insertManyBeforePath = useCallback(
+    (path: BracketChildRef[], newSteps: FlowStep[]) => {
+      onChange(insertStepsAtPath(stepsRef.current, path, newSteps));
+    },
+    [onChange]
+  );
 
   /** insertStepAtPath splices *at* the index, so +1 lands after the step. */
   const insertAfterPath = useCallback(
@@ -1254,6 +1274,11 @@ function VirtualizedFlowEditor({
                 row.kind === 'branch' && !reorderMode
                   ? (step: FlowStep) => insertBeforePath(row.insertPath, step)
                   : undefined;
+              const onInsertManyIntoBranch =
+                row.kind === 'branch' && !reorderMode
+                  ? (newSteps: FlowStep[]) =>
+                      insertManyBeforePath(row.insertPath, newSteps)
+                  : undefined;
               return (
                 <div
                   key={virtualRow.key}
@@ -1267,6 +1292,7 @@ function VirtualizedFlowEditor({
                     nodeCapabilities={nodeCapabilities}
                     deviceCapabilities={deviceCapabilities}
                     onInsert={onInsertIntoBranch}
+                    onInsertMany={onInsertManyIntoBranch}
                   />
                 </div>
               );
@@ -1334,6 +1360,9 @@ function VirtualizedFlowEditor({
                           deviceCapabilities={deviceCapabilities}
                           insertLocation={insertLocationFromPath(row.path)}
                           onInsert={(step) => insertBeforePath(row.path, step)}
+                          onInsertMany={(newSteps) =>
+                            insertManyBeforePath(row.path, newSteps)
+                          }
                           trigger={
                             <button
                               type='button'
@@ -1467,6 +1496,7 @@ function VirtualizedFlowEditor({
               { listKey: 'steps', ci: steps.length }
             ])}
             onInsert={(step) => onChange([...steps, step])}
+            onInsertMany={(newSteps) => onChange([...steps, ...newSteps])}
             trigger={
               <Button
                 type='button'
@@ -1582,7 +1612,8 @@ function VirtualScopeMarker({
   row,
   nodeCapabilities,
   deviceCapabilities,
-  onInsert
+  onInsert,
+  onInsertMany
 }: {
   row: Exclude<
     ReturnType<typeof projectVirtualFlowRows>[number],
@@ -1591,6 +1622,7 @@ function VirtualScopeMarker({
   nodeCapabilities?: NodeCapabilityRegistry;
   deviceCapabilities?: DeviceCapabilityMap;
   onInsert?: (step: FlowStep) => void;
+  onInsertMany?: (steps: FlowStep[]) => void;
 }) {
   const tField = useTranslations('campaignsFeature.stepEditor.stepFields');
   const conditional = row.scopes.at(-1)?.type;
@@ -1689,6 +1721,7 @@ function VirtualScopeMarker({
               deviceCapabilities={deviceCapabilities}
               insertLocation={insertLocationFromPath(row.insertPath)}
               onInsert={onInsert}
+              onInsertMany={onInsertMany}
               trigger={
                 <Button
                   type='button'

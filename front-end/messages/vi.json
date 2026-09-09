@@ -6626,13 +6626,20 @@
       "actions": {
         "copyUrl": "Copy URL",
         "publish": "Publish",
-        "archive": "Lưu trữ"
+        "archive": "Lưu trữ",
+        "delete": "Xoá"
       },
       "toast": {
         "uploaded": "Đã upload APK",
         "published": "Đã publish bản phát hành",
         "archived": "Đã lưu trữ bản phát hành",
+        "deleted": "Đã xoá bản phát hành",
         "copied": "Đã copy URL tải"
+      },
+      "delete": {
+        "title": "Xoá bản phát hành APK?",
+        "description": "Thao tác này xoá vĩnh viễn phiên bản {version} khỏi database và R2 object storage.",
+        "confirm": "Xoá"
       },
       "errors": {
         "fileRequired": "Chọn file APK trước."

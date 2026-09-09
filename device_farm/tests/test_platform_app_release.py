@@ -6,9 +6,11 @@ from io import BytesIO
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from db.database import Base
+from db.models.platform_app_release import PlatformAppRelease
 from services import platform_app_release as service
 
 
@@ -205,3 +207,67 @@ async def test_publish_release_keeps_single_active(monkeypatch, session_factory)
         assert first.status == "archived"
         assert second.status == "active"
         assert (await service.get_active_platform_app_release(db, platform="facebook")).id == second.id
+
+
+@pytest.mark.asyncio
+async def test_delete_release_removes_r2_object_then_db_row(monkeypatch, session_factory):
+    monkeypatch.setattr(service.minio_store, "enabled", lambda: True)
+    monkeypatch.setattr(service.minio_store, "upload_file", lambda *_args, **_kwargs: "https://cdn.example/apk")
+    deleted_keys: list[str] = []
+
+    def delete_object(object_key: str) -> bool:
+        deleted_keys.append(object_key)
+        return True
+
+    monkeypatch.setattr(service.minio_store, "delete_object", delete_object)
+
+    async with session_factory() as db:
+        row = await service.create_platform_app_release(
+            db,
+            platform="facebook",
+            content=_apk(),
+            filename="facebook.apk",
+            uploaded_by_user_id=None,
+        )
+        release_id = row.id
+        object_key = row.object_key
+
+        deleted = await service.delete_platform_app_release(db, release_id=release_id)
+
+        remaining = (
+            await db.execute(
+                select(PlatformAppRelease).where(PlatformAppRelease.id == release_id)
+            )
+        ).scalar_one_or_none()
+
+    assert deleted.id == release_id
+    assert deleted_keys == [object_key]
+    assert remaining is None
+
+
+@pytest.mark.asyncio
+async def test_delete_release_keeps_db_row_when_r2_delete_fails(monkeypatch, session_factory):
+    monkeypatch.setattr(service.minio_store, "enabled", lambda: True)
+    monkeypatch.setattr(service.minio_store, "upload_file", lambda *_args, **_kwargs: "https://cdn.example/apk")
+    monkeypatch.setattr(service.minio_store, "delete_object", lambda _object_key: False)
+
+    async with session_factory() as db:
+        row = await service.create_platform_app_release(
+            db,
+            platform="facebook",
+            content=_apk(),
+            filename="facebook.apk",
+            uploaded_by_user_id=None,
+        )
+        release_id = row.id
+
+        with pytest.raises(service.PlatformAppDeleteFailed):
+            await service.delete_platform_app_release(db, release_id=release_id)
+
+        remaining = (
+            await db.execute(
+                select(PlatformAppRelease).where(PlatformAppRelease.id == release_id)
+            )
+        ).scalar_one_or_none()
+
+    assert remaining is not None

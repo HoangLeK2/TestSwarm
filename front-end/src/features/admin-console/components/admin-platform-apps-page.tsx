@@ -1,10 +1,20 @@
 'use client';
 
 import { type FormEvent, useMemo, useState } from 'react';
-import { Copy, PackagePlus, Upload } from 'lucide-react';
+import { Copy, PackagePlus, Trash2, Upload } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -53,11 +63,14 @@ function bytesLabel(value: number) {
 
 export function AdminPlatformAppsPage() {
   const t = useTranslations('adminConsole.platformApps');
+  const tAdmin = useTranslations('adminConsole');
   const qc = useQueryClient();
   const [status, setStatus] = useState(ALL);
   const [offset, setOffset] = useState(0);
   const [file, setFile] = useState<File | null>(null);
   const [notes, setNotes] = useState('');
+  const [deleteRelease, setDeleteRelease] =
+    useState<PlatformAppReleaseOut | null>(null);
 
   const params = useMemo(
     () => ({
@@ -102,6 +115,17 @@ export function AdminPlatformAppsPage() {
       adminApi.archiveFacebookAppRelease(release.id),
     onSuccess: () => {
       toast.success(t('toast.archived'));
+      void qc.invalidateQueries({ queryKey: ['admin-platform-apps-facebook'] });
+    },
+    onError: (error) => toast.error(formatAdminApiError(error))
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (release: PlatformAppReleaseOut) =>
+      adminApi.deleteFacebookAppRelease(release.id),
+    onSuccess: () => {
+      setDeleteRelease(null);
+      toast.success(t('toast.deleted'));
       void qc.invalidateQueries({ queryKey: ['admin-platform-apps-facebook'] });
     },
     onError: (error) => toast.error(formatAdminApiError(error))
@@ -201,7 +225,9 @@ export function AdminPlatformAppsPage() {
                   <TableHead>{t('table.size')}</TableHead>
                   <TableHead>{t('table.sha')}</TableHead>
                   <TableHead>{t('table.published')}</TableHead>
-                  <TableHead className='text-right'>{t('table.actions')}</TableHead>
+                  <TableHead className='text-right'>
+                    {t('table.actions')}
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -224,7 +250,9 @@ export function AdminPlatformAppsPage() {
                     </TableCell>
                     <TableCell>{bytesLabel(release.size_bytes)}</TableCell>
                     <TableCell>
-                      <code className='text-xs'>{release.sha256.slice(0, 12)}</code>
+                      <code className='text-xs'>
+                        {release.sha256.slice(0, 12)}
+                      </code>
                     </TableCell>
                     <TableCell>{dateLabel(release.published_at)}</TableCell>
                     <TableCell>
@@ -233,7 +261,9 @@ export function AdminPlatformAppsPage() {
                           type='button'
                           variant='outline'
                           size='sm'
-                          onClick={() => copyDownloadUrlMutation.mutate(release)}
+                          onClick={() =>
+                            copyDownloadUrlMutation.mutate(release)
+                          }
                           disabled={copyDownloadUrlMutation.isPending}
                         >
                           <Copy className='mr-1.5 size-3.5' />
@@ -261,6 +291,16 @@ export function AdminPlatformAppsPage() {
                             {t('actions.archive')}
                           </Button>
                         ) : null}
+                        <Button
+                          type='button'
+                          variant='destructive-outline'
+                          size='sm'
+                          onClick={() => setDeleteRelease(release)}
+                          disabled={deleteMutation.isPending}
+                        >
+                          <Trash2 className='mr-1.5 size-3.5' />
+                          {t('actions.delete')}
+                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -283,6 +323,35 @@ export function AdminPlatformAppsPage() {
           />
         </div>
       </div>
+      <AlertDialog
+        open={!!deleteRelease}
+        onOpenChange={(open) => !open && setDeleteRelease(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('delete.title')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('delete.description', {
+                version: deleteRelease?.version_name ?? '-'
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>
+              {tAdmin('common.cancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className='bg-destructive text-destructive-foreground hover:bg-destructive/90'
+              disabled={deleteMutation.isPending}
+              onClick={() =>
+                deleteRelease && deleteMutation.mutate(deleteRelease)
+              }
+            >
+              {t('delete.confirm')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

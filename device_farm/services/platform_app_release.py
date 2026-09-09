@@ -39,6 +39,16 @@ class PlatformAppUploadFailed(PlatformAppReleaseError):
     status_code = 502
 
 
+class PlatformAppDeleteFailed(PlatformAppReleaseError):
+    code = "PLATFORM_APP_DELETE_FAILED"
+    status_code = 502
+
+
+class PlatformAppDeleteStorageUnavailable(PlatformAppReleaseError):
+    code = "PLATFORM_APP_DELETE_STORAGE_UNAVAILABLE"
+    status_code = 503
+
+
 @dataclass(frozen=True)
 class ApkMetadata:
     package_name: str
@@ -408,6 +418,24 @@ async def archive_platform_app_release(
     row.status = "archived"
     row.archived_at = now
     row.updated_at = now
+    await db.flush()
+    return row
+
+
+async def delete_platform_app_release(
+    db: AsyncSession,
+    *,
+    release_id: str,
+) -> PlatformAppRelease:
+    row = await get_platform_app_release(db, release_id)
+    if row is None:
+        raise PlatformAppReleaseError("Release not found")
+    if not minio_store.enabled():
+        raise PlatformAppDeleteStorageUnavailable("Object storage is not configured")
+    deleted = await asyncio.to_thread(minio_store.delete_object, row.object_key)
+    if not deleted:
+        raise PlatformAppDeleteFailed("APK object delete failed")
+    await db.delete(row)
     await db.flush()
     return row
 

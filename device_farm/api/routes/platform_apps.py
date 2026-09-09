@@ -31,6 +31,7 @@ from services.platform_app_release import (
     PlatformAppReleaseError,
     archive_platform_app_release,
     create_platform_app_release_from_file,
+    delete_platform_app_release,
     get_active_platform_app_release,
     get_platform_app_release,
     iter_release_object_bytes,
@@ -211,6 +212,22 @@ async def admin_archive_facebook_app_release(release_id: str, db: DB, user: Curr
     await db.commit()
     await db.refresh(row)
     return PlatformAppPublishOut(release=_release_out(row))
+
+
+@router.delete(
+    "/admin/platform-apps/facebook/releases/{release_id}",
+    response_model=PlatformAppPublishOut,
+    dependencies=[Depends(require_permission("devices", "manage"))],
+)
+async def admin_delete_facebook_app_release(release_id: str, db: DB, user: CurrentUser):
+    _require_superadmin(user)
+    try:
+        row = await delete_platform_app_release(db, release_id=release_id)
+    except PlatformAppReleaseError as exc:
+        raise _map_release_error(exc) from exc
+    release = _release_out(row)
+    await db.commit()
+    return PlatformAppPublishOut(release=release)
 
 
 @router.get(

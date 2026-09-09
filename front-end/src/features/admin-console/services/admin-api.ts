@@ -459,6 +459,9 @@ const ADMIN_ERROR_MESSAGES: Record<string, string> = {
   OBJECT_STORAGE_UNAVAILABLE:
     'Object storage chưa sẵn sàng nên chưa thể lưu APK.',
   PLATFORM_APP_UPLOAD_FAILED: 'Upload APK thất bại.',
+  PLATFORM_APP_DELETE_STORAGE_UNAVAILABLE:
+    'Object storage chưa sẵn sàng nên chưa thể xoá APK trên R2.',
+  PLATFORM_APP_DELETE_FAILED: 'Xoá APK trên R2 thất bại.',
   PLATFORM_APP_RELEASE_NOT_FOUND: 'Không tìm thấy bản phát hành APK.',
   PLATFORM_APP_RELEASE_OBJECT_NOT_FOUND:
     'Không tìm thấy file APK trong object storage.',
@@ -768,13 +771,14 @@ export const adminApi = {
         body
       )
       .then((r) => r.data),
-  listFacebookAppReleases: (
-    params: PageParams & { status?: string } = {}
-  ) =>
+  listFacebookAppReleases: (params: PageParams & { status?: string } = {}) =>
     farmApi
-      .get<PlatformAppReleaseListOut>('/admin/platform-apps/facebook/releases', {
-        params
-      })
+      .get<PlatformAppReleaseListOut>(
+        '/admin/platform-apps/facebook/releases',
+        {
+          params
+        }
+      )
       .then((r) => r.data),
   uploadFacebookAppRelease: (file: File, notes?: string) => {
     const form = new FormData();
@@ -790,14 +794,26 @@ export const adminApi = {
   },
   publishFacebookAppRelease: (releaseId: string) =>
     farmApi
-      .post<{ release: PlatformAppReleaseOut }>(
+      .post<{
+        release: PlatformAppReleaseOut;
+      }>(
         `/admin/platform-apps/facebook/releases/${encodeURIComponent(releaseId)}/publish`
       )
       .then((r) => r.data.release),
   archiveFacebookAppRelease: (releaseId: string) =>
     farmApi
-      .post<{ release: PlatformAppReleaseOut }>(
+      .post<{
+        release: PlatformAppReleaseOut;
+      }>(
         `/admin/platform-apps/facebook/releases/${encodeURIComponent(releaseId)}/archive`
+      )
+      .then((r) => r.data.release),
+  deleteFacebookAppRelease: (releaseId: string) =>
+    farmApi
+      .delete<{
+        release: PlatformAppReleaseOut;
+      }>(
+        `/admin/platform-apps/facebook/releases/${encodeURIComponent(releaseId)}`
       )
       .then((r) => r.data.release),
   getFacebookAppReleaseDownloadUrl: (releaseId: string) =>

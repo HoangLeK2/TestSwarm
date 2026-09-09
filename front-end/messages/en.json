@@ -7094,13 +7094,20 @@
       "actions": {
         "copyUrl": "Copy URL",
         "publish": "Publish",
-        "archive": "Archive"
+        "archive": "Archive",
+        "delete": "Delete"
       },
       "toast": {
         "uploaded": "APK uploaded",
         "published": "Release published",
         "archived": "Release archived",
+        "deleted": "Release deleted",
         "copied": "Download URL copied"
+      },
+      "delete": {
+        "title": "Delete APK release?",
+        "description": "This permanently removes version {version} from the database and R2 object storage.",
+        "confirm": "Delete"
       },
       "errors": {
         "fileRequired": "Choose an APK file first."

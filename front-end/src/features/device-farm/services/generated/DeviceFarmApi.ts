@@ -424,11 +424,6 @@ export interface AccountStateTransitionBody {
    */
   reason: string;
   /**
-   * Ttl Seconds
-   * Required when to=cooldown; cooldown_until = now + ttl_seconds
-   */
-  ttl_seconds?: number | null;
-  /**
    * Expected State Changed At
    * Optimistic lock: must match current state_changed_at
    */
@@ -463,8 +458,6 @@ export interface AccountStatusUpdate {
    * @default "legacy PATCH /status"
    */
   reason?: string;
-  /** Ttl Seconds */
-  ttl_seconds?: number | null;
 }
 
 /** AccountUpdate */

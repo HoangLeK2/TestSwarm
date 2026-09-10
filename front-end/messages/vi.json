@@ -924,13 +924,12 @@
       "badgeTest": "Test",
       "badgeDev": "Dev",
       "testAccountHint": "Tài khoản có dấu hiệu môi trường thử — kiểm tra trước khi dùng trên production",
+      "statusUnassigned": "Chưa gắn",
       "statusActive": "Hoạt động",
-      "statusCooldown": "Tạm nghỉ",
-      "statusSuspended": "Tạm khóa",
+      "statusVerifying": "Xác thực",
       "statusBanned": "Đã cấm",
-      "statusRetired": "Ngừng dùng",
-      "statusDisabled": "Đã tắt",
-      "cooldownUntil": "Đến {time}"
+      "statusRetired": "Ngưng dùng",
+      "restingUntil": "Tạm nghỉ đến {time}"
     },
     "stateDialog": {
       "trigger": "Đổi trạng thái",
@@ -939,8 +938,6 @@
       "currentState": "Hiện tại: {status}",
       "targetState": "Trạng thái mới",
       "reason": "Lý do",
-      "ttlHours": "Thời gian cooldown (giờ)",
-      "ttlRequired": "Nhập số giờ dương",
       "lastReason": "Ghi chú gần nhất: {reason}",
       "submit": "Áp dụng",
       "submitting": "Đang áp dụng...",
@@ -1003,13 +1000,17 @@
       "availableDevices": "Thiết bị khả dụng",
       "loading": "Đang tải...",
       "noAvailable": "Tất cả thiết bị đã được gán",
+      "searchPlaceholder": "Tìm theo tên hoặc serial…",
+      "noSearchMatch": "Không có điện thoại nào khớp.",
       "primary": "Tài khoản chính",
       "makePrimary": "Đặt làm tài khoản chính của điện thoại",
       "replacePrimaryWarning": "Điện thoại này đã có tài khoản chính. Nếu tiếp tục, tài khoản đang chọn sẽ thay thế tài khoản chính hiện tại.",
       "assignAction": "Gắn {account} vào {device}",
       "assignSuccess": "Đã gắn {account} vào {device}",
       "sessionSection": "Phiên đăng nhập nền tảng",
+      "sessionPlatform": "Phiên đăng nhập: {platform}",
       "sessionState": "Trạng thái hiện tại: {state}",
+      "sessionObservedName": "Tên hiển thị quan sát được: {name}",
       "sessionMissing": "Chưa có phiên đăng nhập được lưu cho tài khoản này.",
       "sessionStates": {
         "unknown": "Chưa xác định",
@@ -2373,6 +2374,17 @@
       "monitorTraceLoop": "vòng",
       "monitorTraceBranch": "nhánh",
       "monitorTraceReason": "lý do",
+      "reasonCode": {
+        "loop_history_limit": "dừng — hết ngân sách history",
+        "loop_stalled": "dừng — màn hình không phản hồi",
+        "loop_no_nested_steps": "vòng lặp không có step",
+        "loop_iteration_failed": "một vòng lặp thất bại",
+        "loop_invalid_count": "số vòng lặp không hợp lệ"
+      },
+      "reasonCodeHint": {
+        "loop_history_limit": "Run đã chạm ngân sách event history. Các vòng đã chạy xong vẫn được giữ. Hãy tách vòng lặp hoặc giảm số vòng.",
+        "loop_stalled": "Nhiều vòng liên tiếp không thao tác được gì — nhiều khả năng màn hình không phải cái vòng lặp đang chờ."
+      },
       "monitorEvidenceTitle": "Bằng chứng runtime",
       "monitorEvidenceReason": "Lý do",
       "monitorEvidenceClass": "Nhóm lỗi",
@@ -2953,6 +2965,14 @@
         "actionType": "Loại hoạt động",
         "statuses": "Trạng thái được phép",
         "statusesPlaceholder": "approved, active"
+      },
+      "advancedFieldsTitle": "Cài đặt nâng cao",
+      "advancedDefaultOk": "Mặc định đủ dùng",
+      "controlFlow": {
+        "loopDurationSecondsLabel": "Ngân sách thời gian (giây)",
+        "loopStallAfterLabel": "Dừng sau N vòng không thao tác",
+        "loopIdleDelayLabel": "Chờ sau một vòng không thao tác (giây)",
+        "loopVarLabel": "Biến chứa chỉ số vòng lặp"
       },
       "adbShell": {
         "hint": "Chạy trên phone thật — nhập lệnh đầy đủ (vd. adb shell getprop …) hoặc chỉ phần shell (getprop …).",
@@ -4906,6 +4926,18 @@
     "controlAndRecord": "Điều khiển & ghi kịch bản",
     "controlDevice": "Điều khiển",
     "deviceAccounts": "Tài khoản",
+    "deviceName": {
+      "title": "Cập nhật thiết bị",
+      "label": "Tên hiển thị thiết bị",
+      "placeholder": "VD: FB-01",
+      "tagsLabel": "Nhãn",
+      "tagsPlaceholder": "tag1, tag2",
+      "edit": "Cập nhật thiết bị",
+      "save": "Lưu",
+      "cancel": "Hủy",
+      "saved": "Đã lưu thay đổi",
+      "saveFailed": "Không lưu được thay đổi"
+    },
     "restartDeviceConfirmTitle": "Khởi động lại thiết bị",
     "restartDeviceConfirmDescription": "Gửi lệnh khởi động lại tới thiết bị {serial}?",
     "deviceInactive": "Thiết bị chưa hoạt động",
@@ -6277,11 +6309,11 @@
         "allStates": "Tất cả trạng thái"
       },
       "states": {
-        "active": "Đang hoạt động",
-        "cooldown": "Cooldown",
-        "suspended": "Tạm dừng",
-        "banned": "Bị khóa",
-        "retired": "Ngừng dùng"
+        "unassigned": "Chưa gắn",
+        "active": "Hoạt động",
+        "suspended": "Xác thực",
+        "banned": "Đã cấm",
+        "retired": "Ngưng dùng"
       },
       "table": {
         "workspace": "Workspace",

@@ -1,9 +1,9 @@
 'use client';
 
+import Link from 'next/link';
 import { formatDistanceToNow } from 'date-fns';
 import { vi } from 'date-fns/locale';
 import type { Locale } from 'date-fns';
-import Link from 'next/link';
 import { MoreHorizontal } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
 import { useQueryClient } from '@tanstack/react-query';
@@ -29,6 +29,8 @@ import { ReviveDeviceButton } from './ReviveDeviceButton';
 import { removeDeviceFromCache } from '../../hooks/use-devices';
 import { useOrganization } from '@/features/organization/hooks/use-organization';
 import { TagsCell } from './TagsCell';
+import { DeviceUpdateDialog } from '../device-update-dialog';
+import { deviceDisplayName } from '../../lib/device-display-name';
 import { DeviceCmdButton } from './BootstrapDialog';
 import type { ConfirmModalOptions } from '@/providers/modal-provider';
 import {
@@ -108,6 +110,17 @@ function DeviceActionsCell({
       {perms.canExecute && hasRelay && fsm !== 'dead' && (
         <span className='sr-only'>{t('commandsAvailable')}</span>
       )}
+      <DeviceUpdateDialog
+        // `tags` is optional on DeviceOut, and an absent key is what tells the
+        // dialog it may not touch tags. The list always knows them, so make the
+        // empty case explicit rather than indistinguishable from "not loaded".
+        device={{ ...device, tags: device.tags ?? '' }}
+        trigger={
+          <Button size='sm' variant='outline' className='h-8'>
+            {tCommon('update')}
+          </Button>
+        }
+      />
       {perms.canExecute ? (
         <Button
           size='sm'
@@ -201,9 +214,6 @@ export function getDeviceColumns({
       cell: ({ row }) => {
         const d = row.original;
         const pending = isPendingDevice(d);
-        const label = pending
-          ? d.name || t('newDevice')
-          : d.name || `${d.brand} ${d.model}`.trim() || d.serial;
 
         return (
           <div className='flex flex-col'>
@@ -211,7 +221,7 @@ export function getDeviceColumns({
               href={ROUTES.DEVICES.DETAIL(d.serial)}
               className='truncate text-sm font-medium hover:underline'
             >
-              {label}
+              {deviceDisplayName(d)}
             </Link>
             <span className='font-mono text-[11px] text-muted-foreground'>
               {pending ? t('notConnected') : d.serial}
@@ -297,7 +307,7 @@ export function getDeviceColumns({
       header: t('columns.tags'),
       cell: ({ row }) => {
         const d = row.original;
-        return <TagsCell deviceId={d.id} tags={d.tags} />;
+        return <TagsCell tags={d.tags} />;
       }
     },
     {

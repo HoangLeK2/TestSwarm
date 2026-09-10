@@ -113,6 +113,43 @@ def test_resolve_prefers_timestamp_metadata_over_geometric() -> None:
     assert len(ranked) >= 0
 
 
+def test_resolve_fb_490_group_card_with_avatar_only_author_hint() -> None:
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node class="android.widget.FrameLayout" bounds="[0,0][1260,2800]">
+    <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,287][1260,2618]">
+      <node class="android.view.ViewGroup" bounds="[0,287][1260,596]">
+        <node class="android.widget.Button" text="Bình luận" content-desc="Bình luận"
+              bounds="[420,435][840,589]" clickable="true"/>
+      </node>
+      <node class="android.view.ViewGroup" bounds="[0,596][1260,2618]">
+        <node class="android.widget.ImageView" content-desc="Ảnh đại diện của Tuyển Hồ"
+              bounds="[42,645][182,785]" clickable="true"/>
+        <node class="android.view.ViewGroup"
+              text="20 thg 3•Chia sẻ với: Nhóm công khai"
+              content-desc="20 thg 3•Chia sẻ với: Nhóm công khai"
+              bounds="[210,726][464,775]"/>
+        <node class="android.widget.Button" content-desc="Khác"
+              bounds="[1113,603][1260,749]" clickable="true"/>
+        <node class="android.view.ViewGroup"
+              text="Hướng dẫn cài Zalo cá nhân với OpenClaw.… Xem thêm"
+              content-desc="Hướng dẫn cài Zalo cá nhân với OpenClaw.… Xem thêm"
+              bounds="[42,827][1218,989]" clickable="true"/>
+        <node class="android.widget.Button" text="Bình luận" content-desc="Bình luận"
+              bounds="[420,1926][840,2080]" clickable="true"/>
+      </node>
+    </node>
+  </node>
+</hierarchy>"""
+    top, _ = post_open_pipeline.resolve_post_open_targets_from_xml(xml)
+
+    assert top is not None
+    assert (top.get("post") or {}).get("author") == "Tuyển Hồ"
+    assert top["feed_item_index"] == 1
+    assert top["tap_kind"] == "timestamp"
+    assert top["tap_kind"] not in {"post_body", "post_media"}
+
+
 def test_resolve_accepts_arbitrary_badge_text_as_metadata() -> None:
     xml = _feed_card_xml(
         author="Vũ Duy Mạnh",
@@ -240,6 +277,28 @@ def test_detail_detection_single_card() -> None:
     <node content-desc="Lựa chọn khác cho bài viết này" bounds="[980,80][1060,140]" clickable="true"/>
     <node class="android.widget.TextView" text="Author" bounds="[120,120][400,160]"/>
     <node class="android.widget.Button" content-desc="Nút Bình luận" text="Bình luận" bounds="[300,2000][500,2060]" clickable="true"/>
+  </node>
+</hierarchy>"""
+    assert post_open_pipeline.hierarchy_is_fb_post_detail_from_xml(xml)
+
+
+def test_fb_490_detail_detection_uses_comment_composer_without_title_node() -> None:
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy>
+  <node class="android.widget.FrameLayout" bounds="[0,0][1260,2800]">
+    <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,287][1260,2624]">
+      <node class="android.view.ViewGroup" bounds="[0,288][1260,2322]">
+        <node class="android.view.ViewGroup" text="OpenClaw - AI Agents VN•Tham gia" bounds="[0,309][1260,579]"/>
+        <node class="android.view.ViewGroup" text="Hướng dẫn cài Zalo cá nhân với OpenClaw." bounds="[0,579][1260,1238]"/>
+        <node class="android.widget.Button" text="Thích. Nhấn đúp và giữ để bày tỏ cảm xúc." bounds="[0,2063][420,2217]"/>
+        <node class="android.widget.Button" text="Bình luận" content-desc="Bình luận" bounds="[420,2063][840,2217]"/>
+        <node class="android.widget.Button" text="Chia sẻ" bounds="[840,2063][1260,2217]"/>
+      </node>
+      <node class="android.view.ViewGroup" bounds="[0,2322][1260,2624]">
+        <node class="android.view.ViewGroup" content-desc="Mai Ondo" bounds="[42,2357][182,2497]"/>
+      </node>
+    </node>
+    <node class="android.widget.AutoCompleteTextView" text="Viết bình luận công khai..." bounds="[42,2646][1218,2778]"/>
   </node>
 </hierarchy>"""
     assert post_open_pipeline.hierarchy_is_fb_post_detail_from_xml(xml)

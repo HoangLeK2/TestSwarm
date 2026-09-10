@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re as _re
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from temporalio import workflow
@@ -60,6 +60,7 @@ with workflow.unsafe.imports_passed_through():
     from services.execution.reason_codes import (
         BRANCH_FAILED,
         CONDITION_EVAL_FAILED,
+        LOOP_HISTORY_LIMIT,
         LOOP_INVALID_COUNT,
         LOOP_ITERATION_FAILED,
         LOOP_NO_NESTED_STEPS,
@@ -233,6 +234,21 @@ _CAMPAIGN_CLAIM_KEEPALIVE_MAX_SECONDS = 600
 _CONTROL_FLOW_EVENT_PATCH = "control-flow-boundary-events-v1"
 _STEP_ACTIVITY_POLICY_PATCH = "step-activity-policy-v1"
 _TEMPORAL_ACTIVITY_EVENT_PATCH = "temporal-activity-events-v1"
+# Ask the server when to continue-as-new instead of comparing event count to a
+# constant. The constant ignored history *size*: payload_guard allows 64KB per
+# field, so the 50MB limit is reached long before 10,000 events.
+_CAN_SUGGESTED_PATCH = "continue-as-new-suggested-v1"
+# Buffer telemetry events in the workflow and ship them in one activity instead
+# of awaiting an activity per emit. Changes the commands the workflow emits, so
+# in-flight runs must keep the per-event shape.
+_BUFFERED_EVENTS_PATCH = "buffered-execution-events-v1"
+# How many buffered events force an early flush. A crash loses at most this many
+# telemetry records — acceptable, they are observation, not state.
+_EVENT_BUFFER_FLUSH_AT = 50
+# ...and how long one may sit unshipped. Without this a short scenario shows no
+# telemetry at all until it ends. workflow.now() is deterministic on replay, so
+# the flush decision replays identically.
+_EVENT_BUFFER_MAX_AGE = timedelta(seconds=15)
 
 # Step types that require individual activity calls (cannot be batched).
 # All other step types are "leaf" steps dispatched via execute_device_action_batch.
@@ -915,6 +931,15 @@ class ScenarioStepsWorkflow:
         self._current_activity_attempt = 0
         self._current_message = ""
         self._running_step = False
+        # Telemetry events waiting to ship. Two awaited activities per step were
+        # ~2/3 of this workflow's event history; batching them trades at most
+        # _EVENT_BUFFER_FLUSH_AT lost log records on a crash for a history that
+        # does not reach the server's termination threshold. Each entry carries
+        # its own workflow.now() stamp, so batching cannot reorder the timeline
+        # relative to the activity-side events already being written.
+        self._pending_events: list[dict[str, Any]] = []
+        self._event_flush_seq = 0
+        self._last_flush_at: datetime | None = None
 
     @workflow.signal
     async def pause(self) -> None:
@@ -1072,6 +1097,64 @@ class ScenarioStepsWorkflow:
         self._clear_activity_progress()
         self._running_step = False
 
+    async def _buffer_event(
+        self,
+        inp: StepsInput,
+        event_kind: str,
+        event: dict[str, Any],
+    ) -> None:
+        """Queue one telemetry event; ship the batch once it is worth an activity.
+
+        The workflow stamps occurred_at here rather than letting the flush
+        activity do it, so a batched event keeps the ordering it had relative to
+        the activity-side events emitted from activities.py.
+        """
+        now = workflow.now()
+        event["event_kind"] = event_kind
+        event["occurred_at"] = now.isoformat()
+        self._pending_events.append(event)
+        if self._last_flush_at is None:
+            self._last_flush_at = now
+        if (
+            len(self._pending_events) >= _EVENT_BUFFER_FLUSH_AT
+            or now - self._last_flush_at >= _EVENT_BUFFER_MAX_AGE
+        ):
+            await self._flush_events(inp)
+
+    async def _flush_events(self, inp: StepsInput) -> None:
+        if not self._pending_events:
+            return
+        batch = self._pending_events
+        self._pending_events = []
+        self._last_flush_at = workflow.now()
+        self._event_flush_seq += 1
+        try:
+            await workflow.execute_activity(
+                "emit_execution_events_batch",
+                {"execution_id": inp.execution_id, "events": batch},
+                start_to_close_timeout=timedelta(seconds=60),
+                schedule_to_start_timeout=timedelta(seconds=120),
+                retry_policy=RetryPolicy(maximum_attempts=2),
+                task_queue=control_task_queue(),
+                activity_id=workflow_activity_id(
+                    execution_id=inp.execution_id,
+                    activity_name="emit_execution_events_batch",
+                    qualifier=self._event_flush_seq,
+                ),
+            )
+        except Exception as exc:
+            if _is_temporal_cancelled_error(exc):
+                # Cancellation takes the flush with it. These are observation
+                # records, not state — the real outcome still rides the normal
+                # path (_cancelled_result, execution_steps).
+                raise
+            logging.getLogger(__name__).warning(
+                "emit_execution_events_batch failed for execution %s (%s events): %s",
+                inp.execution_id,
+                len(batch),
+                _workflow_failure_message(exc),
+            )
+
     async def _emit_control_flow_event(
         self,
         inp: StepsInput,
@@ -1084,20 +1167,24 @@ class ScenarioStepsWorkflow:
     ) -> None:
         if not inp.execution_id or not workflow.patched(_CONTROL_FLOW_EVENT_PATCH):
             return
+        event = {
+            "execution_id": inp.execution_id,
+            "campaign_id": inp.campaign_id,
+            "event_type": event_type,
+            "step_id": _step_id(step, step_index),
+            "step_index": step_index,
+            "step_type": str(step.get("type") or ""),
+            "depth": inp.depth,
+            "trace": trace or {},
+            "payload": payload or {},
+        }
+        if workflow.patched(_BUFFERED_EVENTS_PATCH):
+            await self._buffer_event(inp, "control_flow", event)
+            return
         try:
             await workflow.execute_activity(
                 "emit_control_flow_event",
-                {
-                    "execution_id": inp.execution_id,
-                    "campaign_id": inp.campaign_id,
-                    "event_type": event_type,
-                    "step_id": _step_id(step, step_index),
-                    "step_index": step_index,
-                    "step_type": str(step.get("type") or ""),
-                    "depth": inp.depth,
-                    "trace": trace or {},
-                    "payload": payload or {},
-                },
+                event,
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=RetryPolicy(maximum_attempts=3),
                 task_queue=control_task_queue(),
@@ -1151,20 +1238,24 @@ class ScenarioStepsWorkflow:
         for key, value in (payload or {}).items():
             if value is not None:
                 event_payload[key] = value
+        event = {
+            "execution_id": inp.execution_id,
+            "campaign_id": inp.campaign_id,
+            "event_type": event_type,
+            "step_id": step_id,
+            "step_index": step_index,
+            "step_type": str(step.get("type") or ""),
+            "depth": inp.depth,
+            "trace": trace or {},
+            "payload": event_payload,
+        }
+        if workflow.patched(_BUFFERED_EVENTS_PATCH):
+            await self._buffer_event(inp, "temporal_activity", event)
+            return
         try:
             await workflow.execute_activity(
                 "emit_temporal_activity_event",
-                {
-                    "execution_id": inp.execution_id,
-                    "campaign_id": inp.campaign_id,
-                    "event_type": event_type,
-                    "step_id": step_id,
-                    "step_index": step_index,
-                    "step_type": str(step.get("type") or ""),
-                    "depth": inp.depth,
-                    "trace": trace or {},
-                    "payload": event_payload,
-                },
+                event,
                 start_to_close_timeout=timedelta(seconds=30),
                 schedule_to_start_timeout=timedelta(seconds=60),
                 retry_policy=RetryPolicy(maximum_attempts=2),
@@ -1537,14 +1628,52 @@ class ScenarioStepsWorkflow:
         }
         return [marker, *self._step_log]
 
-    # Trigger continue_as_new when Temporal history approaches the 50K event limit.
-    # Each activity execution = ~3 events (Scheduled + Started + Completed).
-    # At 10K events we have ~3.3K activity calls burned — reset early so we never
-    # hit the hard limit mid-step.  Only checked at depth=0 (top-level step loop).
+    # Legacy threshold, kept for runs that started before _CAN_SUGGESTED_PATCH.
+    # Each activity execution = ~3 events (Scheduled + Started + Completed), so
+    # 10K events is ~3.3K activity calls. It counts events only, which is the
+    # flaw: Temporal also refuses at 50MB of history, and payload_guard allows
+    # 64KB per field, so size hits the wall first on result-heavy scenarios.
     _HISTORY_CONTINUE_THRESHOLD = 10_000
+
+    @staticmethod
+    def _history_limit_reached() -> bool:
+        """True when this run should stop growing its event history.
+
+        The server decides, weighing both event count and history size; the
+        constant below could only see count.
+        """
+        info = workflow.info()
+        if workflow.patched(_CAN_SUGGESTED_PATCH):
+            return bool(info.is_continue_as_new_suggested()) or (
+                info.get_current_history_length()
+                >= ScenarioStepsWorkflow._HISTORY_CONTINUE_THRESHOLD
+            )
+        return info.get_current_history_length() >= (
+            ScenarioStepsWorkflow._HISTORY_CONTINUE_THRESHOLD
+        )
 
     @workflow.run
     async def run(self, inp: StepsInput) -> StepsResult:
+        # Thin wrapper so the buffered telemetry gets one guaranteed flush.
+        # _run_steps has 13 return statements; patching each would be a standing
+        # invitation to miss the fourteenth.
+        #
+        # _execute_child_steps re-enters run() at depth+1, so nested invocations
+        # pass through here without flushing — only the root ships the buffer,
+        # which is where it lives.
+        try:
+            return await self._run_steps(inp)
+        finally:
+            if inp.depth == 0 and self._pending_events:
+                try:
+                    await self._flush_events(inp)
+                except BaseException:  # noqa: BLE001 — telemetry never decides the outcome
+                    # A cancel that lands here would otherwise replace the real
+                    # result with a flush error. The workflow ends immediately
+                    # after, so swallowing cannot make it uncancellable.
+                    pass
+
+    async def _run_steps(self, inp: StepsInput) -> StepsResult:
         if inp.depth > MAX_NESTING_DEPTH:
             return StepsResult(
                 success=False, steps_executed=0,
@@ -1953,8 +2082,14 @@ class ScenarioStepsWorkflow:
             # remaining steps, runtime_vars, context, and all scenario metadata.
             # The parent ScenarioWorkflow transparently follows the continuation.
             if inp.depth == 0 and idx > 0 and idx % 25 == 0:
-                history_len = workflow.info().get_current_history_length()
-                if history_len >= self._HISTORY_CONTINUE_THRESHOLD:
+                if self._history_limit_reached():
+                    # Kept in the log next to the server's verdict so the two
+                    # can be compared on a real run.
+                    workflow.logger.info(
+                        "continue_as_new at %s events (step %s)",
+                        workflow.info().get_current_history_length(),
+                        idx,
+                    )
                     carried = list(step_results)
                     carried_count = checkpointed_steps
                     # Flush the results to execution_steps and continue with an
@@ -1996,6 +2131,11 @@ class ScenarioStepsWorkflow:
                         )
                         carried_count = checkpointed_steps + len(carried)
                         carried = []
+                    # Explicit, not via the run() finally: continue_as_new is
+                    # driven by an SDK-internal exception, and awaiting an
+                    # activity while that unwinds is undefined territory. Flush
+                    # here and the finally finds an empty buffer.
+                    await self._flush_events(inp)
                     await workflow.continue_as_new(
                         StepsInput(
                             device_serial=inp.device_serial,
@@ -2714,6 +2854,32 @@ class ScenarioStepsWorkflow:
         idle_streak = 0
 
         for i in range(iterations):
+            # continue_as_new cannot be called from here: _execute_child_steps
+            # recurses into self.run() at depth+1, inside the same workflow, and
+            # the guard at depth 0 never runs again once a loop is entered. So a
+            # long loop grows history until the server terminates the run and
+            # the whole trace is lost. Stopping deliberately keeps every
+            # iteration that already completed — refuse the action when the
+            # ground is not solid.
+            if self._history_limit_reached():
+                ctx.pop("_loop_iter", None)
+                _finish_sub_results(sub_results, sub_result_state)
+                return (
+                    False,
+                    f"loop stopped at iteration {i}: {LOOP_HISTORY_LIMIT}",
+                    sub_results,
+                    parent_ctx,
+                    {
+                        "reason_code": LOOP_HISTORY_LIMIT,
+                        "iterations_run": actual_iters,
+                        "stopped_by": "history_limit",
+                        # Not a failure of the work: every iteration that ran
+                        # succeeded. The run hit its event-history budget.
+                        "partial": True,
+                        "history_length": workflow.info().get_current_history_length(),
+                        "idle_streak": idle_streak,
+                    },
+                )
             runtime_vars["__LOOP_ITER__"] = i
             if loop_var:
                 runtime_vars[loop_var] = i
@@ -3011,6 +3177,24 @@ class ScenarioStepsWorkflow:
         ctx = dict(parent_ctx)
 
         for i in range(count):
+            # See _handle_loop: continue_as_new is unreachable from inside a
+            # loop body, so a long repeat would otherwise run until the server
+            # terminates it.
+            if self._history_limit_reached():
+                _finish_sub_results(sub_results, sub_result_state)
+                return (
+                    False,
+                    f"repeat stopped at iteration {i}: {LOOP_HISTORY_LIMIT}",
+                    sub_results,
+                    parent_ctx,
+                    {
+                        "reason_code": LOOP_HISTORY_LIMIT,
+                        "iterations_run": actual_iters,
+                        "stopped_by": "history_limit",
+                        "partial": True,
+                        "history_length": workflow.info().get_current_history_length(),
+                    },
+                )
             runtime_vars["__LOOP_INDEX__"] = i
             ctx = push_step_path(
                 parent_ctx,
@@ -3116,6 +3300,22 @@ class ScenarioStepsWorkflow:
         actual_iters = 0
 
         for i in range(max_iter):
+            # See _handle_loop: continue_as_new is unreachable from inside a
+            # loop body, so a long repeat_until would otherwise run until the
+            # server terminates it.
+            if self._history_limit_reached():
+                return (
+                    False,
+                    f"repeat_until stopped at iteration {i}: {LOOP_HISTORY_LIMIT}",
+                    parent_ctx,
+                    {
+                        "reason_code": LOOP_HISTORY_LIMIT,
+                        "iterations_run": actual_iters,
+                        "stopped_by": "history_limit",
+                        "partial": True,
+                        "history_length": workflow.info().get_current_history_length(),
+                    },
+                )
             runtime_vars["__LOOP_INDEX__"] = i
             ctx = push_step_path(
                 parent_ctx,

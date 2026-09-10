@@ -534,6 +534,124 @@ test('runtime evidence monitor labels are localized and rendered from i18n', () 
   }
 });
 
+test('foldEventsToStepLog folds a retried step the same way whichever order the batch arrives in', () => {
+  // Same six events, two delivery orders: interleaved (what the timeline says)
+  // and batched (workflow telemetry flushed after the step already reported).
+  const stepEvent = (
+    id: string,
+    type: string,
+    at: string,
+    extra: Record<string, unknown> = {}
+  ) =>
+    ({
+      event_id: id,
+      event_type: type,
+      execution_id: 'exec-1',
+      step_id: 'wait-1',
+      occurred_at: at,
+      payload: {
+        step_index: 0,
+        step_id: 'wait-1',
+        step_type: 'wait_element',
+        ...extra
+      }
+    }) as any;
+
+  const activity = (attempt: number, phase: string, at: string) =>
+    stepEvent(`activity-${phase}-${attempt}`, `temporal.activity.${phase}`, at, {
+      temporal_activity: true,
+      activity_id: `exec-1.wait-1.attempt-${attempt}`,
+      step_activity_id: `wait-1.attempt-${attempt}`,
+      activity_attempt: attempt
+    });
+
+  const started = stepEvent('started', 'step.started', '2026-09-05T01:00:00.000Z');
+  const completed = stepEvent(
+    'completed',
+    'step.completed',
+    '2026-09-05T01:00:20.000Z',
+    { message: 'wait_element ok' }
+  );
+  const batched = [
+    activity(1, 'scheduled', '2026-09-05T01:00:01.000Z'),
+    activity(1, 'failed', '2026-09-05T01:00:09.000Z'),
+    activity(2, 'retrying', '2026-09-05T01:00:10.000Z'),
+    activity(2, 'completed', '2026-09-05T01:00:19.000Z')
+  ];
+
+  const interleaved = foldEventsToStepLog([started, ...batched, completed]);
+  const batchLate = foldEventsToStepLog([started, completed, ...batched]);
+
+  assert.equal(interleaved.length, 1);
+  assert.equal(batchLate.length, 1);
+  assert.equal(interleaved[0].status, 'completed');
+  assert.equal(batchLate[0].status, 'completed');
+  assert.deepEqual(
+    batchLate[0].temporal_activity_events?.map((event) => event.state),
+    interleaved[0].temporal_activity_events?.map((event) => event.state)
+  );
+});
+
+test('foldEventsToStepLog keeps each loop occurrence its own activity events when telemetry arrives late', () => {
+  const at = (seconds: number) =>
+    new Date(Date.UTC(2026, 8, 5, 1, 0, seconds)).toISOString();
+
+  const stepEvents: any[] = [];
+  const activityEvents: any[] = [];
+  for (const iteration of [1, 2, 3]) {
+    const base = iteration * 10;
+    const payload = {
+      step_index: 0,
+      step_id: 'tap-in-loop',
+      step_type: 'tap',
+      depth: 1
+    };
+    stepEvents.push({
+      event_id: `started-${iteration}`,
+      event_type: 'step.started',
+      execution_id: 'exec-1',
+      step_id: 'tap-in-loop',
+      occurred_at: at(base),
+      payload
+    });
+    stepEvents.push({
+      event_id: `completed-${iteration}`,
+      event_type: 'step.completed',
+      execution_id: 'exec-1',
+      step_id: 'tap-in-loop',
+      occurred_at: at(base + 3),
+      payload
+    });
+    for (const [offset, phase] of [
+      [1, 'scheduled'],
+      [2, 'completed']
+    ] as const) {
+      activityEvents.push({
+        event_id: `activity-${iteration}-${phase}`,
+        event_type: `temporal.activity.${phase}`,
+        execution_id: 'exec-1',
+        step_id: 'tap-in-loop',
+        occurred_at: at(base + offset),
+        payload: {
+          ...payload,
+          temporal_activity: true,
+          activity_id: `exec-1.tap-in-loop.iter-${iteration}`,
+          activity_attempt: 1
+        }
+      });
+    }
+  }
+
+  // Whole telemetry batch flushed at the end of the loop.
+  const rows = foldEventsToStepLog([...stepEvents, ...activityEvents]);
+
+  assert.equal(rows.length, 3);
+  assert.deepEqual(
+    rows.map((row) => row.temporal_activity_events?.length ?? 0),
+    [2, 2, 2]
+  );
+});
+
 test('foldEventsToStepLog preserves every repeated step occurrence and action proof', () => {
   const events = [1, 2].flatMap((iteration) => [
     {

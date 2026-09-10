@@ -282,6 +282,35 @@ async def mark_readiness_observed(
     return row
 
 
+async def record_display_name_observed(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    device_id: str,
+    display_name: str,
+    platform: str = FACEBOOK_PLATFORM,
+) -> DevicePlatformSession | None:
+    """Store the name the account's own profile page actually shows.
+
+    Only ever an observation: it does not touch state, account or evidence, so a
+    scenario that reads the profile cannot change who the session belongs to.
+    Nothing is created — a name with no session behind it is an observation
+    about a device nobody has claimed.
+    """
+    name = str(display_name or "").strip()[:255]
+    if not name:
+        return None
+    row = await get_platform_session(
+        db, org_id=org_id, device_id=device_id, platform=platform
+    )
+    if row is None or row.display_name_observed == name:
+        return row
+    row.display_name_observed = name
+    _bump(row)
+    await db.flush()
+    return row
+
+
 async def invalidate_platform_session(
     db: AsyncSession,
     *,

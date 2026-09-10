@@ -498,6 +498,7 @@ def _synthesize_live_device_from_relay(
     db_height = _cap_positive_int(info.get("screen_height"))
     return {
         "type": "status",
+        "id": info.get("id", ""),
         "serial": runtime_serial,
         "registered_serial": registered_serial,
         "name": info.get("name", ""),
@@ -544,6 +545,7 @@ def _synthesize_live_device_from_media_adapter(
     height = _cap_positive_int((stream or {}).get("height"), db_height)
     return {
         "type": "status",
+        "id": info.get("id", ""),
         "serial": runtime_serial,
         "registered_serial": registered_serial,
         "name": info.get("name", ""),
@@ -972,6 +974,7 @@ def build_public_router(
                 if match is None:
                     continue
                 registered_serial, info = match
+                d["id"] = info.get("id", "")
                 d["registered_serial"] = registered_serial
                 d[_LIVE_DEVICE_INFO_KEY] = info
                 d["name"] = info.get("name", "")

@@ -1047,9 +1047,15 @@ async def _maybe_open_fb_post_detail(
             and not comment_sheet_opened
             and detail_xml
             and _looks_like_hierarchy_xml(detail_xml)
-            and _sha256_hex(detail_xml) != _sha256_hex(feed_xml)
         ):
-            max_verify_retries = _int_context(context, "post_open_verify_retries", 0, 0, 3)
+            stale_feed_dump = _sha256_hex(detail_xml) == _sha256_hex(feed_xml)
+            max_verify_retries = _int_context(
+                context,
+                "post_open_verify_retries",
+                2 if stale_feed_dump else 0,
+                0,
+                3,
+            )
             verify_retry_pause_s = _float_context(
                 context,
                 "post_open_verify_retry_pause_s",
@@ -1073,8 +1079,6 @@ async def _maybe_open_fb_post_detail(
                 opened = bool(retry_opened)
                 comment_sheet_opened = bool(retry_comment_sheet_opened)
                 if opened or comment_sheet_opened:
-                    break
-                if _sha256_hex(retry_xml) == _sha256_hex(feed_xml):
                     break
                 if retry_index + 1 >= max_verify_retries:
                     break

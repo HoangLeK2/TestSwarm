@@ -163,7 +163,7 @@ def normalize_step_selector(step: Dict[str, Any]) -> Optional[ScenarioSelectorSp
     by = str(step.get("by") or "").strip()
     value = str(step.get("value") or "").strip()
     if by and value:
-        return ScenarioSelectorSpec(by=by, value=value)
+        return _parse_selector_dict({"by": by, "value": value})
     return None
 
 
@@ -177,7 +177,7 @@ def normalize_element_condition(cond: Dict[str, Any]) -> Optional[ScenarioSelect
     by = str(cond.get("by") or "text").strip()
     value = str(cond.get("value") or "").strip()
     if value:
-        return ScenarioSelectorSpec(by=by, value=value)
+        return _parse_selector_dict({"by": by, "value": value})
     return None
 
 

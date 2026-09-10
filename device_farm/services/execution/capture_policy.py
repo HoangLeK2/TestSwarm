@@ -11,7 +11,6 @@ EXTRA_CAPTURE_STEP_TYPES = frozenset(
         "extract_text_ocr",
         "extract_text_ai",
         "extract_screen_data",
-        "llm_extract",
         "extraction_content.extract",
         "extraction_content.extract_text_hierarchy",
         "extraction_content.extract_text_ocr",

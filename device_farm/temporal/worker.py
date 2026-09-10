@@ -18,8 +18,6 @@ from temporal.relay_onboarding_workflows import RelayOnboardingWorkflow
 from temporal.schedule_activities import ScheduleActivities, set_scheduler_deps
 from temporal.schedule_workflow import ScheduleRunWorkflow
 from temporal.shared import CONTROL_TASK_QUEUE_NAME, TASK_QUEUE_NAME
-from temporal.account_state_activities import AccountStateActivities
-from temporal.account_state_workflows import AccountCooldownTickWorkflow
 from temporal.capacity_probe import capacity_probe, db_hold_probe
 from temporal.capacity_probe_workflows import CapacityProbeWorkflow, DbHoldProbeWorkflow
 from temporal.continuous_crawl_workflows import (
@@ -94,13 +92,12 @@ async def create_temporal_worker(
 
     _activities = DeviceActivities()
     _relay_onboarding_activities = RelayOnboardingActivities()
-    _account_state_activities = AccountStateActivities()
 
     # Short, control-plane work. Kept as one list so the device role and the
     # control role cannot drift apart during the migration.
     #
     # Registration here is deliberately wider than routing: only the frequent
-    # ones (finalize_campaign, the claim heartbeat, the cooldown tick, the short
+    # ones (finalize_campaign, the claim heartbeat, the short
     # schedule steps) are dispatched to the control queue today. The onboarding
     # and crawl bookkeeping activities are registered but still dispatched to
     # the device queue — they are rare and carry minute-scale timeouts, so
@@ -112,7 +109,7 @@ async def create_temporal_worker(
         _activities.persist_step_checkpoint,
         _activities.emit_control_flow_event,
         _activities.emit_temporal_activity_event,
-        _account_state_activities.process_expired_account_cooldowns,
+        _activities.emit_execution_events_batch,
         prepare_continuous_crawl_target,
         finalize_continuous_crawl,
         cleanup_continuous_crawl_target,
@@ -156,7 +153,6 @@ async def create_temporal_worker(
             ScenarioStepsWorkflow,
             ScheduleRunWorkflow,
             RelayOnboardingWorkflow,
-            AccountCooldownTickWorkflow,
             CapacityProbeWorkflow,
             DbHoldProbeWorkflow,
             ContinuousCrawlWorkflow,

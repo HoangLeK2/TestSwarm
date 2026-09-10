@@ -42,8 +42,27 @@ import { ScrollDownStepFields } from './scroll-down-fields';
 import { FallbackRatioFields, SelectorFields } from './selector-fields';
 import { PlatformSelect } from './platform-select';
 import { usePlatformCapabilities } from '../../hooks/use-platform-capabilities';
+import { useScenarioSchema } from '../../hooks/use-campaigns';
 import { SessionGateAccountBinder } from './session-gate-account-binder';
 import { PLATFORM_AWARE_STEP_TYPES } from './platform-aware-steps';
+import {
+  SchemaFields,
+  schemaFieldsFor,
+  type StepSchemaMap
+} from './schema-field';
+
+/**
+ * Node types whose config form is rendered from the backend STEP_SCHEMA.
+ *
+ * Grow this as nodes migrate. `tap_position` is here because its hand-written
+ * select offered ten positions while both executors implement four — the other
+ * six tapped the middle of the screen and reported success.
+ */
+// Nodes whose whole form comes from the backend schema. `loop` is deliberately
+// absent: LoopConfigFields owns count/while (mode toggle + ConditionBuilder,
+// which a generic json textarea cannot replace), and the schema owns only the
+// fields it does not touch. See the loop branch below.
+const SCHEMA_DRIVEN_STEP_TYPES = new Set(['tap_position', 'wait']);
 import {
   normalizeSystemVariableCondition,
   PLATFORM_SESSION_READY_VARIABLE
@@ -55,6 +74,7 @@ import {
   StepPanelField,
   StepPanelHeader,
   StepPanelHint,
+  StepPanelInput,
   StepPanelMetaFields,
   StepPanelSection,
   StepPanelTextarea,
@@ -1186,6 +1206,28 @@ export function StepDetailPanel({
   useEffect(() => {
     setSetupTab(primarySetupTab);
   }, [primarySetupTab, stepIdentity]);
+  // Read straight from the shared react-query cache (staleTime 5min) rather
+  // than drilling a second prop through the ~19 places nodeCapabilities goes.
+  //
+  // The migrated set is explicit rather than "everything with fields": a node
+  // whose hand-written form couples fields (launch_app writes activity and
+  // component from one box) or carries wording a flat render cannot show
+  // (clear_app's data-loss warning) keeps its form until someone has compared
+  // the two by eye.
+  const { data: scenarioSchema } = useScenarioSchema();
+  const schemaDrivenFields = SCHEMA_DRIVEN_STEP_TYPES.has(step.type)
+    ? schemaFieldsFor(
+        scenarioSchema?.steps_schema as StepSchemaMap | undefined,
+        step.type
+      )
+    : undefined;
+  const loopSchemaFields =
+    step.type === 'loop'
+      ? schemaFieldsFor(
+          scenarioSchema?.steps_schema as StepSchemaMap | undefined,
+          'loop'
+        )
+      : undefined;
   const nodeCapability = nodeCapabilities?.[step.type];
   const nodeCapabilityStatus = nodeCapability
     ? evaluateNodeCapabilityStatus(nodeCapability, deviceCapabilities)
@@ -1373,6 +1415,13 @@ export function StepDetailPanel({
 
           <TabsContent value={primarySetupTab} className='mt-0 space-y-3'>
             <StepPanelSection title={tSec('stepConfig')}>
+              {schemaDrivenFields && (
+                <SchemaFields
+                  fields={schemaDrivenFields}
+                  step={step as Record<string, unknown>}
+                  onChange={update}
+                />
+              )}
               {step.type === 'tap' && (
                 <>
                   <StepPanelHint>{tSel('autoFillHint')}</StepPanelHint>
@@ -1494,10 +1543,10 @@ export function StepDetailPanel({
                 <>
                   <F label='URL'>
                     <div className={valueInsertRowClassName()}>
-                      <Input
+                      <StepPanelInput
                         className='h-9 min-w-0 flex-1 text-xs'
                         value={step.url ?? ''}
-                        onChange={(e) => update({ url: e.target.value })}
+                        onValueCommit={(value) => update({ url: value })}
                       />
                       <VariableInsertSelect
                         availableVariables={availableVariables}
@@ -1509,11 +1558,11 @@ export function StepDetailPanel({
                     </div>
                   </F>
                   <F label={tField('browserPackage')}>
-                    <Input
+                    <StepPanelInput
                       className='h-8 font-mono text-xs'
                       value={step.package ?? ''}
-                      onChange={(e) =>
-                        update({ package: e.target.value || undefined })
+                      onValueCommit={(value) =>
+                        update({ package: value || undefined })
                       }
                     />
                   </F>
@@ -1565,7 +1614,9 @@ export function StepDetailPanel({
                 </>
               )}
 
-              {step.type === 'wait' && (
+              {/* wait renders from the schema — see SCHEMA_DRIVEN_STEP_TYPES.
+                  This branch stays as the fallback for a stale/absent schema. */}
+              {step.type === 'wait' && !schemaDrivenFields && (
                 <F label={tField('durationSeconds')}>
                   <Input
                     type='number'
@@ -3442,7 +3493,11 @@ export function StepDetailPanel({
                 />
               )}
 
-              {step.type === 'tap_position' && (
+              {/* tap_position renders from the schema — the list below offered
+                  ten positions while the executors implement four, so picking
+                  "bottom right" tapped the middle of the screen and reported
+                  success. Kept as the fallback for a stale/absent schema. */}
+              {step.type === 'tap_position' && !schemaDrivenFields && (
                 <F label={tField('position')}>
                   <select
                     className='w-full rounded border bg-background px-2 py-1.5 text-xs'
@@ -3476,13 +3531,29 @@ export function StepDetailPanel({
               )}
 
               {step.type === 'loop' && (
-                <F label={tField('loopConfig')}>
-                  <LoopConfigFields
-                    step={step}
-                    onUpdate={update}
-                    availableVariables={availableVariables}
-                  />
-                </F>
+                <>
+                  <F label={tField('loopConfig')}>
+                    <LoopConfigFields
+                      step={step}
+                      onUpdate={update}
+                      availableVariables={availableVariables}
+                    />
+                  </F>
+                  {/* The rest of loop's contract — duration/stall/idle-delay and
+                      loop_var — comes straight from the schema. These are the
+                      safety valves that had no editor at all: stall_after
+                      defaults to 0 (off), so the guard that stops a loop
+                      grinding on a dead screen was unreachable from here. The
+                      two sets of fields do not overlap, so nothing is editable
+                      in two places. */}
+                  {loopSchemaFields && (
+                    <SchemaFields
+                      fields={loopSchemaFields}
+                      step={step as Record<string, unknown>}
+                      onChange={update}
+                    />
+                  )}
+                </>
               )}
 
               {step.type === 'repeat' && (

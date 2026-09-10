@@ -339,7 +339,19 @@ async def delete_device(db: AsyncSession, device_id: str) -> None:
     """
     Xoá device và mọi liên kết campaign-device của nó.
     """
+    from db.crud.account import unassign_account_from_device
+    from db.models.account import DeviceAccount
+
     # Remove from campaigns first
     await db.execute(delete(CampaignDevice).where(CampaignDevice.device_id == device_id))
+    # Unlink accounts through the normal path so `unassigned` stays in step with
+    # the link table — the FK cascade below would drop the rows silently.
+    linked = (
+        await db.execute(
+            select(DeviceAccount.account_id).where(DeviceAccount.device_id == device_id)
+        )
+    ).scalars().all()
+    for account_id in linked:
+        await unassign_account_from_device(db, device_id, account_id)
     # Then delete the device
     await db.execute(delete(Device).where(Device.id == device_id))

@@ -103,6 +103,8 @@ export type ActiveFleetSessionListOut = {
 };
 
 export type DeviceCreate = { serial: string; name?: string };
+export type DeviceNameUpdate = { name: string };
+export type DeviceTagsUpdate = { tags: string };
 
 export type SessionOut = {
   id: string;
@@ -150,6 +152,20 @@ export const devicesApi = {
       .then((r) => r.data),
   create: (data: DeviceCreate) =>
     farmApi.post<DeviceOut>('/devices', data).then((r) => r.data),
+  updateName: (deviceId: string, data: DeviceNameUpdate) =>
+    farmApi
+      .patch<DeviceOut>(`/devices/${encodeURIComponent(deviceId)}/name`, data)
+      .then((r) => {
+        clearDeviceListCache();
+        return r.data;
+      }),
+  updateTags: (deviceId: string, data: DeviceTagsUpdate) =>
+    farmApi
+      .patch<DeviceOut>(`/devices/${encodeURIComponent(deviceId)}/tags`, data)
+      .then((r) => {
+        clearDeviceListCache();
+        return r.data;
+      }),
   register: (body?: { name?: string; description?: string }) =>
     farmApi
       .post<DeviceOut>('/devices/register', body ?? {})

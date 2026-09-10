@@ -4,7 +4,7 @@
   "settle_timeout_ms": 0,
   "_variables": {
     "GROUP_NAME": "openclaw vn",
-    "GROUP_XPATH": "//*[@content-desc=\"OpenClaw VN,Công khai · 123K thành viên\"]",
+    "GROUP_XPATH": "//*[contains(@content-desc,\"OpenClaw\") and contains(@content-desc,\"Công khai\")]",
     "MAX_SCROLLS": 3600,
     "SCROLL_X_RATIO": 0.18,
     "SAVE_COLLECTION": "fb_group_posts"
@@ -146,6 +146,94 @@
       "stable_duration": 0.5
     },
     {
+      "_comment": "FB 490 có màn welcome group lần đầu — bấm Tiếp nếu xuất hiện."
+    },
+    {
+      "type": "if_element",
+      "by": "text",
+      "value": "Tiếp",
+      "timeout": 2,
+      "then": [
+        {
+          "type": "tap_selector",
+          "by": "text",
+          "value": "Tiếp",
+          "timeout": 2
+        },
+        {
+          "type": "wait_stable",
+          "timeout": 4,
+          "stable_duration": 0.5
+        }
+      ],
+      "else": [
+        {
+          "type": "if_element",
+          "by": "text",
+          "value": "Next",
+          "timeout": 1,
+          "then": [
+            {
+              "type": "tap_selector",
+              "by": "text",
+              "value": "Next",
+              "timeout": 2
+            },
+            {
+              "type": "wait_stable",
+              "timeout": 4,
+              "stable_duration": 0.5
+            }
+          ],
+          "else": []
+        }
+      ]
+    },
+    {
+      "_comment": "FB 490 có màn giới thiệu bản thân sau welcome — bỏ qua để vào feed crawl."
+    },
+    {
+      "type": "if_element",
+      "by": "text",
+      "value": "Bỏ qua",
+      "timeout": 2,
+      "then": [
+        {
+          "type": "tap_selector",
+          "by": "text",
+          "value": "Bỏ qua",
+          "timeout": 2
+        },
+        {
+          "type": "wait_stable",
+          "timeout": 4,
+          "stable_duration": 0.5
+        }
+      ],
+      "else": [
+        {
+          "type": "if_element",
+          "by": "text",
+          "value": "Skip",
+          "timeout": 1,
+          "then": [
+            {
+              "type": "tap_selector",
+              "by": "text",
+              "value": "Skip",
+              "timeout": 2
+            },
+            {
+              "type": "wait_stable",
+              "timeout": 4,
+              "stable_duration": 0.5
+            }
+          ],
+          "else": []
+        }
+      ]
+    },
+    {
       "_comment": "Cuộn qua header nhóm vào feed bài viết (neo trái — tránh mở ảnh full-width)"
     },
     {
@@ -183,8 +271,8 @@
           "extract_profile": "balanced",
           "open_post_before_extract": true,
           "require_open_post_detail": true,
-          "post_open_verify_retries": 1,
-          "post_open_verify_retry_pause_s": 0.18,
+          "post_open_verify_retries": 3,
+          "post_open_verify_retry_pause_s": 0.8,
           "open_post_press_back_after_extract": false,
           "expand_see_more": true,
           "expand_see_more_max_passes": 2,

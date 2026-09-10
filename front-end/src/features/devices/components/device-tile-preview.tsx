@@ -50,6 +50,10 @@ import {
   selectDeviceTilePreviewMode,
   type WebCodecsSupport
 } from '../lib/device-tile-preview-policy';
+import {
+  deviceDisplayName,
+  deviceSecondarySerial
+} from '../lib/device-display-name';
 
 /** Lazy by default so multiple dashboard tabs do not exhaust browser stream connections. */
 const GRID_PREVIEW_EAGER =
@@ -320,6 +324,7 @@ function DeviceTilePreviewInner({
 }: DeviceTilePreviewProps) {
   const t = useTranslations('devicesFarm');
   const id = serialToId(device.serial);
+  const secondarySerial = deviceSecondarySerial(device);
   const isActive = isVisibleDeviceFarmActiveDevice(device);
   const health = device.health;
   const commandReady = health ? health.command.status === 'ready' : isActive;
@@ -618,7 +623,7 @@ function DeviceTilePreviewInner({
     <Card
       id={`tile-${id}`}
       data-serial={device.serial}
-      className='flex h-full max-w-full flex-col overflow-hidden rounded-xl border border-border/70 bg-card/70 shadow-sm backdrop-blur-sm transition-colors hover:border-primary/35'
+      className='group/tile flex h-full max-w-full flex-col overflow-hidden rounded-xl border border-border/70 bg-card/70 shadow-sm backdrop-blur-sm transition-colors hover:border-primary/35'
       style={{ width: tileWidthPx }}
     >
       <CardContent className='flex flex-1 flex-col p-0'>
@@ -626,9 +631,9 @@ function DeviceTilePreviewInner({
           <div className='flex min-w-0 items-start justify-between gap-2'>
             <div className='min-w-0'>
               <div className='flex min-w-0 items-center gap-1.5'>
-                <p className='truncate text-sm font-semibold leading-5 text-foreground'>
-                  {device.brand} {device.model}
-                </p>
+                <span className='truncate text-sm font-semibold leading-5 text-foreground'>
+                  {deviceDisplayName(device)}
+                </span>
                 {!isActive || agentOffline ? (
                   <Badge
                     variant='outline'
@@ -645,9 +650,14 @@ function DeviceTilePreviewInner({
                   </Badge>
                 ) : null}
               </div>
-              <p className='mt-0.5 truncate font-mono text-[11px] leading-4 text-muted-foreground'>
-                {device.serial}
-              </p>
+              {secondarySerial ? (
+                <p
+                  className='mt-0.5 truncate font-mono text-[11px] leading-4 text-muted-foreground'
+                  title={secondarySerial}
+                >
+                  {secondarySerial}
+                </p>
+              ) : null}
             </div>
           </div>
 
@@ -836,6 +846,10 @@ function tilePreviewPropsEqual(
   const pd = prev.device;
   const nd = next.device;
   return (
+    pd.id === nd.id &&
+    pd.name === nd.name &&
+    pd.display_name === nd.display_name &&
+    pd.registered_serial === nd.registered_serial &&
     pd.state === nd.state &&
     pd.brand === nd.brand &&
     pd.model === nd.model &&

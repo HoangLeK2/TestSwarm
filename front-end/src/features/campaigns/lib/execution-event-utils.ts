@@ -161,6 +161,22 @@ function evidenceFromPayload(
     : undefined;
 }
 
+/**
+ * Fold is order-sensitive: a terminal `step.completed` followed by a late
+ * activity event downgrades the row, and loop occurrences all collapse onto the
+ * last one. Workflow-side telemetry ships in batches, so delivery order is not
+ * timeline order — sort by the stamp the workflow put on each event.
+ *
+ * Only when every event carries one; without a timestamp we cannot order, and
+ * guessing is worse than keeping the delivery order.
+ */
+function inTimelineOrder(events: ExecutionEventOut[]): ExecutionEventOut[] {
+  if (!events.every((ev) => stringValue(ev.occurred_at))) return events;
+  return [...events].sort((a, b) =>
+    String(a.occurred_at).localeCompare(String(b.occurred_at))
+  );
+}
+
 export function foldEventsToStepLog(
   events: ExecutionEventOut[]
 ): StepLogEntry[] {
@@ -168,7 +184,7 @@ export function foldEventsToStepLog(
   const activeByBase = new Map<string, string>();
   const occurrenceCount = new Map<string, number>();
 
-  for (const ev of events) {
+  for (const ev of inTimelineOrder(events)) {
     const p = (ev.payload ?? {}) as Record<string, unknown>;
     const idx = Number(p.step_index ?? 0);
     const depth = typeof p.depth === 'number' ? p.depth : 0;

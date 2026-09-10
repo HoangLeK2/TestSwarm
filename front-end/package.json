@@ -13,7 +13,7 @@
     "lint:fix": "eslint src --fix && pnpm format",
     "lint:strict": "eslint --max-warnings=0 src",
     "typecheck": "tsc --noEmit --pretty false --incremental false",
-    "check:i18n": "node scripts/check-i18n-keys.mjs",
+    "check:i18n": "node scripts/check-i18n-keys.mjs && node scripts/check-schema-field-i18n.mjs",
     "format": "prettier --write .",
     "format:check": "prettier -c -w .",
     "prepare": "husky",

@@ -15,9 +15,5 @@ class InvalidStateTransitionError(AccountStateError):
     code = "INVALID_STATE_TRANSITION"
 
 
-class InvalidTtlError(AccountStateError):
-    code = "INVALID_TTL"
-
-
 class StateConflictError(AccountStateError):
     code = "STATE_CONFLICT"

@@ -10,7 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.crud.router import api_router
 from api.deps import _get_current_user, _get_db
-from db.crud.account import create_account, list_active_account_ids, round_robin_assign
+from db.crud.account import (
+    assign_account_to_device,
+    create_account,
+    get_account,
+    list_active_account_ids,
+    round_robin_assign,
+    unassign_account_from_device,
+)
 from db.crud.account_event import list_account_events
 from db.crud.account_group import add_members, create_group, pick_next_batch
 from db.models import Organization, User
@@ -19,9 +26,14 @@ from tenancy.context import clear_current_org_id, set_current_org_id
 from db.models.enums import AccountEventType, AccountState
 from db.models.utils import _uuid
 from fastapi import FastAPI
-from services.account_state.exceptions import InvalidStateTransitionError, InvalidTtlError
-from services.account_state.fsm import all_transition_pairs, can_transition, transition_error_message
-from services.account_state.service import AccountStateService, process_expired_cooldowns
+from services.account_state.exceptions import InvalidStateTransitionError
+from services.account_state.fsm import (
+    all_transition_pairs,
+    can_transition,
+    normalize_state,
+    transition_error_message,
+)
+from services.account_state.service import AccountStateService
 from services.account_event_recorder import AccountEventRecorder, reset_account_event_recorder
 from types import SimpleNamespace
 
@@ -30,14 +42,36 @@ USER_ID = "user-fsm-test"
 ORG_ID = "org-fsm-test"
 
 
-async def _new_account(db: AsyncSession, username: str):
-    return await create_account(
+async def _new_account(db: AsyncSession, username: str, *, active: bool = True):
+    """Create an account. New accounts start `unassigned`; `active=True`
+    promotes it the way linking a device would."""
+    acc = await create_account(
         db,
         platform="facebook",
         username=username,
         user_id=USER_ID,
         org_id=ORG_ID,
     )
+    if active:
+        await AccountStateService().transition(
+            db, acc.id, to=AccountState.ACTIVE, reason="test setup", actor=USER_ID
+        )
+        await db.refresh(acc)
+    return acc
+
+
+def _new_device(db: AsyncSession) -> str:
+    dev_id = _uuid()
+    db.add(
+        Device(
+            id=dev_id,
+            serial=f"dev-{dev_id[:8]}",
+            name="d1",
+            user_id=USER_ID,
+            org_id=ORG_ID,
+        )
+    )
+    return dev_id
 
 
 def _build_app(session_factory):
@@ -120,120 +154,24 @@ class TestAccountStateFsmMatrix:
         assert can_transition(AccountState.BANNED, AccountState.RETIRED)
         assert not can_transition(AccountState.BANNED, AccountState.ACTIVE)
 
-    def test_active_to_cooldown_allowed(self):
-        assert can_transition(AccountState.ACTIVE, AccountState.COOLDOWN)
+    def test_unassigned_activates_but_cannot_be_suspended(self):
+        assert can_transition(AccountState.UNASSIGNED, AccountState.ACTIVE)
+        assert not can_transition(AccountState.UNASSIGNED, AccountState.SUSPENDED)
+
+    def test_cooldown_is_no_longer_a_state(self):
+        assert "cooldown" not in {s.value for s in AccountState}
+        # Legacy rows and old API clients still normalize rather than blow up.
+        assert normalize_state("cooldown") is AccountState.ACTIVE
 
     def test_full_matrix_snapshot(self):
         allowed = {(a.value, b.value) for a, b, ok in all_transition_pairs() if ok}
-        assert ("active", "cooldown") in allowed
-        assert ("cooldown", "active") in allowed
+        assert ("unassigned", "active") in allowed
+        assert ("active", "unassigned") in allowed
         assert ("banned", "retired") in allowed
         assert ("retired", "active") not in allowed
 
 
 # ── Service ───────────────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_transition_active_to_cooldown_sets_ttl(
-    tenancy_session_factory, fsm_seed
-):
-    async with tenancy_session_factory() as db:
-        acc = await _new_account(db, "cool1")
-        await db.commit()
-        svc = AccountStateService()
-        updated = await svc.transition(
-            db,
-            acc.id,
-            to=AccountState.COOLDOWN,
-            reason="FB rate limit",
-            ttl_seconds=3600,
-            actor=USER_ID,
-        )
-        await db.commit()
-        assert updated.state == "cooldown"
-        assert updated.cooldown_until is not None
-        assert updated.state_reason == "FB rate limit"
-
-
-@pytest.mark.asyncio
-async def test_invalid_ttl_rejected(tenancy_session_factory, fsm_seed):
-    async with tenancy_session_factory() as db:
-        acc = await _new_account(db, "badttl")
-        await db.commit()
-        svc = AccountStateService()
-        with pytest.raises(InvalidTtlError):
-            await svc.transition(
-                db,
-                acc.id,
-                to=AccountState.COOLDOWN,
-                reason="x",
-                ttl_seconds=-1,
-                actor=USER_ID,
-            )
-
-
-@pytest.mark.asyncio
-async def test_process_expired_cooldowns_without_tenant_context(
-    tenancy_session_factory, fsm_seed
-):
-    """Background/Temporal jobs run without request org context."""
-    past = datetime.now(timezone.utc) - timedelta(minutes=5)
-    async with tenancy_session_factory() as db:
-        acc = await _new_account(db, "expired-no-ctx")
-        svc = AccountStateService()
-        await svc.transition(
-            db,
-            acc.id,
-            to=AccountState.COOLDOWN,
-            reason="test",
-            ttl_seconds=60,
-            actor=USER_ID,
-        )
-        acc.cooldown_until = past
-        await db.commit()
-
-    clear_current_org_id()
-    async with tenancy_session_factory() as db:
-        n = await process_expired_cooldowns(db)
-        await db.commit()
-        assert n == 1
-        from db.crud.account import get_account
-
-        set_current_org_id(ORG_ID)
-        row = await get_account(db, acc.id)
-        assert row.state == "active"
-        assert row.cooldown_until is None
-
-
-@pytest.mark.asyncio
-async def test_process_expired_cooldowns_auto_active(
-    tenancy_session_factory, fsm_seed
-):
-    past = datetime.now(timezone.utc) - timedelta(minutes=5)
-    async with tenancy_session_factory() as db:
-        acc = await _new_account(db, "expired")
-        svc = AccountStateService()
-        await svc.transition(
-            db,
-            acc.id,
-            to=AccountState.COOLDOWN,
-            reason="test",
-            ttl_seconds=60,
-            actor=USER_ID,
-        )
-        acc.cooldown_until = past
-        await db.commit()
-
-    async with tenancy_session_factory() as db:
-        n = await process_expired_cooldowns(db)
-        await db.commit()
-        assert n == 1
-        from db.crud.account import get_account
-
-        row = await get_account(db, acc.id)
-        assert row.state == "active"
-        assert row.cooldown_until is None
 
 
 @pytest.mark.asyncio
@@ -255,7 +193,7 @@ async def test_retired_to_active_rejected(tenancy_session_factory, fsm_seed):
 
 
 @pytest.mark.asyncio
-async def test_api_transition_cooldown(fsm_client):
+async def test_api_transition_to_verifying(fsm_client):
     client, session_factory = fsm_client
     async with session_factory() as db:
         acc = await _new_account(db, "api1")
@@ -264,12 +202,25 @@ async def test_api_transition_cooldown(fsm_client):
 
     resp = await client.post(
         f"/api/accounts/{aid}/state",
-        json={"to": "cooldown", "reason": "FB rate limit", "ttl_seconds": 86400},
+        json={"to": "suspended", "reason": "selfie checkpoint"},
     )
     assert resp.status_code == 200
-    body = resp.json()
-    assert body["state"] == "cooldown"
-    assert body["cooldown_until"] is not None
+    assert resp.json()["state"] == "suspended"
+
+
+@pytest.mark.asyncio
+async def test_api_rejects_retired_cooldown_state(fsm_client):
+    client, session_factory = fsm_client
+    async with session_factory() as db:
+        acc = await _new_account(db, "api_cd")
+        await db.commit()
+        aid = acc.id
+
+    resp = await client.post(
+        f"/api/accounts/{aid}/state",
+        json={"to": "cooldown", "reason": "FB rate limit"},
+    )
+    assert resp.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -325,11 +276,11 @@ async def test_audit_state_changes(fsm_client):
         await db.commit()
         aid = acc.id
 
-    for target in ("cooldown", "suspended", "active"):
-        payload = {"to": target, "reason": f"go {target}"}
-        if target == "cooldown":
-            payload["ttl_seconds"] = 120
-        r = await client.post(f"/api/accounts/{aid}/state", json=payload)
+    for target in ("suspended", "active", "unassigned"):
+        r = await client.post(
+            f"/api/accounts/{aid}/state",
+            json={"to": target, "reason": f"go {target}"},
+        )
         assert r.status_code == 200, r.text
 
     async with session_factory() as db:
@@ -349,38 +300,24 @@ async def test_round_robin_skips_non_active(tenancy_session_factory, fsm_seed):
         states = [
             ("a1", AccountState.ACTIVE),
             ("a2", AccountState.ACTIVE),
-            ("a3", AccountState.COOLDOWN),
+            ("a3", AccountState.UNASSIGNED),
             ("a4", AccountState.SUSPENDED),
             ("a5", AccountState.BANNED),
         ]
         ids = []
         svc = AccountStateService()
         for uname, st in states:
-            acc = await _new_account(db, uname)
-            if st != AccountState.ACTIVE:
+            acc = await _new_account(db, uname, active=st != AccountState.UNASSIGNED)
+            if st not in (AccountState.ACTIVE, AccountState.UNASSIGNED):
                 await svc.transition(
-                    db,
-                    acc.id,
-                    to=st,
-                    reason="setup",
-                    ttl_seconds=3600 if st == AccountState.COOLDOWN else None,
-                    actor=USER_ID,
+                    db, acc.id, to=st, reason="setup", actor=USER_ID
                 )
             ids.append(acc.id)
 
         active = await list_active_account_ids(db, ids)
         assert set(active) == {ids[0], ids[1]}
 
-        dev_id = _uuid()
-        db.add(
-            Device(
-                id=dev_id,
-                serial=f"dev-{dev_id[:8]}",
-                name="d1",
-                user_id=USER_ID,
-                org_id=ORG_ID,
-            )
-        )
+        dev_id = _new_device(db)
         await db.flush()
         created = await round_robin_assign(db, ids, [dev_id])
         created_active = await round_robin_assign(db, active, [dev_id])
@@ -398,19 +335,79 @@ async def test_pick_next_batch_only_active(tenancy_session_factory, fsm_seed):
             user_id=USER_ID,
             org_id=ORG_ID,
         )
-        svc = AccountStateService()
         active_acc = await _new_account(db, "pick_act")
-        cool_acc = await _new_account(db, "pick_cd")
-        await svc.transition(
-            db,
-            cool_acc.id,
-            to=AccountState.COOLDOWN,
-            reason="x",
-            ttl_seconds=9999,
-            actor=USER_ID,
-        )
-        await add_members(db, group=grp, account_ids=[active_acc.id, cool_acc.id])
+        # Resting is an eligibility gate, not a state: still `active`, still skipped.
+        resting_acc = await _new_account(db, "pick_cd")
+        resting_acc.cooldown_until = datetime.now(timezone.utc) + timedelta(hours=3)
+        await db.flush()
+        await add_members(db, group=grp, account_ids=[active_acc.id, resting_acc.id])
         picks = await pick_next_batch(db, grp.id, 10)
         await db.commit()
         assert len(picks) == 1
         assert picks[0].id == active_acc.id
+
+
+# ── unassigned ↔ device links ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_new_account_starts_unassigned(tenancy_session_factory, fsm_seed):
+    async with tenancy_session_factory() as db:
+        acc = await _new_account(db, "fresh", active=False)
+        await db.commit()
+        assert acc.state == AccountState.UNASSIGNED.value
+        assert acc.status == AccountState.UNASSIGNED.value
+
+
+@pytest.mark.asyncio
+async def test_link_activates_and_unlink_reverts(tenancy_session_factory, fsm_seed):
+    async with tenancy_session_factory() as db:
+        acc = await _new_account(db, "linkme", active=False)
+        dev_id = _new_device(db)
+        await db.flush()
+
+        await assign_account_to_device(db, dev_id, acc.id)
+        assert (await get_account(db, acc.id)).state == AccountState.ACTIVE.value
+
+        await unassign_account_from_device(db, dev_id, acc.id)
+        assert (await get_account(db, acc.id)).state == AccountState.UNASSIGNED.value
+        await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_unlink_does_not_revive_banned_account(
+    tenancy_session_factory, fsm_seed
+):
+    """A banned account that loses its device stays banned, not 'unassigned'."""
+    async with tenancy_session_factory() as db:
+        acc = await _new_account(db, "banned_link")
+        dev_id = _new_device(db)
+        await db.flush()
+        await assign_account_to_device(db, dev_id, acc.id)
+        await AccountStateService().transition(
+            db, acc.id, to=AccountState.BANNED, reason="platform ban", actor=USER_ID
+        )
+
+        await unassign_account_from_device(db, dev_id, acc.id)
+        assert (await get_account(db, acc.id)).state == AccountState.BANNED.value
+        await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_second_link_does_not_retrigger_transition(
+    tenancy_session_factory, fsm_seed
+):
+    """Only the last unlink reverts — an account on two devices stays active."""
+    async with tenancy_session_factory() as db:
+        acc = await _new_account(db, "twodev", active=False)
+        dev_a, dev_b = _new_device(db), _new_device(db)
+        await db.flush()
+        await assign_account_to_device(db, dev_a, acc.id)
+        await assign_account_to_device(db, dev_b, acc.id)
+
+        await unassign_account_from_device(db, dev_a, acc.id)
+        assert (await get_account(db, acc.id)).state == AccountState.ACTIVE.value
+
+        await unassign_account_from_device(db, dev_b, acc.id)
+        assert (await get_account(db, acc.id)).state == AccountState.UNASSIGNED.value
+        await db.commit()

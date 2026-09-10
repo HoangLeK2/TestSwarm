@@ -187,6 +187,7 @@ def find_node_contract_gaps(
     registered_handlers: set[str] | None = None,
 ) -> dict[str, list[str]]:
     handlers = registered_handlers or set()
+    declared = set(step_types)
     return {
         "missing_schema": [
             step_type for step_type in step_types if step_type not in step_schema
@@ -196,4 +197,9 @@ def find_node_contract_gaps(
             for step_type in step_types
             if step_type not in handlers and step_type not in _CONTROL_NODES
         ],
+        # The reverse direction: a handler nobody declared. `llm_extract` lived
+        # here for a release — registered, dispatchable, rejected by
+        # validate_step, invisible in the editor. Only the forward check ran, so
+        # nothing said so.
+        "orphan_handler": sorted(handlers - declared),
     }

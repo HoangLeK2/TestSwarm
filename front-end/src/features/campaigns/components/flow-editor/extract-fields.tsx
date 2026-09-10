@@ -413,7 +413,7 @@ function SaveSummaryCard({
   );
 }
 
-function CollapsibleBlock({
+export function CollapsibleBlock({
   title,
   badge,
   defaultOpen = false,

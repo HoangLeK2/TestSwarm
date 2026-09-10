@@ -1,6 +1,7 @@
 """Helpers to emit step events from Temporal activities (DF-T-04-013)."""
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -121,6 +122,7 @@ async def emit_control_flow_step_event(
     depth: int = 0,
     trace_context: dict[str, Any] | None = None,
     payload: dict[str, Any] | None = None,
+    occurred_at: datetime | None = None,
 ) -> None:
     trace = build_step_trace_context(
         step={"id": step_id, "type": step_type},
@@ -151,6 +153,7 @@ async def emit_control_flow_step_event(
         campaign_id=campaign_id,
         step_id=step_id,
         payload=event_payload,
+        occurred_at=occurred_at,
     )
 
 
@@ -167,6 +170,7 @@ async def emit_temporal_activity_event(
     depth: int = 0,
     trace_context: dict[str, Any] | None = None,
     payload: dict[str, Any] | None = None,
+    occurred_at: datetime | None = None,
 ) -> None:
     event_type = str(event_type or "")
     if event_type not in TEMPORAL_ACTIVITY_EVENTS:
@@ -220,6 +224,7 @@ async def emit_temporal_activity_event(
         campaign_id=campaign_id,
         step_id=step_id,
         payload=event_payload,
+        occurred_at=occurred_at,
     )
 
 

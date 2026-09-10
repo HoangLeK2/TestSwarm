@@ -108,6 +108,28 @@ export function useCreateDevice() {
   });
 }
 
+export function useUpdateDeviceName() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ deviceId, name }: { deviceId: string; name: string }) =>
+      devicesApi.updateName(deviceId, { name }),
+    onSuccess: () => {
+      invalidateDeviceFleetQueries(qc);
+    }
+  });
+}
+
+export function useUpdateDeviceTags() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ deviceId, tags }: { deviceId: string; tags: string }) =>
+      devicesApi.updateTags(deviceId, { tags }),
+    onSuccess: () => {
+      invalidateDeviceFleetQueries(qc);
+    }
+  });
+}
+
 export function useDeviceSessions(deviceId: string) {
   return useQuery({
     queryKey: ['device-sessions', deviceId],

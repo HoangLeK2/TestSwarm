@@ -22,42 +22,105 @@ import pytest
 
 _ROOT = Path(__file__).resolve().parents[1]
 _EXECUTOR_LOOP = _ROOT / "tasks" / "scenario" / "steps" / "control_flow.py"
+_EXECUTOR_COMPOSITION = _ROOT / "tasks" / "scenario" / "steps" / "composition.py"
 _WORKFLOW_LOOP = _ROOT / "temporal" / "workflows.py"
 
-# Step keys the loop reads. Both implementations must honour every one, or a
-# scenario behaves differently depending on how it was started — the hardest
-# kind of bug to see, because each path looks correct on its own.
-_LOOP_STEP_KEYS = (
-    "count",
-    "while",
-    "max_iterations",
-    "loop_var",
-    "steps",
-    "stall_after",
-    "idle_delay_seconds",
-)
+# Step keys each control-flow node reads. Both implementations must honour every
+# one, or a scenario behaves differently depending on how it was started — the
+# hardest kind of bug to see, because each path looks correct on its own.
+#
+# `loop` was the only node covered when this guard was written; the other seven
+# share the same two-implementation shape and the same failure mode.
+_STEP_KEYS_BY_NODE: dict[str, tuple[str, ...]] = {
+    "loop": (
+        "count",
+        "while",
+        "max_iterations",
+        "loop_var",
+        "steps",
+        "stall_after",
+        "idle_delay_seconds",
+    ),
+    "if": ("condition", "then", "else"),
+    "repeat": ("count", "delay_between", "steps"),
+    "repeat_until": ("condition", "max_iterations", "steps"),
+    # `by`/`value` are read through resolve_step_selector_fields in the executor
+    # and inline in the workflow, so they are not comparable as literals here.
+    "if_element": ("timeout", "then", "else"),
+    "if_variable": (
+        "name",
+        "then",
+        "else",
+        "equals",
+        "not_equals",
+        "contains",
+        "greater_than",
+    ),
+    "random_pick": ("branches", "weight", "steps"),
+    "run_scenario": (
+        "scenario_id",
+        "scenario_name",
+        "variables",
+        "steps",
+        "by_id",
+        "by_campaign_name",
+        "by_template_name",
+    ),
+}
+
+_CASES = [
+    (node, key) for node, keys in _STEP_KEYS_BY_NODE.items() for key in keys
+]
+
+_PATHS_BY_NODE = {
+    "run_scenario": (_EXECUTOR_COMPOSITION, _WORKFLOW_LOOP),
+}
+
+# Subscripts only count when the container is the step dict itself. Any
+# `ast.Constant` used to count, which meant a key mentioned in a comment or in
+# an unrelated `result["..."]` write satisfied the guard.
+_STEP_CONTAINERS = {"step", "raw_step"}
 
 
-def _string_constants(path: Path) -> set[str]:
+def _read_step_keys(path: Path) -> set[str]:
+    """String literals used to read a key: `.get("k")` or `step["k"]`."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    return {
-        node.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str)
-    }
+    keys: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            keys.add(node.args[0].value)
+        elif (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in _STEP_CONTAINERS
+            and isinstance(node.slice, ast.Constant)
+            and isinstance(node.slice.value, str)
+        ):
+            keys.add(node.slice.value)
+    return keys
 
 
-@pytest.mark.parametrize("key", _LOOP_STEP_KEYS)
-def test_both_loop_implementations_read_the_same_step_keys(key: str) -> None:
+@pytest.mark.parametrize(("node", "key"), _CASES, ids=[f"{n}:{k}" for n, k in _CASES])
+def test_both_control_flow_implementations_read_the_same_step_keys(
+    node: str, key: str
+) -> None:
     missing = [
         path.relative_to(_ROOT).as_posix()
-        for path in (_EXECUTOR_LOOP, _WORKFLOW_LOOP)
-        if key not in _string_constants(path)
+        for path in _PATHS_BY_NODE.get(node, (_EXECUTOR_LOOP, _WORKFLOW_LOOP))
+        if key not in _read_step_keys(path)
     ]
     assert not missing, (
-        f"the loop step key {key!r} is handled in only one of the two loop "
-        f"implementations — missing from {missing}. A scenario would then behave "
-        f"differently depending on whether it was run directly or as a campaign."
+        f"{node}: the step key {key!r} is handled in only one of the two "
+        f"control-flow implementations — missing from {missing}. A scenario "
+        f"would then behave differently depending on whether it was run "
+        f"directly or as a campaign."
     )
 
 

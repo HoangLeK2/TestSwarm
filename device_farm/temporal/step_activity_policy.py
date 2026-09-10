@@ -39,6 +39,7 @@ _READ_STEP_TYPES = frozenset(
         "check_element_exists",
         "evaluate_condition",
         "evaluate_legacy_condition",
+        "assert_app_state",
     }
 )
 
@@ -50,18 +51,24 @@ _IO_EFFECT_STEP_TYPES = frozenset(
         "take_screenshot",
         "extract",
         "save_extraction",
+        # DB leases and pool reads: no device side effect, but they can block on
+        # a row lock, so they get io_effect's longer stall thresholds.
+        "lease_source_target",
+        "lease_connection_candidate",
+        "use_source_pool",
     }
 )
 
-_SOCIAL_EFFECT_MARKERS = (
-    "friend",
-    "follow",
-    "like",
-    "comment",
-    "message",
-    "connect",
-    "react",
-    "share",
+# Enumerated, not matched by substring. The old marker list classified by
+# `"connect" in step_type`, which swept `lease_connection_candidate` (a DB lease)
+# into social_effect and left `content_interaction`/`community_membership` —
+# genuinely social — in the device_effect fallback.
+_SOCIAL_EFFECT_STEP_TYPES = frozenset(
+    {
+        "content_interaction",
+        "connection_request",
+        "community_membership",
+    }
 )
 
 _DEVICE_EFFECT_STEP_TYPES = frozenset(
@@ -87,6 +94,34 @@ _DEVICE_EFFECT_STEP_TYPES = frozenset(
         "input_text",
         "input_selector",
         "set_clipboard",
+        "adb_shell",
+        "dismiss_popup",
+        "tap_image",
+        "tap_xml_match",
+        "login_if_needed",
+        "fill_form",
+        "platform_session_gate",
+    }
+)
+
+# Control-flow nodes the workflow runs itself; they never reach activity
+# dispatch, so they have no activity policy. Listed only so the coverage guard
+# in tests/test_step_policy_coverage.py can tell "handled elsewhere" from
+# "nobody classified this". This is _CONTROL_FLOW_TYPES (workflows.py) minus
+# `extract`/`save_extraction`, which flush the batch but still run as activities.
+_WORKFLOW_HANDLED_STEP_TYPES = frozenset(
+    {
+        "set_variable",
+        "set_var",
+        "break_if",
+        "loop",
+        "if",
+        "repeat",
+        "repeat_until",
+        "if_element",
+        "if_variable",
+        "random_pick",
+        "run_scenario",
     }
 )
 
@@ -129,9 +164,9 @@ def step_side_effect_class(step: dict[str, Any]) -> SideEffectClass:
         return "read"
     if step_type in _IO_EFFECT_STEP_TYPES:
         return "io_effect"
-    if step_type.startswith("social_") or any(
-        marker in step_type for marker in _SOCIAL_EFFECT_MARKERS
-    ):
+    # `social_` is a deliberate naming convention for the platform action nodes,
+    # not an accidental substring — keep the prefix match.
+    if step_type.startswith("social_") or step_type in _SOCIAL_EFFECT_STEP_TYPES:
         return "social_effect"
     if step_type in _DEVICE_EFFECT_STEP_TYPES:
         return "device_effect"

@@ -13,12 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.models.campaign import Scenario
 from db.models.scenario_version import ScenarioVersion
 from services.scenario_validation.checks import (
+    check_content_interaction_verify,
     check_graph,
     check_lint_warnings,
     check_on_error_targets,
     check_retry_config,
     check_scenario_references,
     check_shape,
+    check_step_fields,
     check_variables,
 )
 from services.scenario_validation.models import ValidationResult
@@ -99,6 +101,8 @@ class ScenarioValidator:
             check_variables(index, scenario_vars, self.campaign_variables, result)
             check_on_error_targets(index, result)
             check_retry_config(index, result)
+            check_step_fields(index, result)
+            check_content_interaction_verify(index, result)
 
             ref_cache = await self._ref_cache_loaded()
             await check_scenario_references(

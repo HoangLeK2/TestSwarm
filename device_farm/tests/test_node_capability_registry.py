@@ -5,6 +5,15 @@ from pathlib import Path
 
 from common.node_capabilities import build_node_capability_registry, find_node_contract_gaps
 from common.scenario_schema import SCENARIO_STEP_TYPES, STEP_SCHEMA, get_scenario_schema
+from tasks.scenario.steps import _STEP_HANDLERS
+
+# Handler names kept as aliases of a declared node. They dispatch to the same
+# behaviour under a shorter legacy name and are deliberately not offered in the
+# editor, so they are not gaps.
+_HANDLER_ALIASES = {
+    "if": "if_element",
+    "set_var": "set_variable",
+}
 
 
 def test_schema_exposes_node_capability_registry():
@@ -22,11 +31,18 @@ def test_schema_exposes_node_capability_registry():
 
 def test_node_capability_registry_has_no_schema_gaps():
     registry = build_node_capability_registry(SCENARIO_STEP_TYPES, STEP_SCHEMA)
-    gaps = find_node_contract_gaps(SCENARIO_STEP_TYPES, STEP_SCHEMA)
+    gaps = find_node_contract_gaps(
+        SCENARIO_STEP_TYPES,
+        STEP_SCHEMA,
+        registered_handlers=set(_STEP_HANDLERS),
+    )
 
     assert len(registry) == len(SCENARIO_STEP_TYPES)
     assert len({entry["type"] for entry in registry}) == len(registry)
     assert gaps["missing_schema"] == []
+    # A handler with no declared node type is unreachable from the editor and
+    # rejected by validate_step — declare it or delete it.
+    assert [t for t in gaps["orphan_handler"] if t not in _HANDLER_ALIASES] == []
     assert "install_apk" in SCENARIO_STEP_TYPES
     assert "install_apk" in STEP_SCHEMA
 

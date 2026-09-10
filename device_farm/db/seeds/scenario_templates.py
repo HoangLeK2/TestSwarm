@@ -51,8 +51,8 @@ def _authored(id_prefix: str | None, name: str, step: Dict[str, Any]) -> Dict[st
 _FB_POST_OPEN_EXTRACT: Dict[str, Any] = {
     "open_post_before_extract": True,
     "open_post_press_back_after_extract": False,
-    "post_open_verify_retries": 1,
-    "post_open_verify_retry_pause_s": 0.18,
+    "post_open_verify_retries": 3,
+    "post_open_verify_retry_pause_s": 0.8,
 }
 
 # Sau extract comments — đóng sheet/detail để quay lại feed trước vòng kế tiếp.
@@ -1190,6 +1190,69 @@ def _fb_platform_session_requirement() -> Dict[str, Any]:
     }
 
 
+def _fb_read_own_profile_steps(prefix: str) -> List[Dict[str, Any]]:
+    """Open the account's own profile, read the header, come back.
+
+    Two entry points because Facebook ships two shells. The build measured here
+    (vivo V2352A, Vietnamese, 2026-09) has no profile tab at all — the only link
+    to your own profile is the avatar in the feed composer row, content-desc
+    "Đi tới trang cá nhân". Older tab-strip builds put it in the navigation bar.
+
+    Both taps are guarded by `if_element`: when neither entry point is on screen
+    the read is skipped instead of failing the scenario, and the reader itself
+    refuses to name a header it cannot prove belongs to this account.
+    """
+    open_profile = {
+        "type": "tap_selector",
+        "by": "content-desc",
+        "value": "Đi tới trang cá nhân",
+        "timeout": 5,
+    }
+    return [
+        {
+            "id": f"{prefix}_open_own_profile",
+            "type": "if_element",
+            "by": "content-desc",
+            "value": "Đi tới trang cá nhân",
+            "timeout": 4,
+            "title": "Đi tới trang cá nhân",
+            "then": [deepcopy(open_profile)],
+            "else": [
+                {
+                    "type": "if_element",
+                    "by": "content-desc",
+                    "value": "Trang cá nhân",
+                    "timeout": 2,
+                    "then": [
+                        {
+                            "type": "tap_selector",
+                            "by": "content-desc",
+                            "value": "Trang cá nhân",
+                            "timeout": 5,
+                        }
+                    ],
+                    "else": [],
+                }
+            ],
+        },
+        {
+            "id": f"{prefix}_profile_settle",
+            "type": "wait_stable",
+            "timeout": 8,
+            "stable_duration": 0.6,
+        },
+        {
+            "id": f"{prefix}_read_own_profile",
+            "type": "social_sync_connections",
+            "platform": "facebook",
+            "metric": "friends",
+            "timeout": 12,
+            "title": "Đọc tên hiển thị và số bạn",
+        },
+        {"id": f"{prefix}_leave_own_profile", "type": "key", "key": "back"},
+    ]
+
+
 def _fb_app_start_steps(prefix: str) -> List[Dict[str, Any]]:
     return [
         {
@@ -1366,10 +1429,33 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "Xác nhận session đúng account rồi mới đăng nhập khi cần. "
             "Dùng số điện thoại hoặc email và mật khẩu Facebook của account đã gắn."
         ),
-        "tags": "facebook,login,app-automation",
+        "tags": "facebook,login,app-automation,profile-identity",
         "variables": {},
         "steps": [
             *_fb_session_guard_steps("facebook"),
+            # Confirming the session says "somebody is signed in"; only the
+            # profile header says who. Read it here, where the session row was
+            # just written, so the account list stops being serials to guess at.
+            *_fb_read_own_profile_steps("facebook"),
+        ],
+    },
+
+    {
+        "name": "Đọc hồ sơ account Facebook",
+        "display_name": "Đọc hồ sơ account Facebook (tên + số bạn)",
+        "category": "facebook",
+        "description": (
+            "Mở trang cá nhân của chính account rồi đọc tên hiển thị và số "
+            "người bạn. Lưu tên vào phiên nền tảng của điện thoại và số bạn "
+            "vào lịch sử tăng trưởng; publish ACCOUNT_DISPLAY_NAME, "
+            "ACCOUNT_FRIEND_COUNT và ACCOUNT_STAGE để kịch bản khác rẽ nhánh."
+        ),
+        "tags": "facebook,profile,identity,graph,requires-platform-session:facebook",
+        "variables": {},
+        "steps": [
+            *_fb_session_guard_steps("read_profile"),
+            *_fb_read_own_profile_steps("read_profile"),
+            {"id": "read_profile_finish", "type": "key", "key": "home"},
         ],
     },
 
@@ -1971,6 +2057,125 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
     },
 
     {
+        "name": "Nuôi Facebook - Like/comment Feed theo keyword",
+        "display_name": "Nuôi Facebook - Like/comment Feed theo keyword",
+        "category": "facebook",
+        "description": (
+            "Lướt Home feed Facebook; mỗi màn hình mở rộng 'Xem thêm' trong node "
+            "scan, rồi like và comment theo nhóm keyword: năm học mới, công nghệ, "
+            "giao lưu."
+        ),
+        "tags": "facebook,nurture,post,feed,keyword,like,comment,requires-platform-session:facebook",
+        "requirements": _fb_platform_session_requirement(),
+        "variables": {
+            "FEED_SCAN_CYCLES": 120,
+            "SCROLL_X_RATIO": 0.18,
+        },
+        "steps": [
+            {
+                "id": "feed_keyword_open_facebook",
+                "type": "launch_app",
+                "package": "com.facebook.katana",
+                "wait_after": 1.5,
+            },
+            {
+                "id": "feed_keyword_wait_facebook",
+                "type": "wait_app",
+                "package": "com.facebook.katana",
+                "front": True,
+                "timeout": 1.5,
+            },
+            {
+                "id": "feed_keyword_dismiss_popup",
+                "type": "dismiss_popup",
+                "retries": 2,
+            },
+            {
+                "id": "feed_keyword_wait_stable",
+                "type": "wait_stable",
+                "timeout": 1.5,
+                "stable_duration": 0.35,
+            },
+            {
+                "id": "feed_keyword_loop",
+                "type": "loop",
+                "count": "${FEED_SCAN_CYCLES}",
+                "loop_var": "FEED_SCAN_CYCLE",
+                "steps": [
+                    {
+                        "id": "feed_keyword_nam_hoc_moi",
+                        "type": "social_scan_posts_interact",
+                        "platform": "facebook",
+                        "keywords": ["năm học mới"],
+                        "match_mode": "any",
+                        "comment_text": "Chúc các bé chăm ngoan học giỏi",
+                        "target_count": 1,
+                        "batch_size": 1,
+                        "max_scrolls": 0,
+                        "timeout": 1.5,
+                        "scroll_wait_s": 1.5,
+                        "comment_wait_s": 1.5,
+                        "submit_wait_s": 1.5,
+                        "like_post": True,
+                        "require_comment": True,
+                        "save_as": "_feed_keyword_nam_hoc_moi",
+                    },
+                    {
+                        "id": "feed_keyword_cong_nghe",
+                        "type": "social_scan_posts_interact",
+                        "platform": "facebook",
+                        "keywords": ["công nghệ"],
+                        "match_mode": "any",
+                        "comment_text": "Tuyệt",
+                        "target_count": 1,
+                        "batch_size": 1,
+                        "max_scrolls": 0,
+                        "timeout": 1.5,
+                        "scroll_wait_s": 1.5,
+                        "comment_wait_s": 1.5,
+                        "submit_wait_s": 1.5,
+                        "like_post": True,
+                        "require_comment": True,
+                        "save_as": "_feed_keyword_cong_nghe",
+                    },
+                    {
+                        "id": "feed_keyword_giao_luu",
+                        "type": "social_scan_posts_interact",
+                        "platform": "facebook",
+                        "keywords": ["giao lưu"],
+                        "match_mode": "any",
+                        "comment_text": "Rất vui được giao lưu ạ",
+                        "target_count": 1,
+                        "batch_size": 1,
+                        "max_scrolls": 0,
+                        "timeout": 1.5,
+                        "scroll_wait_s": 1.5,
+                        "comment_wait_s": 1.5,
+                        "submit_wait_s": 1.5,
+                        "like_post": True,
+                        "require_comment": True,
+                        "save_as": "_feed_keyword_giao_luu",
+                    },
+                    {
+                        "id": "feed_keyword_scroll_next",
+                        "type": "scroll_down",
+                        "repeats": 1,
+                        "start_x_ratio": "${SCROLL_X_RATIO}",
+                        "start_y_ratio": 0.72,
+                        "end_y_ratio": 0.34,
+                    },
+                    {
+                        "id": "feed_keyword_scroll_settle",
+                        "type": "wait",
+                        "seconds": 1.5,
+                    },
+                ],
+            },
+            {"id": "feed_keyword_finish_home", "type": "key", "key": "home"},
+        ],
+    },
+
+    {
         "name": "Nuôi Facebook - Tương tác bài viết trên Feed",
         "display_name": "Nuôi Facebook - Tương tác bài viết trên Feed",
         "category": "facebook",
@@ -1987,11 +2192,11 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "POST_SCAN_CYCLES": 9999,
             "POST_KEYWORDS": ["AI", "tuyển dụng", "công nghệ"],
             "COMMENT_TEXT": "Bài viết rất hữu ích, cảm ơn bạn đã chia sẻ.",
-            "POST_TARGET_COUNT": 5,
-            "MAX_SCROLLS": 40,
+            "POST_TARGET_COUNT": 1,
+            "MAX_SCROLLS": 1,
             "SCROLL_X_RATIO": 0.5,
             "POST_MATCH_MODE": "any",
-            "POST_SCAN_TIMEOUT_SECONDS": 300,
+            "POST_SCAN_TIMEOUT_SECONDS": 1.5,
         },
         "steps": [
             *_fb_app_start_steps("feed_post_nurture"),
@@ -2042,9 +2247,9 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "POST_KEYWORDS": ["AI", "tuyển dụng", "công nghệ"],
             "POSTS_PER_BATCH": 2,
             "POST_MATCH_MODE": "any",
-            "POST_SCAN_TIMEOUT_SECONDS": 60,
+            "POST_SCAN_TIMEOUT_SECONDS": 1.5,
             "COMMENTER_SCAN_LIMIT": 3,
-            "COMMENTER_STEP_TIMEOUT": 60,
+            "COMMENTER_STEP_TIMEOUT": 1.5,
             # Các keyword này được khớp dạng chuỗi con trên hàng gợi ý đã bỏ
             # dấu, nên phải là cụm mà tên người không thể chứa. "AI" từng nằm ở
             # đây và khớp Mai, Hải, Thái — tức là mọi hàng đều đạt điều kiện.
@@ -2139,15 +2344,15 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "GROUP_COUNT": 2,
             "POST_KEYWORDS": ["AI", "công nghệ", "chia sẻ"],
             "POST_MATCH_MODE": "any",
-            "POST_SCAN_TIMEOUT_SECONDS": 180,
+            "POST_SCAN_TIMEOUT_SECONDS": 1.5,
             # Comment thật trước khi kết bạn: người trong group thấy mặt mình
             # trước khi nhận lời mời, nên tỉ lệ đồng ý cao hơn hẳn người lạ.
             "COMMENT_TEXT": "Bài viết hữu ích, cảm ơn bạn đã chia sẻ.",
-            "POSTS_PER_BATCH": 2,
-            "MAX_SCROLLS": 6,
+            "POSTS_PER_BATCH": 1,
+            "MAX_SCROLLS": 1,
             "SCROLL_X_RATIO": 0.5,
             "COMMENTER_SCAN_LIMIT": 3,
-            "COMMENTER_STEP_TIMEOUT": 60,
+            "COMMENTER_STEP_TIMEOUT": 1.5,
             # Account mới chưa có gì để so khớp, nên đừng đòi hồ sơ phải chứa
             # keyword — ngữ cảnh ở đây là "cùng group", không phải nội dung profile.
             "PROFILE_REQUIRED_KEYWORDS": [],
@@ -2321,11 +2526,11 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "GROUP_COUNT": 2,
             "POST_KEYWORDS": ["AI", "tuyển dụng", "công nghệ"],
             "COMMENT_TEXT": "Bài viết rất hữu ích, cảm ơn bạn đã chia sẻ.",
-            "POST_TARGET_COUNT": 5,
-            "MAX_SCROLLS": 40,
+            "POST_TARGET_COUNT": 1,
+            "MAX_SCROLLS": 1,
             "SCROLL_X_RATIO": 0.5,
             "POST_MATCH_MODE": "any",
-            "POST_SCAN_TIMEOUT_SECONDS": 300,
+            "POST_SCAN_TIMEOUT_SECONDS": 1.5,
         },
         "steps": [
             *_fb_app_start_steps("group_post_nurture"),
@@ -2690,7 +2895,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
         "tags": "facebook,group,crawl,feed,post,comment,duplicate-ok",
         "variables": {
             "GROUP_NAME": "openclaw vn",
-            "GROUP_XPATH": "//*[@content-desc=\"OpenClaw VN · Truy cập\"]",
+            "GROUP_XPATH": "//*[contains(@content-desc,\"OpenClaw\") and contains(@content-desc,\"Công khai\")]",
             "MAX_SCROLLS": 540,
             "SCROLL_X_RATIO": 0.18,
             "SAVE_COLLECTION": "fb_group_posts",
@@ -2771,6 +2976,52 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                 ],
             },
             {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+            {
+                "type": "if_element",
+                "by": "text",
+                "value": "Tiếp",
+                "timeout": 2,
+                "then": [
+                    {"type": "tap_selector", "by": "text", "value": "Tiếp", "timeout": 2},
+                    {"type": "wait_stable", "timeout": 4, "stable_duration": 0.5},
+                ],
+                "else": [
+                    {
+                        "type": "if_element",
+                        "by": "text",
+                        "value": "Next",
+                        "timeout": 1,
+                        "then": [
+                            {"type": "tap_selector", "by": "text", "value": "Next", "timeout": 2},
+                            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.5},
+                        ],
+                        "else": [],
+                    }
+                ],
+            },
+            {
+                "type": "if_element",
+                "by": "text",
+                "value": "Bỏ qua",
+                "timeout": 2,
+                "then": [
+                    {"type": "tap_selector", "by": "text", "value": "Bỏ qua", "timeout": 2},
+                    {"type": "wait_stable", "timeout": 4, "stable_duration": 0.5},
+                ],
+                "else": [
+                    {
+                        "type": "if_element",
+                        "by": "text",
+                        "value": "Skip",
+                        "timeout": 1,
+                        "then": [
+                            {"type": "tap_selector", "by": "text", "value": "Skip", "timeout": 2},
+                            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.5},
+                        ],
+                        "else": [],
+                    }
+                ],
+            },
             {"type": "scroll_down", "repeats": 2, "start_x_ratio": "${SCROLL_X_RATIO}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
             {"type": "wait", "seconds": 3},
 

@@ -264,3 +264,66 @@ def test_a_real_failure_is_not_retried(monkeypatch) -> None:
 
     assert result["ok"] is False
     assert device.attempts == 1
+
+
+# ── the account's own display name ──────────────────────────────────────────
+
+
+def test_display_name_is_exposed_and_reported_with_the_count() -> None:
+    device = _FakeDevice(
+        {
+            "value": {
+                "found": True,
+                "metric": "friends",
+                "value": 2,
+                "display_name": "Ngân Thanh Thanh Võ",
+            }
+        }
+    )
+
+    result, sc = _run(device, _step())
+
+    assert result["display_name"] == "Ngân Thanh Thanh Võ"
+    assert sc.var_ctx.values["ACCOUNT_DISPLAY_NAME"] == "Ngân Thanh Thanh Võ"
+    assert sc.ctx["vars"]["ACCOUNT_DISPLAY_NAME"] == "Ngân Thanh Thanh Võ"
+
+
+def test_a_refused_name_leaves_the_variable_unset_and_says_why() -> None:
+    """agent-boot refuses when the header is ambiguous. Falling back to the
+    nearest label would record a stranger as the account's own name."""
+    device = _FakeDevice(
+        {
+            "value": {
+                "found": True,
+                "metric": "friends",
+                "value": 2,
+                "display_name": None,
+                "display_name_reason": "not_own_profile",
+            }
+        }
+    )
+
+    result, sc = _run(device, _step())
+
+    assert result["count"] == 2
+    assert "display_name" not in result
+    assert result["display_name_reason"] == "not_own_profile"
+    assert "ACCOUNT_DISPLAY_NAME" not in sc.var_ctx.values
+
+
+def test_the_name_survives_a_count_that_scrolled_off_screen() -> None:
+    """One dump answers both questions; losing one must not lose the other."""
+    device = _FakeDevice(
+        {
+            "value": {
+                "found": False,
+                "reason": "count_not_visible",
+                "display_name": "Ngân Thanh Thanh Võ",
+            }
+        }
+    )
+
+    result, sc = _run(device, _step())
+
+    assert result["count_read"] is False
+    assert sc.var_ctx.values["ACCOUNT_DISPLAY_NAME"] == "Ngân Thanh Thanh Võ"

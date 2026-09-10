@@ -395,7 +395,8 @@ export function adbShellStepI18nSlug(type: string): string {
   return type === 'adb_shell' ? 'adb' : type;
 }
 
-function isIntlMissingMessage(key: string, label: string): boolean {
+/** next-intl renders the namespaced key path when a message is absent. */
+export function isIntlMissingMessage(key: string, label: string): boolean {
   return label === key || label.includes('campaignsFeature.');
 }
 
@@ -944,7 +945,10 @@ export function getStepDisplay(
     case 'social_scan_posts_interact':
       return {
         target: td('socialScanPostsShort', {
-          keywords: step.keywords || td('socialScanPostsAnyKeyword'),
+          keywords:
+            (Array.isArray(step.keywords)
+              ? step.keywords.join(', ')
+              : step.keywords) || td('socialScanPostsAnyKeyword'),
           count: step.target_count ?? 1
         })
       };

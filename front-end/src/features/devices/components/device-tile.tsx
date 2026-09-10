@@ -36,6 +36,11 @@ import { cn } from '@/lib/utils';
 import { useTranslations } from 'next-intl';
 import type { DeviceOpsConfig } from './device-ops-rail';
 import { DeviceLiveInputBar } from './device-live-input';
+import {
+  deviceDisplayName,
+  deviceModelLabel,
+  deviceSecondarySerial
+} from '../lib/device-display-name';
 
 interface DeviceTileProps {
   device: Device;
@@ -128,15 +133,8 @@ export function DeviceTile({
 }: DeviceTileProps) {
   const t = useTranslations('devicesFarm');
   const id = serialToId(device.serial);
-  const title =
-    device.display_name?.trim() ||
-    device.name?.trim() ||
-    `${device.brand} ${device.model}`.trim() ||
-    device.serial;
-  const subtitle =
-    device.serial !== title
-      ? device.serial
-      : `${device.brand} ${device.model}`.trim();
+  const title = deviceDisplayName(device);
+  const subtitle = deviceSecondarySerial(device) || deviceModelLabel(device);
   const isActive = isControlRecordConnectedDevice(device);
   const deviceScreenState = resolveDeviceScreenState(isActive, streamEnabled);
   const mountDeviceScreen = shouldMountDeviceScreen(isActive, streamEnabled);

@@ -923,13 +923,12 @@
       "badgeTest": "Test",
       "badgeDev": "Dev",
       "testAccountHint": "Looks like a test/dev account — verify before production use",
+      "statusUnassigned": "Unassigned",
       "statusActive": "Active",
-      "statusCooldown": "Cooldown",
-      "statusSuspended": "Suspended",
+      "statusVerifying": "Verifying",
       "statusBanned": "Banned",
       "statusRetired": "Retired",
-      "statusDisabled": "Disabled",
-      "cooldownUntil": "Until {time}"
+      "restingUntil": "Resting until {time}"
     },
     "stateDialog": {
       "trigger": "Change state",
@@ -938,8 +937,6 @@
       "currentState": "Current: {status}",
       "targetState": "New state",
       "reason": "Reason",
-      "ttlHours": "Cooldown duration (hours)",
-      "ttlRequired": "Enter a positive number of hours",
       "lastReason": "Last note: {reason}",
       "submit": "Apply",
       "submitting": "Applying...",
@@ -1002,13 +999,17 @@
       "availableDevices": "Available devices",
       "loading": "Loading...",
       "noAvailable": "All devices are already assigned",
+      "searchPlaceholder": "Search by name or serial…",
+      "noSearchMatch": "No matching device.",
       "primary": "Primary account",
       "makePrimary": "Set as this phone's primary account",
       "replacePrimaryWarning": "This phone already has a primary account. Continuing will replace its current primary account.",
       "assignAction": "Link {account} to {device}",
       "assignSuccess": "Linked {account} to {device}",
       "sessionSection": "Platform login session",
+      "sessionPlatform": "Platform session: {platform}",
       "sessionState": "Current status: {state}",
+      "sessionObservedName": "Observed display name: {name}",
       "sessionMissing": "No saved login session for this account.",
       "sessionStates": {
         "unknown": "Unknown",
@@ -2351,6 +2352,17 @@
       "monitorTraceLoop": "loop",
       "monitorTraceBranch": "branch",
       "monitorTraceReason": "reason",
+      "reasonCode": {
+        "loop_history_limit": "stopped — history budget",
+        "loop_stalled": "stopped — screen not responding",
+        "loop_no_nested_steps": "loop has no steps",
+        "loop_iteration_failed": "iteration failed",
+        "loop_invalid_count": "invalid iteration count"
+      },
+      "reasonCodeHint": {
+        "loop_history_limit": "The run reached its event-history budget. Iterations that already finished were kept. Split the loop or lower the iteration count.",
+        "loop_stalled": "Several iterations in a row acted on nothing — the screen is probably not the one the loop expects."
+      },
       "monitorEvidenceTitle": "Runtime evidence",
       "monitorEvidenceReason": "Reason",
       "monitorEvidenceClass": "Class",
@@ -2951,6 +2963,14 @@
         "actionType": "Action type",
         "statuses": "Allowed statuses",
         "statusesPlaceholder": "approved, active"
+      },
+      "advancedFieldsTitle": "Advanced settings",
+      "advancedDefaultOk": "Defaults OK",
+      "controlFlow": {
+        "loopDurationSecondsLabel": "Time budget (seconds)",
+        "loopStallAfterLabel": "Stop after N iterations that do nothing",
+        "loopIdleDelayLabel": "Wait after an idle iteration (seconds)",
+        "loopVarLabel": "Iteration index variable"
       },
       "adbShell": {
         "hint": "Runs on the real phone — enter the full command (e.g. adb shell getprop …) or shell-only (getprop …).",
@@ -4902,6 +4922,18 @@
     "controlAndRecord": "Control & record scenario",
     "controlDevice": "Control",
     "deviceAccounts": "Accounts",
+    "deviceName": {
+      "title": "Update device",
+      "label": "Device display name",
+      "placeholder": "e.g. FB-01",
+      "tagsLabel": "Tags",
+      "tagsPlaceholder": "tag1, tag2",
+      "edit": "Update device",
+      "save": "Save",
+      "cancel": "Cancel",
+      "saved": "Changes saved",
+      "saveFailed": "Could not save changes"
+    },
     "restartDeviceConfirmTitle": "Restart device",
     "restartDeviceConfirmDescription": "Send restart command to device {serial}?",
     "deviceInactive": "Device is inactive",
@@ -6745,9 +6777,9 @@
         "allStates": "All states"
       },
       "states": {
+        "unassigned": "Unassigned",
         "active": "Active",
-        "cooldown": "Cooldown",
-        "suspended": "Suspended",
+        "suspended": "Verifying",
         "banned": "Banned",
         "retired": "Retired"
       },

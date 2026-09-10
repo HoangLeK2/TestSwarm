@@ -23,17 +23,23 @@ import {
 } from '@/components/ui/dialog';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { cn } from '@/lib/utils';
+import { normalizeAccountState } from '@/features/accounts/lib/account-fsm';
+
+const STATUS_LABEL_KEY: Record<string, string> = {
+  unassigned: 'statusUnassigned',
+  active: 'statusActive',
+  suspended: 'statusVerifying',
+  banned: 'statusBanned',
+  retired: 'statusRetired'
+};
 
 function accountStatusLabel(
   status: string,
   tStatus: (key: string) => string
 ): string {
-  const key = status.toLowerCase();
-  if (key === 'active') return tStatus('statusActive');
-  if (key === 'cooldown') return tStatus('statusCooldown');
-  if (key === 'banned') return tStatus('statusBanned');
-  if (key === 'disabled') return tStatus('statusDisabled');
-  return status;
+  const key = normalizeAccountState(status);
+  const messageKey = STATUS_LABEL_KEY[key];
+  return messageKey ? tStatus(messageKey) : status;
 }
 
 export function GroupMembersDialog({

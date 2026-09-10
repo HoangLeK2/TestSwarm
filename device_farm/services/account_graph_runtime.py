@@ -68,3 +68,55 @@ def record_connection_count(
                 }
 
     return run_activity_coro_blocking(record())
+
+
+def record_observed_display_name(
+    *,
+    sc: "ScenarioContext",
+    step: dict[str, Any],
+    platform: str,
+    display_name: str,
+) -> dict[str, Any]:
+    """Store the name the account's own profile shows on this device.
+
+    Kept next to the count because it is the same observation: one look at one
+    profile page answers both "how big is this account" and "whose account is
+    signed in here", and the second is what operators were reading serials to
+    guess at.
+    """
+    from db.database import activity_session, run_activity_coro_blocking
+    from services.account_actions import resolve_action_identity
+    from services.device_platform_session import record_display_name_observed
+    from services.platform_session_runtime import _resolve_runtime_target
+
+    identity = resolve_action_identity(
+        step=step,
+        scenario=sc.scenario,
+        variables=sc.ctx.get("vars", {}),
+        execution_id=sc.execution_id,
+        device_serial=sc.serial,
+    )
+    resolved_platform = str(platform or DEFAULT_PLATFORM).strip().casefold()
+
+    async def record() -> dict[str, Any]:
+        async with activity_session() as db:
+            org_id, device_id, _account_id = await _resolve_runtime_target(
+                db, identity=identity, device_serial=sc.serial
+            )
+            with tenant_context(org_id):
+                row = await record_display_name_observed(
+                    db,
+                    org_id=org_id,
+                    device_id=device_id,
+                    display_name=display_name,
+                    platform=resolved_platform,
+                )
+                if row is None:
+                    return {"recorded": False, "reason": "no_platform_session"}
+                return {
+                    "recorded": True,
+                    "device_id": device_id,
+                    "display_name": row.display_name_observed,
+                }
+
+    return run_activity_coro_blocking(record())

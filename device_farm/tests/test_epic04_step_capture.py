@@ -63,12 +63,6 @@ def test_extract_step_capture_defaults_on():
     assert cfg.require_capture is False
 
 
-def test_llm_extract_step_capture_defaults_on():
-    cfg = StepCaptureConfig.from_step({"type": "llm_extract"})
-    assert cfg.pre_capture is True
-    assert cfg.post_capture is True
-
-
 def test_non_extract_can_opt_into_capture():
     cfg = StepCaptureConfig.from_step(
         {"type": "wait", "pre_capture": True, "post_capture": True}

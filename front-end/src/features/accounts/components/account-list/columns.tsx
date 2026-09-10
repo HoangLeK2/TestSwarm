@@ -25,6 +25,8 @@ import {
 import { detectAccountEnvironment } from '../../lib/account-environment';
 import {
   allowedTransitionTargets,
+  isResting,
+  normalizeAccountState,
   type AccountStateKey
 } from '../../lib/account-fsm';
 import type { ColumnDef } from '@tanstack/react-table';
@@ -43,8 +45,8 @@ const STATUS_VARIANT: Record<
   string,
   'default' | 'secondary' | 'outline' | 'destructive'
 > = {
+  unassigned: 'secondary',
   active: 'default',
-  cooldown: 'secondary',
   suspended: 'outline',
   banned: 'destructive',
   retired: 'outline'
@@ -127,11 +129,11 @@ export function getAccountColumns(
       header: t('colStatus'),
       cell: ({ row }) => {
         const account = row.original;
-        const state = (account.state || account.status) as AccountStateKey;
+        const state = normalizeAccountState(
+          account.state || account.status
+        ) as AccountStateKey;
         const label = statusLabel[state] ?? state;
-        const cooldown = account.cooldown_until
-          ? new Date(account.cooldown_until)
-          : null;
+        const resting = isResting(account.cooldown_until);
         return (
           <div className='flex flex-col gap-0.5'>
             <Badge
@@ -140,10 +142,10 @@ export function getAccountColumns(
             >
               {label}
             </Badge>
-            {state === 'cooldown' && cooldown ? (
+            {resting ? (
               <span className='text-[10px] text-muted-foreground'>
-                {t('cooldownUntil', {
-                  time: formatDistanceToNow(cooldown, {
+                {t('restingUntil', {
+                  time: formatDistanceToNow(new Date(account.cooldown_until!), {
                     addSuffix: true,
                     locale: dateLocale
                   })

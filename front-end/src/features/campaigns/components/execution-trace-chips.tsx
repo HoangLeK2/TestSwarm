@@ -6,6 +6,7 @@ import {
   hasExecutionTrace,
   type ExecutionTraceSummary
 } from '../lib/execution-trace';
+import { isIntlMissingMessage } from './flow-editor/constants';
 
 type ExecutionTraceChipsProps = {
   trace: Partial<ExecutionTraceSummary> | null | undefined;
@@ -36,6 +37,26 @@ function TraceChip({
       <span className='min-w-0 truncate font-mono'>{value}</span>
     </span>
   );
+}
+
+type ListTranslator = ReturnType<typeof useTranslations<'campaignsFeature.list'>>;
+
+/**
+ * Reason codes are emitted from workflow code, where a human message would be
+ * frozen into Temporal history and could never be corrected for a run already
+ * in flight. So the workflow ships the code and the UI owns the wording.
+ * An untranslated code falls back to itself rather than printing the key path.
+ */
+function translateReasonCode(t: ListTranslator, code: string): string {
+  const label = t(`reasonCode.${code}` as 'reasonCode.loop_history_limit');
+  return isIntlMissingMessage(`reasonCode.${code}`, label) ? code : label;
+}
+
+function reasonCodeTitle(t: ListTranslator, code: string): string {
+  const hint = t(`reasonCodeHint.${code}` as 'reasonCodeHint.loop_history_limit');
+  return isIntlMissingMessage(`reasonCodeHint.${code}`, hint)
+    ? code
+    : `${code} — ${hint}`;
 }
 
 export function ExecutionTraceChips({
@@ -73,7 +94,11 @@ export function ExecutionTraceChips({
         <TraceChip label={t('monitorTraceBranch')} value={trace.branch} />
       ) : null}
       {trace?.reasonCode ? (
-        <TraceChip label={t('monitorTraceReason')} value={trace.reasonCode} />
+        <TraceChip
+          label={t('monitorTraceReason')}
+          value={translateReasonCode(t, trace.reasonCode)}
+          title={reasonCodeTitle(t, trace.reasonCode)}
+        />
       ) : null}
     </div>
   );

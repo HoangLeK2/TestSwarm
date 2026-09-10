@@ -11,11 +11,6 @@ from db.models.enums import AccountState
 class AccountStateTransitionBody(BaseModel):
     to: str = Field(..., description="Target FSM state")
     reason: str = Field(..., min_length=1, max_length=2000)
-    ttl_seconds: Optional[int] = Field(
-        None,
-        ge=1,
-        description="Required when to=cooldown; cooldown_until = now + ttl_seconds",
-    )
     expected_state_changed_at: Optional[datetime] = Field(
         None,
         description="Optimistic lock: must match current state_changed_at",
@@ -26,11 +21,10 @@ class AccountStateTransitionBody(BaseModel):
     def _valid_to(cls, v: str) -> str:
         raw = v.strip().lower()
         try:
-            AccountState(raw)
+            return AccountState(raw).value
         except ValueError as exc:
             allowed = ", ".join(sorted(s.value for s in AccountState))
             raise ValueError(f"to must be one of: {allowed}") from exc
-        return raw
 
 
 class AccountStateTransitionOut(BaseModel):

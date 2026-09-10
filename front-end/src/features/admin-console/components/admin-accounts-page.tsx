@@ -118,8 +118,10 @@ export function AdminAccountsPage() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={ALL}>{t('filters.allStates')}</SelectItem>
+              <SelectItem value='unassigned'>
+                {t('states.unassigned')}
+              </SelectItem>
               <SelectItem value='active'>{t('states.active')}</SelectItem>
-              <SelectItem value='cooldown'>{t('states.cooldown')}</SelectItem>
               <SelectItem value='suspended'>{t('states.suspended')}</SelectItem>
               <SelectItem value='banned'>{t('states.banned')}</SelectItem>
               <SelectItem value='retired'>{t('states.retired')}</SelectItem>

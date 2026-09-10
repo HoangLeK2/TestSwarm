@@ -16,6 +16,24 @@ const require = createRequire(import.meta.url);
 const enMessages = require('../../../../../messages/en.json');
 const viMessages = require('../../../../../messages/vi.json');
 
+/**
+ * The runtime schema, published by the backend as a file.
+ *
+ * Not a regex over scenario_schema.py: catalog metadata is overlaid at import
+ * time, so only the applied result tells you what the editor receives. Not a
+ * Python subprocess either — that made this test require a built device_farm
+ * venv. device_farm/tests/test_scenario_schema_snapshot.py keeps the file
+ * current and fails when it drifts.
+ */
+function readBackendScenarioSchema() {
+  return JSON.parse(
+    readFileSync(
+      new URL('../../../../../generate/scenario-schema.json', import.meta.url),
+      'utf8'
+    )
+  );
+}
+
 test('tap_xml_match has a dedicated step detail editor', () => {
   const source = readFileSync(
     new URL('./step-detail-panel.tsx', import.meta.url),
@@ -62,6 +80,89 @@ test('step cards and detail panel render configuration status metadata', () => {
     detailSource,
     /campaignsFeature\.stepEditor\.configurationStatus/
   );
+});
+
+test('schema-driven nodes render through SchemaFields, not a hand-written branch', () => {
+  const source = readFileSync(
+    new URL('./step-detail-panel.tsx', import.meta.url),
+    'utf8'
+  );
+
+  // The panel must actually consult the backend schema...
+  assert.match(source, /schemaFieldsFor\(/);
+  assert.match(source, /<SchemaFields/);
+
+  // ...and every migrated node must gate its old branch on it, or both forms
+  // render at once and the user edits the same field in two places.
+  const migrated = [
+    ...source.matchAll(/const SCHEMA_DRIVEN_STEP_TYPES = new Set\(\[([^\]]*)\]/g)
+  ].flatMap((m) => [...m[1].matchAll(/'([^']+)'/g)].map((v) => v[1]));
+  assert.ok(migrated.length > 0, 'no node types are marked schema-driven');
+
+  for (const type of migrated) {
+    assert.match(
+      source,
+      new RegExp(`step\\.type === '${type}' && !schemaDrivenFields`),
+      `${type} is schema-driven but its hand-written branch is not gated`
+    );
+  }
+});
+
+test('loop is split between its hand-written editor and the schema, with no overlap', () => {
+  // loop is partially migrated: LoopConfigFields keeps count/while (mode toggle
+  // + ConditionBuilder), the schema supplies the safety valves that had no
+  // editor. A field declared on both sides would render twice and let the user
+  // edit the same value in two places.
+  const schema = readBackendScenarioSchema();
+  const schemaFields = Object.keys(schema.steps_schema.loop.fields ?? {});
+  const editorSource = readFileSync(
+    new URL('../scenario-steps/control-flow-editors.tsx', import.meta.url),
+    'utf8'
+  );
+  const loopEditor = editorSource.slice(
+    editorSource.indexOf('export function LoopConfigFields')
+  );
+
+  for (const owned of ['count', 'while', 'max_iterations']) {
+    assert.ok(
+      loopEditor.includes(owned),
+      `LoopConfigFields no longer handles ${owned}`
+    );
+    assert.ok(
+      !schemaFields.includes(owned),
+      `${owned} is declared in both LoopConfigFields and the schema`
+    );
+  }
+
+  // ...and the guards that had no editor must actually be there.
+  assert.ok(schemaFields.includes('stall_after'));
+  assert.ok(schemaFields.includes('idle_delay_seconds'));
+  assert.ok(schemaFields.includes('loop_var'));
+});
+
+test('new loops opt into the stall guard, which is off by default at runtime', () => {
+  const step = createDefaultStep('loop');
+
+  assert.equal(step.type, 'loop');
+  assert.equal(step.stall_after, 3);
+});
+
+test('tap_position offers only the positions the executors implement', () => {
+  // Six of the ten options the panel used to list fell through to
+  // middle_center in handle_tap_position / _tap_position_action — a silent
+  // wrong tap. The list now comes from the runtime schema, after catalog
+  // metadata is applied.
+  const schema = readBackendScenarioSchema();
+  const values = schema.steps_schema.tap_position.fields.pos.values.map(
+    (option: { value: string }) => option.value
+  );
+
+  assert.deepEqual(values, [
+    'top_center',
+    'middle_center',
+    'bottom_center',
+    'search_bar'
+  ]);
 });
 
 test('scan posts detail panel exposes visible like and comment toggles', () => {

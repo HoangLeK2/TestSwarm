@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, type ReactNode } from 'react';
-import { LogOut, Smartphone, Unlink, Star } from 'lucide-react';
+import { LogOut, Search, Smartphone, Unlink, Star } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { useDevices } from '@/features/devices/hooks/use-devices';
@@ -16,6 +16,7 @@ import {
 } from '../hooks/use-accounts';
 import type { AccountOut } from '../services/api';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { useConfirm } from '@/providers/modal-provider';
 import {
   Dialog,
@@ -27,6 +28,12 @@ import {
 
 function deviceLabel(d: { serial: string; name?: string | null }) {
   return d.name?.trim() || d.serial || '—';
+}
+
+/** `facebook` -> `Facebook`. Platforms are free-form slugs, so no lookup table. */
+function platformLabel(platform: string) {
+  const value = platform.trim();
+  return value ? value[0].toUpperCase() + value.slice(1) : '—';
 }
 
 const SESSION_STATE_KEYS: Record<string, string> = {
@@ -99,12 +106,28 @@ function LinkedDeviceRow({
         )}
       </div>
       <div className='rounded-md bg-muted/40 p-2'>
-        <p className='font-medium'>{t('sessionSection')}</p>
+        <p className='font-medium'>
+          {t('sessionPlatform', {
+            platform: platformLabel(session?.platform || accountPlatform)
+          })}
+        </p>
         <p className='mt-0.5 text-muted-foreground'>
           {ownsSession
             ? t('sessionState', { state: sessionStateLabel })
             : t('sessionMissing')}
         </p>
+        {ownsSession && session.app_package ? (
+          <p className='text-[10px] text-muted-foreground'>
+            {session.app_package}
+          </p>
+        ) : null}
+        {ownsSession && session.display_name_observed ? (
+          <p className='mt-0.5 text-muted-foreground'>
+            {t('sessionObservedName', {
+              name: session.display_name_observed
+            })}
+          </p>
+        ) : null}
       </div>
       {canUpdate ? (
         <div className='flex flex-wrap gap-2'>
@@ -152,6 +175,7 @@ export function AccountDevicesDialog({
   const [open, setOpen] = useState(false);
   const [selectedDeviceId, setSelectedDeviceId] = useState('');
   const [makePrimary, setMakePrimary] = useState(true);
+  const [deviceQuery, setDeviceQuery] = useState('');
 
   const { data: links = [], isLoading: loadingLinks } = useAccountDevices(
     open ? account.id : ''
@@ -165,8 +189,16 @@ export function AccountDevicesDialog({
     useUnassignDeviceFromAccount();
 
   const linkedDeviceIds = new Set(links.map((l) => l.device_id));
-  const available = allDevices.filter((d) => !linkedDeviceIds.has(d.id));
-  const selectedDevice = available.find((d) => d.id === selectedDeviceId);
+  const unlinked = allDevices.filter((d) => !linkedDeviceIds.has(d.id));
+  const needle = deviceQuery.trim().toLowerCase();
+  const available = needle
+    ? unlinked.filter((d) =>
+        `${d.name ?? ''} ${d.serial ?? ''}`.toLowerCase().includes(needle)
+      )
+    : unlinked;
+  // From the unfiltered set: typing a new search must not hide the assign
+  // button for the device already picked.
+  const selectedDevice = unlinked.find((d) => d.id === selectedDeviceId);
   const { data: selectedDeviceAccounts = [] } =
     useDeviceAccounts(selectedDeviceId);
   const currentPrimaryLink = selectedDeviceAccounts.find(
@@ -206,7 +238,13 @@ export function AccountDevicesDialog({
   ]);
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) setDeviceQuery('');
+        setOpen(next);
+      }}
+    >
       <DialogTrigger asChild>
         {trigger ?? (
           <Button size='sm' variant='outline' className='h-8 gap-1.5 text-xs'>
@@ -289,39 +327,55 @@ export function AccountDevicesDialog({
               </p>
               {loadingLinks || loadingAll ? (
                 <p className='text-sm text-muted-foreground'>{t('loading')}</p>
-              ) : available.length === 0 ? (
+              ) : unlinked.length === 0 ? (
                 <p className='text-sm text-muted-foreground'>
                   {t('noAvailable')}
                 </p>
               ) : (
                 <div className='space-y-3'>
-                  <ul className='max-h-48 space-y-1 overflow-y-auto rounded-lg border border-border/60 p-2'>
-                    {available.map((d) => (
-                      <li
-                        key={d.id}
-                        className='flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50'
-                      >
-                        <input
-                          type='radio'
-                          name='account-device'
-                          checked={selectedDeviceId === d.id}
-                          onChange={() => setSelectedDeviceId(d.id)}
-                        />
-                        <button
-                          type='button'
-                          className='min-w-0 flex-1 text-left'
-                          onClick={() => setSelectedDeviceId(d.id)}
+                  <div className='relative'>
+                    <Search className='absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground' />
+                    <Input
+                      value={deviceQuery}
+                      onChange={(event) => setDeviceQuery(event.target.value)}
+                      placeholder={t('searchPlaceholder')}
+                      aria-label={t('searchPlaceholder')}
+                      className='h-8 pl-8 text-sm'
+                    />
+                  </div>
+                  {available.length === 0 ? (
+                    <p className='text-sm text-muted-foreground'>
+                      {t('noSearchMatch')}
+                    </p>
+                  ) : (
+                    <ul className='max-h-48 space-y-1 overflow-y-auto rounded-lg border border-border/60 p-2'>
+                      {available.map((d) => (
+                        <li
+                          key={d.id}
+                          className='flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50'
                         >
-                          <span className='block truncate text-sm font-medium'>
-                            {deviceLabel(d)}
-                          </span>
-                          <span className='block truncate text-[10px] text-muted-foreground'>
-                            {d.serial}
-                          </span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
+                          <input
+                            type='radio'
+                            name='account-device'
+                            checked={selectedDeviceId === d.id}
+                            onChange={() => setSelectedDeviceId(d.id)}
+                          />
+                          <button
+                            type='button'
+                            className='min-w-0 flex-1 text-left'
+                            onClick={() => setSelectedDeviceId(d.id)}
+                          >
+                            <span className='block truncate text-sm font-medium'>
+                              {deviceLabel(d)}
+                            </span>
+                            <span className='block truncate text-[10px] text-muted-foreground'>
+                              {d.serial}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                   {selectedDevice && (
                     <div className='space-y-2 rounded-lg border bg-muted/20 p-3 text-xs'>
                       {currentPrimaryLink && (

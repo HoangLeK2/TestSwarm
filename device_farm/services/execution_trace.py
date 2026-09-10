@@ -10,7 +10,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.crud.execution import get_execution, list_executions
@@ -379,25 +379,40 @@ async def _list_execution_event_page(
     since_event_id: str | None,
     page_size: int,
 ) -> tuple[list[ExecutionEvent], bool]:
-    since_row_id: int | None = None
+    # Order by occurred_at, not insertion id: workflow-side telemetry is written in
+    # batches, so a batch can land after events that happened later.
+    anchor_row: tuple[datetime, int] | None = None
     if since_event_id:
         anchor = await db.execute(
-            select(ExecutionEvent.id).where(
+            select(ExecutionEvent.occurred_at, ExecutionEvent.id).where(
                 ExecutionEvent.execution_id == execution_id,
                 ExecutionEvent.event_id == since_event_id,
             )
         )
-        since_row_id = anchor.scalar_one_or_none()
+        anchor_row = anchor.first()
 
     q = select(ExecutionEvent).where(ExecutionEvent.execution_id == execution_id)
-    if since_row_id is not None:
-        q = q.where(ExecutionEvent.id > since_row_id)
-        q = q.order_by(ExecutionEvent.id.asc())
+    if anchor_row is not None:
+        anchor_ts, anchor_id = anchor_row
+        q = q.where(
+            or_(
+                ExecutionEvent.occurred_at > anchor_ts,
+                and_(
+                    ExecutionEvent.occurred_at == anchor_ts,
+                    ExecutionEvent.id > anchor_id,
+                ),
+            )
+        )
+        q = q.order_by(ExecutionEvent.occurred_at.asc(), ExecutionEvent.id.asc())
         result = await db.execute(q.limit(page_size + 1))
         rows = list(result.scalars().all())
         return rows[:page_size], len(rows) > page_size
 
-    result = await db.execute(q.order_by(ExecutionEvent.id.desc()).limit(page_size + 1))
+    result = await db.execute(
+        q.order_by(ExecutionEvent.occurred_at.desc(), ExecutionEvent.id.desc()).limit(
+            page_size + 1
+        )
+    )
     rows = list(result.scalars().all())
     bounded = list(reversed(rows[:page_size]))
     return bounded, len(rows) > page_size

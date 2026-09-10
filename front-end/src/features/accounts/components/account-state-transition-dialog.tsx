@@ -9,11 +9,11 @@ import { useTranslations } from 'next-intl';
 import { useTransitionAccountState } from '../hooks/use-accounts';
 import type { AccountOut } from '../services/api';
 import {
+  ACCOUNT_STATES,
   allowedTransitionTargets,
   type AccountStateKey
 } from '../lib/account-fsm';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -35,7 +35,6 @@ import { formatFarmApiError } from '@/lib/format-farm-api-error';
 type FormData = {
   to: AccountStateKey;
   reason: string;
-  ttl_hours: string;
 };
 
 type Props = {
@@ -59,24 +58,10 @@ export function AccountStateTransitionDialog({
   const firstTarget =
     defaultTo && targets.includes(defaultTo) ? defaultTo : targets[0];
 
-  const schema = z
-    .object({
-      to: z.enum(['active', 'cooldown', 'suspended', 'banned', 'retired']),
-      reason: z.string().min(1).max(2000),
-      ttl_hours: z.string().optional()
-    })
-    .superRefine((data, ctx) => {
-      if (data.to === 'cooldown') {
-        const h = Number(data.ttl_hours);
-        if (!Number.isFinite(h) || h <= 0) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: t('ttlRequired'),
-            path: ['ttl_hours']
-          });
-        }
-      }
-    });
+  const schema = z.object({
+    to: z.enum(ACCOUNT_STATES),
+    reason: z.string().min(1).max(2000)
+  });
 
   const {
     register,
@@ -89,8 +74,7 @@ export function AccountStateTransitionDialog({
     resolver: zodResolver(schema),
     defaultValues: {
       to: firstTarget ?? 'active',
-      reason: '',
-      ttl_hours: '24'
+      reason: ''
     }
   });
 
@@ -98,19 +82,15 @@ export function AccountStateTransitionDialog({
 
   useEffect(() => {
     if (open && firstTarget) {
-      reset({
-        to: firstTarget,
-        reason: '',
-        ttl_hours: '24'
-      });
+      reset({ to: firstTarget, reason: '' });
     }
   }, [open, firstTarget, reset]);
 
   const statusLabel = (key: AccountStateKey) => {
     const map: Record<AccountStateKey, string> = {
+      unassigned: tList('statusUnassigned'),
       active: tList('statusActive'),
-      cooldown: tList('statusCooldown'),
-      suspended: tList('statusSuspended'),
+      suspended: tList('statusVerifying'),
       banned: tList('statusBanned'),
       retired: tList('statusRetired')
     };
@@ -118,19 +98,11 @@ export function AccountStateTransitionDialog({
   };
 
   const onSubmit = (data: FormData) => {
-    const body: {
-      to: string;
-      reason: string;
-      ttl_seconds?: number;
-      expected_state_changed_at?: string | null;
-    } = {
+    const body = {
       to: data.to,
       reason: data.reason.trim(),
       expected_state_changed_at: account.state_changed_at ?? null
     };
-    if (data.to === 'cooldown') {
-      body.ttl_seconds = Math.round(Number(data.ttl_hours) * 3600);
-    }
     mutate(
       { accountId: account.id, body },
       { onSuccess: () => setOpen(false) }
@@ -181,23 +153,6 @@ export function AccountStateTransitionDialog({
               </SelectContent>
             </Select>
           </div>
-          {toValue === 'cooldown' ? (
-            <div className='space-y-2'>
-              <Label htmlFor='ttl_hours'>{t('ttlHours')}</Label>
-              <Input
-                id='ttl_hours'
-                type='number'
-                min={0.1}
-                step={0.5}
-                {...register('ttl_hours')}
-              />
-              {errors.ttl_hours ? (
-                <p className='text-xs text-destructive'>
-                  {errors.ttl_hours.message}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
           <div className='space-y-2'>
             <Label htmlFor='reason'>{t('reason')}</Label>
             <Textarea id='reason' rows={3} {...register('reason')} />

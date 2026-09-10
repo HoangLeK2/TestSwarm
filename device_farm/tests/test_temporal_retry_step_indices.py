@@ -14,7 +14,12 @@ import asyncio
 
 import pytest
 
-from temporal.shared import DeviceActionBatchResult, StepsInput, TASK_QUEUE_NAME
+from temporal.shared import (
+    CONTROL_TASK_QUEUE_NAME,
+    DeviceActionBatchResult,
+    StepsInput,
+    TASK_QUEUE_NAME,
+)
 from temporal.workflows import ScenarioStepsWorkflow
 
 
@@ -26,6 +31,14 @@ async def _poll_until(pred, timeout: float = 5.0) -> None:
         await asyncio.sleep(0.05)
         waited += 0.05
     raise AssertionError(f"poll timeout after {timeout}s")
+
+
+def _activities_with_telemetry(temporal_activity, *activities):
+    @temporal_activity.defn(name="emit_execution_events_batch")
+    async def mock_emit_events_batch(_inp):
+        return None
+
+    return [*activities, mock_emit_events_batch]
 
 
 @pytest.mark.asyncio
@@ -80,7 +93,11 @@ async def test_retried_run_keeps_absolute_step_indices():
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioStepsWorkflow],
-            activities=[mock_batch],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch),
+        ), TemporalWorker(
+            env.client,
+            task_queue=CONTROL_TASK_QUEUE_NAME,
+            activities=_activities_with_telemetry(temporal_activity),
         ):
             handle = await env.client.start_workflow(
                 ScenarioStepsWorkflow.run,

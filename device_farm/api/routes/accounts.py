@@ -107,8 +107,6 @@ from services.account_import_formats import (
 from services.account_state import (
     AccountStateError,
     AccountStateService,
-    InvalidStateTransitionError,
-    InvalidTtlError,
     StateConflictError,
 )
 from services.device_platform_session import (
@@ -134,18 +132,12 @@ from services.device_reserve.exceptions import DeviceSessionError
 
 router = APIRouter(tags=["accounts"])
 
-_DEFAULT_COOLDOWN_SECONDS = int(
-    float(os.environ.get("ACCOUNT_COOLDOWN_MINUTES", "120")) * 60
-)
-
-
 def _raise_account_state_http(exc: AccountStateError) -> NoReturn:
-    if isinstance(exc, StateConflictError):
-        code = status.HTTP_409_CONFLICT
-    elif isinstance(exc, (InvalidStateTransitionError, InvalidTtlError)):
-        code = status.HTTP_422_UNPROCESSABLE_ENTITY
-    else:
-        code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    code = (
+        status.HTTP_409_CONFLICT
+        if isinstance(exc, StateConflictError)
+        else status.HTTP_422_UNPROCESSABLE_ENTITY
+    )
     raise HTTPException(
         status_code=code,
         detail={"code": exc.code, "message": str(exc)},
@@ -724,7 +716,6 @@ async def transition_account_state(
             account_id,
             to=body.to,
             reason=body.reason,
-            ttl_seconds=body.ttl_seconds,
             actor=user.id,
             expected_state_changed_at=body.expected_state_changed_at,
         )
@@ -849,9 +840,6 @@ async def update_account_status(
 ):
     """Set account status via FSM (legacy alias). Prefer POST /state."""
     await _get_account_or_404(account_id, db)
-    ttl = body.ttl_seconds
-    if body.status == "cooldown" and ttl is None:
-        ttl = _DEFAULT_COOLDOWN_SECONDS
     svc = AccountStateService()
     try:
         account = await svc.transition(
@@ -859,7 +847,6 @@ async def update_account_status(
             account_id,
             to=body.status,
             reason=body.reason,
-            ttl_seconds=ttl if body.status == "cooldown" else None,
             actor=user.id,
         )
     except AccountStateError as exc:

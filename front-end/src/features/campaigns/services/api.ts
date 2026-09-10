@@ -107,6 +107,8 @@ export type CampaignDispatchPreviewOut = {
 export type ScenarioSchemaOut = {
   step_types?: string[];
   fields?: Record<string, unknown>;
+  /** Backend STEP_SCHEMA: required/optional/required_any plus optional typed `fields`. */
+  steps_schema?: Record<string, unknown>;
   node_capabilities?: NodeCapabilityRegistry;
   [key: string]: unknown;
 };

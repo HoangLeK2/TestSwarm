@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from common.scenario_schema import unknown_step_fields
 from common.variable_resolver import _BUILTIN_NAMES, _VAR_PATTERN, normalize_variable_map
 from db.models.enums import OrgScenarioStatus
 from services.org_scenario_validation.step_index import OrgStepIndex
@@ -21,6 +22,9 @@ from services.scenario_validation.models import ValidationIssue, ValidationResul
 from services.scenario_validation.variable_contracts import step_output_variables
 
 _ERROR_POLICIES = frozenset({"pause", "continue", "stop", "ignore", "on_error"})
+# Mirrors _GLOBAL_VERIFY_CONTENT_ACTIONS (steps/social_actions.py:40): the
+# actions with no readable "before" state.
+_VERIFY_REQUIRED_ACTIONS = frozenset({"comment", "share"})
 _SKIP_VAR_SCAN_KEYS = frozenset({
     "screenshot",
     "element_image",
@@ -157,6 +161,58 @@ def check_on_error_targets(index: OrgStepIndex, result: ValidationResult) -> Non
                     location=loc_on_error,
                 )
             )
+
+
+def check_step_fields(index: OrgStepIndex, result: ValidationResult) -> None:
+    """Report keys the node contract does not declare.
+
+    Warning, not error: both validators ignore extra keys today, so a typo has
+    always been accepted and silently dropped at runtime. Saying so is the fix;
+    rejecting the save would break scenarios that worked yesterday.
+    """
+    for step, loc, sid in index.entries:
+        for field in unknown_step_fields(step):
+            field_loc = f"step.{sid}.{field}" if sid else f"{loc}.{field}"
+            result.add(
+                ValidationIssue(
+                    level="warning",
+                    code=C.UNKNOWN_STEP_FIELD,
+                    message=(
+                        f"{step.get('type')} does not declare {field!r}; "
+                        "it will be ignored at runtime"
+                    ),
+                    location=field_loc,
+                )
+            )
+
+
+def check_content_interaction_verify(index: OrgStepIndex, result: ValidationResult) -> None:
+    """comment/share must say how completion is verified.
+
+    Neither action leaves a readable "before" state, so the already-applied
+    dedupe pass (social_actions.py:2192) cannot recognise a repeat. Without
+    completion_verify, a manual retry or a declared `retry:` block posts twice.
+    Runtime is unchanged — this only blocks re-saving such a step.
+    """
+    for step, loc, sid in index.entries:
+        if str(step.get("type") or "") != "content_interaction":
+            continue
+        if str(step.get("action") or "") not in _VERIFY_REQUIRED_ACTIONS:
+            continue
+        if step.get("completion_verify"):
+            continue
+        step_loc = f"step.{sid}.completion_verify" if sid else f"{loc}.completion_verify"
+        result.add(
+            ValidationIssue(
+                level="error",
+                code=C.COMPLETION_VERIFY_REQUIRED,
+                message=(
+                    f"content_interaction action={step.get('action')} requires "
+                    "completion_verify: it cannot be deduped by state"
+                ),
+                location=step_loc,
+            )
+        )
 
 
 def check_retry_config(index: OrgStepIndex, result: ValidationResult) -> None:

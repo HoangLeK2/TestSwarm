@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from datetime import date, datetime, timezone
 from typing import Any, List, Optional, Tuple
 
@@ -11,6 +12,8 @@ from sqlalchemy.orm import selectinload
 
 from db.models.account import Account, DeviceAccount
 from db.models.enums import AccountState
+
+logger = logging.getLogger(__name__)
 
 _BULK_BATCH_SIZE = 500  # rows per INSERT batch
 
@@ -86,8 +89,8 @@ async def create_account(
         user_id=user_id,
         org_id=org_id,
         account_metadata=account_metadata or {},
-        status=AccountState.ACTIVE.value,
-        state=AccountState.ACTIVE.value,
+        status=AccountState.UNASSIGNED.value,
+        state=AccountState.UNASSIGNED.value,
         state_changed_at=now,
     )
     db.add(account)
@@ -358,18 +361,6 @@ async def bulk_create_accounts(
     return created, skipped + invalid
 
 
-async def get_expired_cooldown_accounts(db: AsyncSession) -> List[Account]:
-    """Return cooldown accounts whose cooldown_until timestamp has passed."""
-    now = datetime.now(timezone.utc)
-    result = await db.execute(
-        select(Account).where(
-            Account.state == AccountState.COOLDOWN.value,
-            Account.cooldown_until <= now,
-        )
-    )
-    return list(result.scalars().all())
-
-
 async def get_available_account(
     db: AsyncSession,
     platform: str,
@@ -398,6 +389,49 @@ async def get_available_account(
 
 
 # ── DeviceAccount CRUD ─────────────────────────────────────────────────────────
+
+
+async def sync_account_link_state(db: AsyncSession, account_id: str) -> None:
+    """Keep ``unassigned`` in step with the device links that define it.
+
+    ``unassigned`` means "no DeviceAccount row". Both directions run here — the
+    single chokepoint every link/unlink path routes through — so the state can
+    never drift from the link table. Terminal and operator-set states
+    (``banned``, ``retired``, ``suspended``) are left alone: linking a device to
+    a banned account must not silently reactivate it.
+    """
+    from db.models.enums import AccountState
+    from services.account_state.exceptions import AccountStateError
+    from services.account_state.service import AccountStateService
+
+    account = await get_account(db, account_id)
+    if account is None:
+        return
+
+    current = (getattr(account, "state", None) or account.status or "").lower()
+    linked = (
+        await db.execute(
+            select(DeviceAccount.account_id)
+            .where(DeviceAccount.account_id == account_id)
+            .limit(1)
+        )
+    ).first() is not None
+
+    if linked and current == AccountState.UNASSIGNED.value:
+        target, reason = AccountState.ACTIVE, "device linked"
+    elif not linked and current == AccountState.ACTIVE.value:
+        target, reason = AccountState.UNASSIGNED, "no device linked"
+    else:
+        return
+
+    try:
+        await AccountStateService().transition(
+            db, account_id, to=target, reason=reason, actor="system"
+        )
+    except AccountStateError as exc:
+        logger.warning(
+            "account %s link-state sync to %s failed: %s", account_id, target.value, exc
+        )
 
 
 async def _clear_primary_for_device(db: AsyncSession, device_id: str) -> None:
@@ -447,6 +481,7 @@ async def assign_account_to_device(
     )
     db.add(link)
     await db.flush()
+    await sync_account_link_state(db, account_id)
     return link
 
 
@@ -480,7 +515,10 @@ async def unassign_account_from_device(
             DeviceAccount.account_id == account_id,
         )
     )
-    return result.rowcount > 0
+    if result.rowcount > 0:
+        await sync_account_link_state(db, account_id)
+        return True
+    return False
 
 
 async def list_device_accounts(

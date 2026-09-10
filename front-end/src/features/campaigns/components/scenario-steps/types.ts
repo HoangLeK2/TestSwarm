@@ -667,6 +667,13 @@ export function createDefaultStep(
       return { ...base, type: 'install_apk', url: '', timeout: 90 };
     case 'wait':
       return { ...base, type: 'wait', seconds: 1 };
+    case 'tap':
+      return {
+        ...base,
+        type: 'tap',
+        fallback: { rx: 0.5, ry: 0.5 },
+        timeout: 4
+      };
     case 'tap_ratio':
       return { ...base, type: 'tap_ratio', x: 0.5, y: 0.5 };
     case 'extract_text_ocr':
@@ -1092,7 +1099,9 @@ export function createDefaultStep(
     case 'set_var':
       return { ...base, type: 'set_var', key: '', value: '' };
     case 'loop':
-      return { ...base, type: 'loop', count: '10', steps: [] };
+      // stall_after defaults to 0 (off) at runtime — changing that would alter
+      // existing scenarios. New loops opt in here instead.
+      return { ...base, type: 'loop', count: '10', stall_after: 3, steps: [] };
     case 'extract':
       return {
         ...base,

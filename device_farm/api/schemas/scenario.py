@@ -68,6 +68,9 @@ SelectorBy = Literal["resource-id", "text", "xpath", "class name",
 # enforced for literal numbers.
 NumOrVar = Union[float, str]   # float fields (seconds, timeout, …)
 IntOrVar = Union[int, str]     # int fields (count, repeats, …)
+NonNegativeNumOrVar = Union[Annotated[float, Field(ge=0)], str]
+NonNegativeIntOrVar = Union[Annotated[int, Field(ge=0)], str]
+IdleDelayOrVar = Union[Annotated[float, Field(ge=0, le=300)], str]
 TagsOrStr = Union[List[str], str]  # tags: list OR comma-separated string
 
 
@@ -329,6 +332,43 @@ class TapRatioStep(StepBase):
 class TapPositionStep(StepBase):
     type: Literal["tap_position"]
     pos: Literal["top_center", "middle_center", "bottom_center", "search_bar"]
+
+class DoubleTapStep(StepBase):
+    type: Literal["double_tap"]
+    x: Optional[NumOrVar] = None
+    y: Optional[NumOrVar] = None
+    rx: Optional[NumOrVar] = None
+    ry: Optional[NumOrVar] = None
+    wait_after: NumOrVar = 0.5
+
+class PinchStep(StepBase):
+    type: Literal["pinch"]
+    scale: NumOrVar
+    cx: Optional[NumOrVar] = None
+    cy: Optional[NumOrVar] = None
+    rx: Optional[NumOrVar] = None
+    ry: Optional[NumOrVar] = None
+    duration_ms: IntOrVar = 400
+
+class DragStep(StepBase):
+    type: Literal["drag"]
+    x1: Optional[NumOrVar] = None
+    y1: Optional[NumOrVar] = None
+    x2: Optional[NumOrVar] = None
+    y2: Optional[NumOrVar] = None
+    rx1: Optional[NumOrVar] = None
+    ry1: Optional[NumOrVar] = None
+    rx2: Optional[NumOrVar] = None
+    ry2: Optional[NumOrVar] = None
+    duration_ms: IntOrVar = 1000
+
+class TakeScreenshotStep(StepBase):
+    type: Literal["take_screenshot"]
+    save_path: Optional[str] = None
+
+class SetClipboardStep(StepBase):
+    type: Literal["set_clipboard"]
+    text: str = Field(min_length=1)
 
 class TapImageStep(StepBase):
     """Tap wherever a cropped template appears on screen.
@@ -652,6 +692,10 @@ class LoopStep(StepBase):
     steps: List[StepModel] = Field(min_length=1)
     count: Optional[IntOrVar] = None
     max_iterations: IntOrVar = 100
+    loop_var: Optional[str] = Field(None, min_length=1)
+    duration_seconds: NonNegativeNumOrVar = 0
+    stall_after: NonNegativeIntOrVar = 0
+    idle_delay_seconds: IdleDelayOrVar = 0
     # "while" is reserved → model_config handles it
     model_config = {"extra": "allow"}
 
@@ -1003,6 +1047,11 @@ StepModel = Annotated[
         Annotated[TapStep, Tag("tap")],
         Annotated[TapRatioStep, Tag("tap_ratio")],
         Annotated[TapPositionStep, Tag("tap_position")],
+        Annotated[DoubleTapStep, Tag("double_tap")],
+        Annotated[PinchStep, Tag("pinch")],
+        Annotated[DragStep, Tag("drag")],
+        Annotated[TakeScreenshotStep, Tag("take_screenshot")],
+        Annotated[SetClipboardStep, Tag("set_clipboard")],
         Annotated[TapImageStep, Tag("tap_image")],
         Annotated[SwipeRatioStep, Tag("swipe_ratio")],
         Annotated[TapSelectorStep, Tag("tap_selector")],

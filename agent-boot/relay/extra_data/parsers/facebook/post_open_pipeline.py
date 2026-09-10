@@ -211,6 +211,19 @@ def _hierarchy_has_post_detail_chrome(root) -> bool:
     return has_close and has_post_of
 
 
+def _hierarchy_has_comment_composer(root) -> bool:
+    if root is None:
+        return False
+    for node in root.iter():
+        pkg = node.get("package") or ""
+        if pkg and pkg != "com.facebook.katana":
+            continue
+        label = f"{node.get('text') or ''} {node.get('content-desc') or ''}".casefold()
+        if "viết bình luận" in label or "write a comment" in label:
+            return True
+    return False
+
+
 def hierarchy_is_fb_post_detail_from_xml(xml: str) -> bool:
     """True when UI looks like a single-post detail screen (not multi-card feed)."""
     from .feed_pipeline import _is_ad_container
@@ -220,6 +233,8 @@ def hierarchy_is_fb_post_detail_from_xml(xml: str) -> bool:
     if root is None:
         return False
     if _hierarchy_has_post_detail_chrome(root):
+        return True
+    if _hierarchy_has_comment_composer(root) and _count_distinct_post_action_bars(root) == 1:
         return True
     if not _hierarchy_has_post_menu(root):
         return False
@@ -472,6 +487,34 @@ def _find_author_bounds(
         if _is_action_or_chrome(text):
             continue
         return x1, y1, x2, y2
+
+    avatar_hint = next(
+        (
+            n
+            for n in ordered
+            if n.get("is_author_hint")
+            and n["bounds"][1] <= header_limit
+            and _looks_like_avatar_node(n)
+        ),
+        None,
+    )
+    timestamp = next(
+        (
+            n
+            for n in ordered
+            if n["bounds"][1] <= header_limit
+            and _RE_TS.search(str(n.get("text") or ""))
+        ),
+        None,
+    )
+    if avatar_hint and timestamp:
+        ax1, ay1, ax2, ay2 = avatar_hint["bounds"]
+        tx1, ty1, tx2, ty2 = timestamp["bounds"]
+        if tx1 >= ax2 - 8:
+            inferred_x1 = max(name_column_x, tx1)
+            inferred_x2 = min(left_column_x, max(tx2, inferred_x1 + 120))
+            if inferred_x2 > inferred_x1 + 24:
+                return inferred_x1, ay1, inferred_x2, min(ty1, ay2)
     return None
 
 
@@ -510,6 +553,38 @@ def _gap_region_has_follow_or_chrome(
     return False
 
 
+def _author_bounds_have_visible_text(
+    element,
+    author_bounds: Tuple[int, int, int, int],
+) -> bool:
+    """True when the author row has a real text node, not only avatar-derived bounds."""
+    ax1, ay1, ax2, ay2 = author_bounds
+    for node in element.iter("node"):
+        bounds = _parse_bounds_from_node(node)
+        if not bounds:
+            continue
+        x1, y1, x2, y2 = bounds
+        if x2 <= ax1 or x1 >= ax2 or y2 <= ay1 or y1 >= ay2:
+            continue
+        text = _norm(node.get("text") or "")
+        if not text:
+            continue
+        if _RE_TS.search(text):
+            continue
+        if _is_action_or_chrome(text):
+            continue
+        if _looks_like_avatar_node(
+            {
+                "text": text,
+                "desc": _norm(node.get("content-desc") or ""),
+                "bounds": bounds,
+            }
+        ):
+            continue
+        return True
+    return False
+
+
 def _author_row_gap_candidate(
     element,
     *,
@@ -518,6 +593,8 @@ def _author_row_gap_candidate(
     menu_bounds: Optional[Tuple[int, int, int, int]],
 ) -> Optional[Dict[str, Any]]:
     """Empty header strip between author name end and post ⋯ menu — skip when Follow fills the strip."""
+    if not _author_bounds_have_visible_text(element, author_bounds):
+        return None
     ax1, ay1, ax2, ay2 = author_bounds
     cx1, _cy1, cx2, _cy2 = card_bounds
     menu_x1 = menu_bounds[0] if menu_bounds else cx2 - 72
@@ -1185,6 +1262,8 @@ def _classify_header_node(
         return None
     if any(m in merged.casefold() for m in _POST_MENU_MARKERS):
         return None
+    if merged.casefold() in {"khác", "more"}:
+        return None
 
     ax1, ay1, ax2, ay2 = author_bounds
     if y1 <= ay2 + 8 and x1 <= ax2 + 24 and not _RE_TS.search(text or desc):
@@ -1348,6 +1427,7 @@ def _list_post_open_taps_for_card(
         use_media_path = False
 
     if author_bounds and header_candidates:
+        author_text_visible = _author_bounds_have_visible_text(element, author_bounds)
         has_risky_header = any(
             _header_tap_risks_profile_open(h, author_bounds) for h in header_candidates
         )
@@ -1364,7 +1444,7 @@ def _list_post_open_taps_for_card(
             )
             wallpaper_body = bool(body and body.get("gradient_wallpaper"))
             # Wallpaper posts need timestamp fallback — text overlay often does not navigate.
-            if (has_gap or has_plain_body) and not wallpaper_body:
+            if (has_gap or (has_plain_body and author_text_visible)) and not wallpaper_body:
                 header_candidates = [
                     h
                     for h in header_candidates

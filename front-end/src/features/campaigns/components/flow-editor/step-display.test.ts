@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createTranslator } from 'next-intl';
+import { readFileSync } from 'node:fs';
 import {
   getStepDisplay,
   getStepTypeName,
@@ -14,6 +16,45 @@ const labels: Record<string, string> = {
 };
 
 const t = (key: string) => labels[key] ?? `campaignsFeature.flowStep.${key}`;
+
+test('localizes post scan cards with keyword arrays and empty keywords', () => {
+  for (const locale of ['vi', 'en']) {
+    const messages = JSON.parse(
+      readFileSync(
+        new URL(`../../../../../messages/${locale}.json`, import.meta.url),
+        'utf8'
+      )
+    );
+    const translate = createTranslator({
+      locale,
+      messages,
+      namespace: 'campaignsFeature.flowStep',
+      onError(error) {
+        throw error;
+      }
+    });
+    for (const keywords of [
+      ['coffee', 'tea'],
+      'coffee, tea',
+      [],
+      '',
+      undefined
+    ]) {
+      const keywordLabel = Array.isArray(keywords)
+        ? keywords.join(', ')
+        : keywords;
+      const expectedLabel =
+        keywordLabel || translate('display.socialScanPostsAnyKeyword');
+      assert.equal(
+        getStepDisplay(
+          { type: 'social_scan_posts_interact', keywords, target_count: 3 },
+          translate
+        ).target,
+        `${expectedLabel} · 3 ${locale === 'vi' ? 'bài' : 'items'}`
+      );
+    }
+  }
+});
 
 test('localizes the platform session node without exposing Facebook internals', () => {
   assert.equal(

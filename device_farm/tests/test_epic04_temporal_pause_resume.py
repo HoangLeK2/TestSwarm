@@ -30,6 +30,14 @@ def _batch_indices(inp) -> list[int]:
     return list(raw or [])
 
 
+def _activities_with_telemetry(temporal_activity, *activities):
+    @temporal_activity.defn(name="emit_execution_events_batch")
+    async def mock_emit_events_batch(_inp):
+        return None
+
+    return [*activities, mock_emit_events_batch]
+
+
 def test_temporal_error_policy_defaults_run_scenario_to_stop():
     from temporal.workflows import _error_policy
 
@@ -122,7 +130,11 @@ async def test_leaf_activity_context_vars_drive_following_if_variable():
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioStepsWorkflow],
-            activities=[mock_batch],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch),
+        ), TemporalWorker(
+            env.client,
+            task_queue=CONTROL_TASK_QUEUE_NAME,
+            activities=_activities_with_telemetry(temporal_activity),
         ):
             result = await env.client.execute_workflow(
                 ScenarioStepsWorkflow.run,
@@ -190,7 +202,7 @@ async def test_unchanged_context_vars_do_not_override_scenario_variables():
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioStepsWorkflow],
-            activities=[mock_batch],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch),
         ):
             result = await env.client.execute_workflow(
                 ScenarioStepsWorkflow.run,
@@ -253,7 +265,7 @@ async def test_preexisting_context_vars_drive_nested_if_variable():
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioStepsWorkflow],
-            activities=[mock_batch],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch),
         ):
             result = await env.client.execute_workflow(
                 ScenarioStepsWorkflow.run,
@@ -312,7 +324,11 @@ async def test_batch_activity_exception_returns_failed_step_instead_of_child_wor
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioStepsWorkflow],
-            activities=[mock_batch],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch),
+        ), TemporalWorker(
+            env.client,
+            task_queue=CONTROL_TASK_QUEUE_NAME,
+            activities=_activities_with_telemetry(temporal_activity),
         ):
             result = await env.client.execute_workflow(
                 ScenarioStepsWorkflow.run,
@@ -373,7 +389,7 @@ async def test_pause_finishes_atomic_step_before_blocking_next(pause_coord):
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioStepsWorkflow],
-            activities=[mock_batch],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch),
         ):
             handle = await env.client.start_workflow(
                 ScenarioStepsWorkflow.run,
@@ -442,7 +458,7 @@ async def test_resume_continues_from_checkpoint_without_rerunning_steps(pause_co
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioStepsWorkflow],
-            activities=[mock_batch],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch),
         ):
             handle = await env.client.start_workflow(
                 ScenarioStepsWorkflow.run,
@@ -523,7 +539,7 @@ async def test_resume_replays_unfinished_steps_after_partial_paused_batch(pause_
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioStepsWorkflow],
-            activities=[mock_batch],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch),
         ):
             handle = await env.client.start_workflow(
                 ScenarioStepsWorkflow.run,
@@ -600,7 +616,7 @@ async def test_partial_paused_batch_waits_for_resume_without_pause_signal(pause_
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioStepsWorkflow],
-            activities=[mock_batch],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch),
         ):
             handle = await env.client.start_workflow(
                 ScenarioStepsWorkflow.run,
@@ -667,7 +683,7 @@ async def test_partial_paused_batch_does_not_hide_failed_result(pause_coord):
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioStepsWorkflow],
-            activities=[mock_batch],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch),
         ):
             handle = await env.client.start_workflow(
                 ScenarioStepsWorkflow.run,
@@ -734,7 +750,7 @@ async def test_batch_failure_continue_replays_unfinished_batch_steps():
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioStepsWorkflow],
-            activities=[mock_batch],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch),
         ):
             result = await env.client.execute_workflow(
                 ScenarioStepsWorkflow.run,
@@ -802,7 +818,7 @@ async def test_batch_failure_continue_drains_requeued_steps_before_control_flow(
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioStepsWorkflow],
-            activities=[mock_batch],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch),
         ):
             result = await env.client.execute_workflow(
                 ScenarioStepsWorkflow.run,
@@ -873,7 +889,7 @@ async def test_partial_paused_batch_cancel_stops_without_executing_requeued_step
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioStepsWorkflow],
-            activities=[mock_batch],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch),
         ):
             handle = await env.client.start_workflow(
                 ScenarioStepsWorkflow.run,
@@ -953,11 +969,11 @@ async def test_scenario_workflow_forwards_pause_and_resume_to_child(pause_coord)
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
-            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch, mock_claim_keepalive, mock_finalize),
         ), TemporalWorker(
             env.client,
             task_queue=CONTROL_TASK_QUEUE_NAME,
-            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch, mock_claim_keepalive, mock_finalize),
         ):
             handle = await env.client.start_workflow(
                 ScenarioWorkflow.run,
@@ -1033,11 +1049,11 @@ async def test_campaign_keepalive_starts_during_initial_multi_day_pause():
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
-            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch, mock_claim_keepalive, mock_finalize),
         ), TemporalWorker(
             env.client,
             task_queue=CONTROL_TASK_QUEUE_NAME,
-            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch, mock_claim_keepalive, mock_finalize),
         ):
             handle = await env.client.start_workflow(
                 ScenarioWorkflow.run,
@@ -1107,11 +1123,11 @@ async def test_initial_pause_claim_loss_is_non_retryable_and_finalized():
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
-            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch, mock_claim_keepalive, mock_finalize),
         ), TemporalWorker(
             env.client,
             task_queue=CONTROL_TASK_QUEUE_NAME,
-            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch, mock_claim_keepalive, mock_finalize),
         ):
             result = await asyncio.wait_for(
                 env.client.execute_workflow(
@@ -1160,11 +1176,11 @@ async def test_cancel_before_child_start_is_finalized():
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
-            activities=[mock_finalize],
+            activities=_activities_with_telemetry(temporal_activity, mock_finalize),
         ), TemporalWorker(
             env.client,
             task_queue=CONTROL_TASK_QUEUE_NAME,
-            activities=[mock_finalize],
+            activities=_activities_with_telemetry(temporal_activity, mock_finalize),
         ):
             result = await env.client.execute_workflow(
                 ScenarioWorkflow.run,
@@ -1239,11 +1255,11 @@ async def test_paused_campaign_keeps_device_claim_alive_across_multi_day_gap():
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
-            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch, mock_claim_keepalive, mock_finalize),
         ), TemporalWorker(
             env.client,
             task_queue=CONTROL_TASK_QUEUE_NAME,
-            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch, mock_claim_keepalive, mock_finalize),
         ):
             handle = await env.client.start_workflow(
                 ScenarioWorkflow.run,
@@ -1269,7 +1285,7 @@ async def test_paused_campaign_keeps_device_claim_alive_across_multi_day_gap():
 
 @pytest.mark.asyncio
 async def test_three_day_repeat_stays_below_temporal_history_guard():
-    """A five-minute loop running for three days must stay within the history budget."""
+    """A long repeat must fail closed when Temporal suggests history rollover."""
     try:
         from temporalio import activity as temporal_activity
         from temporalio.testing import WorkflowEnvironment
@@ -1311,7 +1327,7 @@ async def test_three_day_repeat_stays_below_temporal_history_guard():
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioStepsWorkflow],
-            activities=[mock_batch],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch),
         ):
             handle = await env.client.start_workflow(
                 ScenarioStepsWorkflow.run,
@@ -1322,8 +1338,10 @@ async def test_three_day_repeat_stays_below_temporal_history_guard():
             result = await asyncio.wait_for(handle.result(), timeout=20.0)
             history = await handle.fetch_history()
 
-    assert result.success is True
-    assert batch_calls == 865
+    assert result.success is False
+    assert result.failed_message.startswith("repeat: dừng ở iteration")
+    assert result.step_results[0]["reason_code"] == "loop_history_limit"
+    assert 0 < batch_calls < 865
     assert len(history.events) < 10_000
 
 
@@ -1378,11 +1396,11 @@ async def test_scenario_workflow_treats_child_temporal_cancel_as_cancelled(pause
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
-            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch, mock_claim_keepalive, mock_finalize),
         ), TemporalWorker(
             env.client,
             task_queue=CONTROL_TASK_QUEUE_NAME,
-            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+            activities=_activities_with_telemetry(temporal_activity, mock_batch, mock_claim_keepalive, mock_finalize),
         ):
             handle = await env.client.start_workflow(
                 ScenarioWorkflow.run,

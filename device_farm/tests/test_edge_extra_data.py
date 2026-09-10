@@ -142,8 +142,8 @@ def test_try_edge_extra_data_forwards_post_open_fast_defaults(monkeypatch) -> No
     assert context["post_open_max_attempts"] == 1
     assert context["post_open_scan_window"] == 12
     assert context["post_open_tap_settle_s"] == 0.65
-    assert context["post_open_verify_retries"] == 1
-    assert context["post_open_verify_retry_pause_s"] == 0.18
+    assert context["post_open_verify_retries"] == 3
+    assert context["post_open_verify_retry_pause_s"] == 0.8
 
 
 def test_try_edge_extra_data_forwards_explicit_post_open_canonical_keys(monkeypatch) -> None:

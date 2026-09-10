@@ -54,6 +54,54 @@ def test_comment_sheet_anchors_use_filter_and_composer() -> None:
     assert y_max is not None and y_max <= 2280
 
 
+def test_fb_490_post_detail_uses_action_bar_before_composer() -> None:
+    xml = """<?xml version="1.0"?>
+<hierarchy bounds="[0,0][1260,2800]">
+  <node package="com.facebook.katana" class="android.widget.Button"
+        clickable="true" content-desc="Quay lại" bounds="[35,147][161,273]" />
+  <node package="com.facebook.katana" class="androidx.recyclerview.widget.RecyclerView"
+        bounds="[0,287][1260,2624]">
+    <node package="com.facebook.katana" text="OpenClaw - AI Agents VN•Tham gia"
+          content-desc="OpenClaw - AI Agents VN•Tham gia"
+          bounds="[0,309][1260,579]" />
+    <node package="com.facebook.katana"
+          text="Hướng dẫn cài Zalo cá nhân với OpenClaw."
+          content-desc="Hướng dẫn cài Zalo cá nhân với OpenClaw."
+          bounds="[0,579][1260,1238]" clickable="true" />
+    <node package="com.facebook.katana" text="Phát video hiện tại"
+          content-desc="Phát video hiện tại" bounds="[525,1544][735,1754]" />
+    <node package="com.facebook.katana" class="android.widget.Button"
+          text="Thích. Nhấn đúp và giữ để bày tỏ cảm xúc."
+          content-desc="Thích. Nhấn đúp và giữ để bày tỏ cảm xúc."
+          bounds="[0,2063][420,2217]" clickable="true"/>
+    <node package="com.facebook.katana" class="android.widget.Button"
+          text="Bình luận" content-desc="Bình luận"
+          bounds="[420,2063][840,2217]" clickable="true"/>
+    <node package="com.facebook.katana" class="android.widget.Button"
+          text="Chia sẻ" content-desc="Chia sẻ"
+          bounds="[840,2063][1260,2217]" clickable="true"/>
+    <node package="com.facebook.katana" content-desc="Mai Ondo"
+          bounds="[42,2357][182,2497]" clickable="true"/>
+    <node package="com.facebook.katana" content-desc="Mai Ondo"
+          bounds="[245,2378][492,2440]" clickable="true"/>
+  </node>
+  <node package="com.facebook.katana" class="android.widget.AutoCompleteTextView"
+        text="Viết bình luận công khai..." bounds="[42,2646][1218,2778]" />
+</hierarchy>"""
+    from relay.extra_data.parsers.facebook.parser import _parse_xml
+
+    root = _parse_xml(xml)
+    assert root is not None
+    y2, _mid, y_max = _resolve_comment_sheet_anchors(root)
+    assert y2 == 2217
+    assert y_max == 2646
+
+    rows, diag = parse_fb_comments_from_xml_with_diagnostic(xml)
+    assert rows == []
+    assert diag["reason_code"] == "empty_cluster"
+    assert diag["anchor_button_found"] is True
+
+
 def test_parse_includes_comment_body_in_left_column() -> None:
     xml = """<?xml version="1.0"?>
 <hierarchy bounds="[0,0][1080,2400]">

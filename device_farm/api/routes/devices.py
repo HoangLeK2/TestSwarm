@@ -20,6 +20,7 @@ from runtime.core import DeviceManager
 from api.schemas.device import (
     DeviceCreate,
     DeviceListOut,
+    DeviceNameUpdate,
     DeviceOut,
     SessionOut,
 )
@@ -1116,6 +1117,23 @@ async def update_tags(
     if not device or device.org_id != getattr(user, "org_id", None):
         raise HTTPException(status_code=404, detail="Device not found")
     await update_device_tags(db, device_id, body.tags)
+    await db.commit()
+    device = await repo.get_device(db, device_id)
+    return _to_out(device)
+
+
+@router.patch(
+    "/{device_id}/name",
+    response_model=DeviceOut,
+    dependencies=[Depends(require_permission("devices", "update"))],
+)
+async def update_name(
+    device_id: str, body: DeviceNameUpdate, db: DB, user: CurrentUser
+):
+    device = await repo.get_device(db, device_id)
+    if not device or device.org_id != getattr(user, "org_id", None):
+        raise HTTPException(status_code=404, detail="Device not found")
+    await repo.update_device_name(db, device_id, (body.name or "").strip())
     await db.commit()
     device = await repo.get_device(db, device_id)
     return _to_out(device)

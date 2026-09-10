@@ -580,7 +580,6 @@ def main() -> int:
         choices=(
             "CapacityProbeWorkflow",
             "DbHoldProbeWorkflow",
-            "AccountCooldownTickWorkflow",
         ),
     )
     parser.add_argument(

@@ -2,7 +2,116 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List
+
+from common.node_catalog import apply_node_catalog_metadata, build_node_catalog
+
+# Optional per-field typing for STEP_SCHEMA entries.
+#
+# A node entry may carry a "fields" dict alongside required/optional:
+#
+#   "fields": {
+#       "wait_after": {"type": "number", "default": 2, "min": 0, "max": 300},
+#       "pos":        {"type": "enum", "values": ["top_center", ...]},
+#   }
+#
+# Supported types: string | number | boolean | enum (with "values") | json.
+# Supported attributes: default, min, max, pattern, label_key, placeholder_key.
+#
+# label_key / placeholder_key are dotted paths under the frontend namespace
+# `campaignsFeature.stepEditor` (e.g. "appLifecycle.packageLabel"). They resolve
+# against the ~215 labels the editor already ships, so migrating a node mostly
+# means pointing at wording that exists rather than writing new wording. A field
+# with no label_key falls back to a humanised field name — that is why the key
+# is optional. scripts/check-schema-field-i18n.mjs asserts every declared key
+# exists in both en.json and vi.json; next-intl renders the raw key otherwise.
+# Kept deliberately small — 70 nodes of plain dicts do not need JSON Schema and
+# a codegen build step.
+#
+# A node with no "fields" key validates exactly as it did before, so this is
+# additive: validate_step is on the save path of every scenario, campaign and
+# template, and must not start rejecting what it accepted yesterday.
+STEP_FIELD_TYPES = ("string", "number", "boolean", "enum", "json")
+
+# Any value that still contains a ${VAR} token is resolved at run time, so it
+# cannot be type-checked at save time. Passing it through is the only option
+# that does not break every scenario that parameterises a timeout.
+_VAR_TOKEN = "${"
+
+
+def _is_deferred(value: Any) -> bool:
+    return isinstance(value, str) and _VAR_TOKEN in value
+
+
+def _as_number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _enum_value(entry: Any) -> str:
+    """An enum choice is a bare string, or {"value", "label_key"} when the
+    editor needs its own wording for that option."""
+    if isinstance(entry, dict):
+        return str(entry.get("value") or "")
+    return str(entry)
+
+
+def _field_errors(prefix: str, name: str, spec: Dict[str, Any], value: Any) -> List[str]:
+    """Check one present field against its spec. Absent fields are `required`'s job."""
+    kind = str(spec.get("type") or "string")
+    if _is_deferred(value):
+        return []
+
+    if kind == "number":
+        number = _as_number(value)
+        if number is None:
+            return [f"{prefix} field {name!r} must be a number, got {value!r}"]
+        errors: List[str] = []
+        minimum, maximum = spec.get("min"), spec.get("max")
+        if minimum is not None and number < float(minimum):
+            errors.append(f"{prefix} field {name!r} must be >= {minimum}, got {value!r}")
+        if maximum is not None and number > float(maximum):
+            errors.append(f"{prefix} field {name!r} must be <= {maximum}, got {value!r}")
+        return errors
+
+    if kind == "boolean":
+        if isinstance(value, bool):
+            return []
+        if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+            return []
+        return [f"{prefix} field {name!r} must be a boolean, got {value!r}"]
+
+    if kind == "enum":
+        values = [_enum_value(v) for v in (spec.get("values") or [])]
+        if not isinstance(value, str):
+            return [f"{prefix} field {name!r} must be one of {tuple(values)}, got {value!r}"]
+        if value.strip().lower() not in {v.lower() for v in values}:
+            return [f"{prefix} field {name!r} must be one of {tuple(values)}, got {value!r}"]
+        return []
+
+    if kind == "json":
+        if isinstance(value, (dict, list)):
+            return []
+        return [f"{prefix} field {name!r} must be an object or array, got {value!r}"]
+
+    # string
+    if not isinstance(value, str):
+        return [f"{prefix} field {name!r} must be a string, got {value!r}"]
+    pattern = spec.get("pattern")
+    # Case-insensitive on purpose: these are format checks (url scheme, id
+    # shape), and the frontend mirrors this with new RegExp(pattern, 'i').
+    if pattern and value.strip() and not re.match(pattern, value.strip(), re.IGNORECASE):
+        return [f"{prefix} field {name!r} does not match {pattern!r}: {value!r}"]
+    return []
 
 SCENARIO_STEP_TYPES = [
     "launch_app",
@@ -75,10 +184,18 @@ SCENARIO_STEP_TYPES = [
     "set_clipboard",
 ]
 
-STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
+_STEP_SCHEMA_BASE: Dict[str, Dict[str, Any]] = {
     "launch_app": {
         "required": ["package"],
-        "optional": ["wait_after", "activity", "component", "stop_before", "use_monkey"],
+        "optional": [
+            "wait_after",
+            "activity",
+            "component",
+            "stop_before",
+            "use_monkey",
+            "package_fallbacks",
+            "adb_fallback",
+        ],
         "description": "Open app by package. Optional activity/component, stop_before, use_monkey. wait_after (default 2s).",
     },
     "stop_app": {
@@ -172,6 +289,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "tap_selector": {
         "required": [],
+        "required_any": [["selector", "by"], ["selector", "value"]],
         "optional": [
             "selector", "by", "value", "fallback", "fallback_rx", "fallback_ry",
             "timeout", "implicit_wait", "element_image",
@@ -186,6 +304,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "tap_xml_match": {
         "required": [],
+        "required_any": [["contains", "equals", "value"]],
         "optional": ["attr", "by", "contains", "equals", "value", "clickable", "timeout", "poll"],
         "description": (
             "Dump UI XML fresh, find first node by attr contains/equals, then tap center from bounds. "
@@ -200,7 +319,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "comment_text",
             "require_completion", "completion_steps", "completion_verify",
             "candidate_entity_id", "require_candidate_status",
-            "account_action_id",
+            "candidate_lease_token", "account_action_id",
         ],
         "description": "Interact with content on the current screen through a platform adapter. Supported actions come from the provider capability registry.",
     },
@@ -211,6 +330,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "settle_seconds", "save_as", "require_verified_target",
             "require_completion", "completion_steps", "completion_verify",
             "candidate_entity_id", "require_candidate_status", "candidate_lease_token",
+            "account_action_id",
         ],
         "description": "Send an idempotent connection request on the current profile screen; use require_verified_target to bind it to a resolver result.",
     },
@@ -275,8 +395,10 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         "optional": [
             "platform", "source_var", "action_index", "search", "display_name",
             "required_keywords", "optional_keywords", "forbidden_keywords",
-            "min_score", "timeout", "profile_wait_s", "save_as",
-            "save_success_as", "save_opened_as",
+            "required_keywords_var", "optional_keywords_var", "forbidden_keywords_var",
+            "min_score", "timeout", "comment_wait_s", "profile_wait_s",
+            "max_commenters", "save_as", "save_success_as", "save_opened_as",
+            "save_sheet_opened_as",
         ],
         "description": (
             "Platform adapter flow: open the author profile from a previously matched "
@@ -288,6 +410,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         "optional": [
             "platform", "source_var", "action_index", "search", "display_name",
             "required_keywords", "optional_keywords", "forbidden_keywords",
+            "required_keywords_var", "optional_keywords_var", "forbidden_keywords_var",
             "min_score", "timeout", "comment_wait_s", "profile_wait_s",
             "max_commenters", "save_as", "save_success_as", "save_opened_as",
             "save_sheet_opened_as",
@@ -308,11 +431,18 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "community_membership": {
         "required": [],
-        "optional": ["platform", "action", "timeout", "poll", "verify_timeout", "settle_seconds", "save_as"],
+        "optional": [
+            "platform", "action", "timeout", "poll", "verify_timeout",
+            "settle_seconds", "save_as", "require_verified_target",
+            "require_completion", "completion_steps", "completion_verify",
+            "candidate_entity_id", "require_candidate_status", "candidate_lease_token",
+            "account_action_id",
+        ],
         "description": "Join the community on the current screen and verify member or pending state.",
     },
     "wait_element": {
         "required": [],
+        "required_any": [["selector", "by"], ["selector", "value"]],
         "optional": ["selector", "by", "value", "timeout", "poll"],
         "description": (
             "⚡ PREFERRED thay cho 'wait N giây'. "
@@ -323,6 +453,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "assert_element": {
         "required": [],
+        "required_any": [["selector", "by"], ["selector", "value"]],
         "optional": ["selector", "by", "value", "timeout", "poll"],
         "description": (
             "✓ Xác nhận element đang hiển thị. Fail scenario ngay nếu không thấy element. "
@@ -332,6 +463,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "input_selector": {
         "required": ["text"],
+        "required_any": [["selector", "by"], ["selector", "value"]],
         "optional": ["selector", "by", "value", "clear_first", "implicit_wait"],
         "description": (
             "Tìm input field theo selector, xóa nội dung cũ (clear_first=true mặc định), "
@@ -341,6 +473,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "long_tap_selector": {
         "required": [],
+        "required_any": [["selector", "by"], ["selector", "value"]],
         "optional": ["selector", "by", "value", "duration_ms", "implicit_wait"],
         "description": (
             "Long press element tìm theo selector. duration_ms mặc định 800ms. "
@@ -349,15 +482,29 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "scroll_to": {
         "required": [],
-        "optional": ["selector", "by", "value", "direction", "max_swipes"],
+        "required_any": [["selector", "by"], ["selector", "value"]],
+        "optional": [
+            "selector",
+            "by",
+            "value",
+            "direction",
+            "max_swipes",
+            "scroll_duration_s",
+            "scroll_settle_s",
+            "scroll_step_ratio",
+            "scroll_to_timeout_s",
+            "timeout",
+        ],
         "description": (
             "Scroll (swipe) cho đến khi element xuất hiện. "
             "direction: down (mặc định) | up. max_swipes mặc định 5."
         ),
     },
     "input_text": {
-        "required": ["text", "via"],
-        "optional": ["clear_first"],
+        # `via` has a Pydantic default; requiring it here rejected steps the API
+        # accepts.
+        "required": ["text"],
+        "optional": ["via", "clear_first"],
         "description": (
             "Gõ text vào element đang focused. via: u2. clear_first=true để xóa "
             "nội dung cũ trước khi gõ. Ưu tiên dùng input_selector khi có selector."
@@ -383,7 +530,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "fill_form": {
         "required": [],
-        "optional": ["profile", "recipe", "clear_first", "implicit_wait"],
+        "optional": ["profile", "recipe", "form", "clear_first", "implicit_wait"],
         "description": "Fill a named form recipe from an app automation profile.",
     },
     "assert_app_state": {
@@ -415,6 +562,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "end_y_ratio",
             "duration_ms",
             "pause_seconds",
+            "smart_scroll",
         ],
         "description": (
             "Vuốt xuống N lần (mặc định 1). "
@@ -440,6 +588,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "template_screen_w",
             "template_screen_h",
             "ssim_threshold",
+            "platform",
             "timeout",
             "poll",
         ],
@@ -494,6 +643,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "if_element": {
         "required": ["then"],
+        "required_any": [["selector", "by"], ["selector", "value"]],
         "optional": ["selector", "by", "value", "timeout", "else"],
         "description": (
             "Rẽ nhánh theo sự tồn tại của element. "
@@ -514,6 +664,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     "social_find_comment_button": {
         "required": [],
         "optional": [
+            "platform",
             "timeout",
             "poll",
             "dedupe_field",
@@ -528,7 +679,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "social_tap_comment_target": {
         "required": [],
-        "optional": ["ignore_error", "post_tap_wait_s"],
+        "optional": ["platform", "ignore_error", "post_tap_wait_s"],
         "description": (
             "Tap the cached comment target from social_find_comment_button, "
             "verify the comment sheet opened, and set parent context for following entity=comments extraction."
@@ -537,6 +688,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     "social_apply_comment_filter": {
         "required": [],
         "optional": [
+            "platform",
             "switch_to_all_comments",
             "comment_filter",
             "comment_filter_settle_s",
@@ -559,6 +711,15 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "switch_to_all_comments",
             "comment_filter",
             "post_tap_wait_s",
+            "comment_filter_settle_s",
+            "require_post_before_comment",
+            "pre_scroll",
+            "pre_scroll_distance",
+            "pre_scroll_duration_ms",
+            "pre_scroll_x_ratio",
+            "pre_scroll_start_y_ratio",
+            "pre_scroll_end_y_ratio",
+            "pre_scroll_pause_s",
             "then",
             "else",
         ],
@@ -583,6 +744,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "run_scenario": {
         "required": [],
+        "required_any": [["scenario_id", "scenario_name"]],
         "optional": ["scenario_id", "scenario_name", "variables"],
         "description": (
             "Gọi một sub-scenario khác (flow composition). "
@@ -614,10 +776,16 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         "optional": [
             "stop_if_no_new",
             "no_new_threshold",
+            "edge_extra_data",
             "expand_see_more",
+            "expand_see_more_max_passes",
+            "expand_see_more_scroll",
+            "expand_see_more_scroll_distance",
+            "expand_completion_retries",
             "extract_profile",
             "open_post_before_extract",
             "open_post_press_back_after_extract",
+            "require_open_post_detail",
             "entity_version",
             "collection",
             "platform",
@@ -627,6 +795,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "extract_var",
             "save_parent_id_var",
             "parent_id_var",
+            "parent_post_id_var",
             "item_level",
             "max_items",
             "comment_scroll_passes",
@@ -669,7 +838,15 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "loop": {
         "required": ["steps"],
-        "optional": ["count", "while", "max_iterations", "loop_var", "duration_seconds"],
+        "optional": [
+            "count",
+            "while",
+            "max_iterations",
+            "loop_var",
+            "duration_seconds",
+            "stall_after",
+            "idle_delay_seconds",
+        ],
         "description": (
             "Lặp lại steps theo count hoặc while-condition. "
             "count: số lần lặp cố định (chạy đúng N lần, không bị max_iterations cắt). "
@@ -677,6 +854,10 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "while: condition dict (element_exists | variable_equals) — lặp khi condition đúng. "
             "max_iterations: giới hạn an toàn chỉ khi dùng while (không có count, default 100). "
             "loop_var: tên biến runtime nhận index hiện tại để nested loop không ghi đè nhau. "
+            "stall_after: dừng sau N vòng liên tiếp không thao tác được gì (0 = tắt). "
+            "idle_delay_seconds: chờ bấy nhiêu giây sau một vòng không thao tác (0–300). "
+            "⚠ Vòng lặp dài có thể dừng sớm với reason_code=loop_history_limit khi run "
+            "hết ngân sách event history — các vòng đã xong vẫn được giữ. "
             "Khác 'repeat': 'loop' kiểm tra ctx['_break'] sau mỗi vòng — cho phép step 'extract' "
             "với stop_if_no_new=True dừng sớm, hoặc step 'break_if' dừng khi đủ điều kiện. "
             "${__LOOP_INDEX__} = chỉ số vòng lặp hiện tại (0-based)."
@@ -706,7 +887,14 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "extract_text_ocr": {
         "required": ["save_as"],
-        "optional": ["region", "language", "psm", "preprocess", "scale_factor"],
+        "optional": [
+            "region",
+            "language",
+            "psm",
+            "preprocess",
+            "scale_factor",
+            "confidence_threshold",
+        ],
         "description": (
             "Extract text from screenshot using Tesseract OCR. "
             "Works on WebView, Canvas, images — anything visible on screen. "
@@ -749,6 +937,8 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "parent_id_var",
             "save_parent_id_var",
             "item_level",
+            "dedup_action",
+            "save_batch_size",
         ],
         "description": (
             "Save extracted data to content database with deduplication (DF-010). "
@@ -805,6 +995,8 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
 }
 
+STEP_SCHEMA = apply_node_catalog_metadata(_STEP_SCHEMA_BASE)
+
 
 def get_scenario_schema() -> Dict[str, Any]:
     from common.node_capabilities import build_node_capability_registry
@@ -817,6 +1009,10 @@ def get_scenario_schema() -> Dict[str, Any]:
         },
         "step_types": SCENARIO_STEP_TYPES,
         "steps_schema": STEP_SCHEMA,
+        "node_catalog": build_node_catalog(
+            step_types=SCENARIO_STEP_TYPES,
+            step_schema=STEP_SCHEMA,
+        ),
         "node_capabilities": build_node_capability_registry(SCENARIO_STEP_TYPES, STEP_SCHEMA),
         "example_bad": {
             "instructions": "BAD: dùng wait cố định — fragile, không biết app đã load chưa",
@@ -846,6 +1042,53 @@ def get_scenario_schema() -> Dict[str, Any]:
     }
 
 
+# Envelope keys every step may carry regardless of node type: StepBase identity
+# (api/schemas/scenario.py:74) plus the DSL contract fields normalize_step adds.
+_STEP_ENVELOPE_KEYS = frozenset({
+    "type",
+    "id",
+    "order",
+    "title",
+    "description",
+    "config",
+    "error_policy",
+    "on_error",
+    "retry",
+    "pre_capture",
+    "post_capture",
+})
+
+
+def unknown_step_fields(step: Dict[str, Any]) -> List[str]:
+    """Keys this node's contract does not declare.
+
+    A warning, never an error: both validators default to ``extra="ignore"``, so
+    an unknown key has always been accepted and silently dropped. Telling the
+    user beats failing a save that worked yesterday.
+
+    Only raw runtime step types are checked. Dotted DSL family types
+    ("interaction.tap") have no STEP_SCHEMA entry and are skipped rather than
+    reported as one big unknown-field list.
+    """
+    if not isinstance(step, dict):
+        return []
+    schema = STEP_SCHEMA.get(str(step.get("type") or ""))
+    if schema is None:
+        return []
+    declared = (
+        set(schema.get("required") or ())
+        | set(schema.get("optional") or ())
+        | set(schema.get("fields") or ())
+        | {name for group in schema.get("required_any") or () for name in group}
+        | _STEP_ENVELOPE_KEYS
+    )
+    # "else" is a Python keyword, so the Pydantic models expose it as
+    # `else_steps` with an alias. Both spellings reach here.
+    if "else" in declared:
+        declared.add("else_steps")
+    return sorted(key for key in step if key not in declared)
+
+
 def validate_step(step: Dict[str, Any], index: int) -> List[str]:
     errors: List[str] = []
     t = step.get("type")
@@ -870,19 +1113,16 @@ def validate_step(step: Dict[str, Any], index: int) -> List[str]:
             errors.append(
                 f"step[{index}]: type={t} requires one of {tuple(group)!r}"
             )
-    if t == "open_url":
-        url = step.get("url") or ""
-        if isinstance(url, str) and url.strip():
-            u = url.strip().lower()
-            if not (u.startswith("http://") or u.startswith("https://")):
-                errors.append(f"step[{index}]: open_url url must start with http:// or https://")
-        # package optional; empty string = use default (Chrome) — no error
-    if t == "tap_position":
-        pos = step.get("pos")
-        if pos is not None and isinstance(pos, str):
-            valid = ("top_center", "middle_center", "bottom_center", "search_bar")
-            if pos.strip().lower() not in valid:
-                errors.append(f"step[{index}]: tap_position pos must be one of {valid}")
+    # Typed field checks. Nodes with no "fields" entry are unaffected. This
+    # replaced the two hardcoded per-type branches (open_url's url scheme,
+    # tap_position's pos values) that were the only field typing there was.
+    for name, spec in (schema.get("fields") or {}).items():
+        if name not in step:
+            continue
+        value = step[name]
+        if value is None:
+            continue
+        errors.extend(_field_errors(f"step[{index}]: type={t}", name, spec, value))
     return errors
 
 

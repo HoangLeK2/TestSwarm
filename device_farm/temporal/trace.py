@@ -16,7 +16,7 @@ from temporalio.worker import (
     Interceptor,
 )
 
-from temporal.payload_guard import strip_oversized_values
+from temporal.payload_guard import SOFT_TOTAL_WARN_BYTES, scan_payload
 
 trace_log = importlib.import_module("structlog").get_logger("temporal_trace")
 
@@ -251,13 +251,24 @@ class _TemporalTraceActivityInbound(ActivityInboundInterceptor):
             result = await self.next.execute_activity(input)
             # Last point before the result becomes a durable Temporal payload.
             with contextlib.suppress(Exception):
-                dropped = strip_oversized_values(result)
-                if dropped:
+                scan = scan_payload(result)
+                if scan.dropped:
                     trace_log.warning(
                         "temporal_activity_payload_trimmed",
                         **ctx,
-                        dropped_fields=dropped[:20],
-                        dropped_count=len(dropped),
+                        dropped_fields=scan.dropped[:20],
+                        dropped_count=len(scan.dropped),
+                    )
+                # Per-field trimming can pass while the total still heads for
+                # Temporal's 2MB refusal. Warn only — replacing a field here
+                # would corrupt data the next step reads (see _PROTECTED_FIELDS).
+                if scan.total_bytes >= SOFT_TOTAL_WARN_BYTES:
+                    trace_log.warning(
+                        "temporal_activity_payload_large",
+                        **ctx,
+                        total_bytes=scan.total_bytes,
+                        soft_limit_bytes=SOFT_TOTAL_WARN_BYTES,
+                        largest_fields=scan.largest,
                     )
             elapsed_ms = (time.perf_counter() - started) * 1000.0
             duration_ms = round(elapsed_ms, 1)

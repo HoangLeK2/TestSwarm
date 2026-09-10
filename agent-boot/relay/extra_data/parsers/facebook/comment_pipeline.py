@@ -539,6 +539,10 @@ def _resolve_comment_sheet_anchors(root) -> Tuple[Optional[int], Optional[int], 
             recycler_top = fb[1]
 
     action_btn_y2 = filter_bottom or post_header_bottom
+    if action_btn_y2 is None and composer_top is not None:
+        legacy_y2, _legacy_mid, _legacy_max = _legacy_last_binh_luan_anchors(root)
+        if legacy_y2 is not None and legacy_y2 < composer_top:
+            action_btn_y2 = legacy_y2
     if action_btn_y2 is None and recycler_top is not None:
         action_btn_y2 = recycler_top + 48
 

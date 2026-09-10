@@ -9,6 +9,10 @@ class DeviceCreate(BaseModel):
     user_id: Optional[str] = None
 
 
+class DeviceNameUpdate(BaseModel):
+    name: str = Field(default="", max_length=255)
+
+
 class DeviceOut(BaseModel):
     id: str
     db_id: str | None = None

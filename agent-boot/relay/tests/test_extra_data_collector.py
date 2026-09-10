@@ -2828,7 +2828,10 @@ async def test_open_post_adaptive_verify_redumps_changed_intermediate_hierarchy(
     intermediate_xml = """<?xml version="1.0"?>
 <hierarchy><node text="loading-post-transition" bounds="[0,200][1080,2200]"/></hierarchy>"""
     detail_xml_expected = """<?xml version="1.0"?>
-<hierarchy><node text="detail-post" bounds="[0,200][1080,2200]"/></hierarchy>"""
+<hierarchy>
+  <node text="Đóng" content-desc="Đóng" bounds="[0,0][80,80]"/>
+  <node content-desc="Bài viết của Author" bounds="[0,100][1080,200]"/>
+</hierarchy>"""
     exec_ = _SequenceDumpExecutor([intermediate_xml, detail_xml_expected])
     target = {
         "bounds": [132, 468, 280, 504],
@@ -2866,6 +2869,43 @@ async def test_open_post_adaptive_verify_redumps_changed_intermediate_hierarchy(
         batch for batch in exec_.batches if any(action.get("op") == "dump_hierarchy" for action in batch)
     ]
     assert len(dump_batches) == 2
+
+
+@pytest.mark.asyncio
+async def test_open_post_adaptive_verify_redumps_stale_feed_hierarchy_by_default() -> None:
+    """FB 490 can return stale feed XML immediately after tap; default retry should catch the detail."""
+    feed_xml = """<?xml version="1.0"?>
+<hierarchy><node text="feed-post" bounds="[0,200][1080,2200]"/></hierarchy>"""
+    detail_xml_expected = """<?xml version="1.0"?>
+<hierarchy>
+  <node text="Đóng" content-desc="Đóng" bounds="[0,0][80,80]"/>
+  <node content-desc="Bài viết của Author" bounds="[0,100][1080,200]"/>
+</hierarchy>"""
+    exec_ = _SequenceDumpExecutor([feed_xml, detail_xml_expected])
+    target = {
+        "bounds": [132, 468, 280, 504],
+        "tap_kind": "timestamp",
+        "tap_label": "5 ngày",
+        "post": {
+            "_pid": "pid-1",
+            "author": "Author",
+            "timestamp": "5 ngày",
+            "text": "Post body",
+        },
+    }
+    ctx: dict = {"open_post_before_extract": True, "post_open_verify": True}
+    with patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline.resolve_post_open_targets_from_xml",
+        return_value=(target, []),
+    ):
+        detail_xml, diag = await _maybe_open_fb_post_detail(
+            exec_, "dev1", ctx, feed_xml
+        )
+
+    assert detail_xml == detail_xml_expected
+    assert diag["reason_code"] == "ok"
+    assert diag["attempts"][0]["verify_retry_count"] == 1
+    assert ctx.get("open_post_detail") is True
 
 
 @pytest.mark.asyncio

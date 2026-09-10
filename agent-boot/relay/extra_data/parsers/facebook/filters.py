@@ -438,6 +438,11 @@ def _is_comment_row_parse_noise(c: Dict[str, Any]) -> bool:
         return True
     if _is_feed_comment_preview_chrome(author_raw) or _is_feed_comment_preview_chrome(text_raw):
         return True
+    if (
+        ("nhấn đúp" in text and ("nút trả lời" in text or "trả lời bình luận" in text))
+        or ("double tap" in text and ("reply button" in text or "reply to comment" in text))
+    ):
+        return True
     if author in {"bình luận", "comment", "thích", "like", "chia sẻ", "share"}:
         if text.startswith("nút ") or "nhấn đúp" in text:
             return True

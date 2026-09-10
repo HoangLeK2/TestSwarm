@@ -5,7 +5,17 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-_VALID_STATUSES = {"active", "banned", "cooldown", "suspended", "retired", "disabled"}
+# ``cooldown``/``disabled`` are legacy aliases kept accepting for old clients;
+# both normalize below (see services.account_state.fsm.normalize_state).
+_LEGACY_STATUS_ALIASES = {"disabled": "suspended", "cooldown": "active"}
+_VALID_STATUSES = {
+    "unassigned",
+    "active",
+    "banned",
+    "suspended",
+    "retired",
+    *_LEGACY_STATUS_ALIASES,
+}
 _VALID_PLATFORMS = {"facebook", "tiktok", "google", "instagram", "twitter", "youtube"}
 
 
@@ -47,16 +57,14 @@ class AccountStatusUpdate(BaseModel):
 
     status: str
     reason: str = "legacy PATCH /status"
-    ttl_seconds: Optional[int] = None
 
     @field_validator("status")
     @classmethod
     def _valid_status(cls, v: str) -> str:
         if v not in _VALID_STATUSES:
-            raise ValueError(
-                f"status must be one of: {', '.join(sorted(_VALID_STATUSES - {'disabled'}))}"
-            )
-        return "suspended" if v == "disabled" else v
+            allowed = _VALID_STATUSES - set(_LEGACY_STATUS_ALIASES)
+            raise ValueError(f"status must be one of: {', '.join(sorted(allowed))}")
+        return _LEGACY_STATUS_ALIASES.get(v, v)
 
 
 class AccountOut(BaseModel):

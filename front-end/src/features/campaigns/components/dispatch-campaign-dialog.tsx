@@ -42,6 +42,11 @@ import {
 } from '@/components/device-vars-json-panel';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { cn } from '@/lib/utils';
+import {
+  deviceDisplayName,
+  deviceSecondarySerial,
+  shortDeviceSerial
+} from '@/features/devices/lib/device-display-name';
 import { useDeviceGroups } from '@/features/device-groups/hooks/use-device-groups';
 import {
   campaignPerDeviceOverrides as readCampaignPerDeviceOverrides,
@@ -53,7 +58,7 @@ import type { CampaignDispatchIn } from '../services/api';
 import type { CampaignDeviceOut, CampaignOut } from '../types';
 
 function deviceLabel(d: CampaignDeviceOut) {
-  return d.name?.trim() || d.serial || '—';
+  return deviceDisplayName(d);
 }
 
 type DispatchStep = 'targets' | 'variables' | 'review';
@@ -584,12 +589,17 @@ export function DispatchCampaignDialog({
                                   size={16}
                                   className='shrink-0 text-muted-foreground'
                                 />
-                                <span className='min-w-0 truncate font-mono'>
-                                  {device.serial}
+                                <span className='min-w-0 truncate font-medium'>
+                                  {deviceLabel(device)}
                                 </span>
-                                {device.name ? (
-                                  <span className='ml-auto truncate text-muted-foreground'>
-                                    {deviceLabel(device)}
+                                {deviceSecondarySerial(device) ? (
+                                  <span
+                                    className='ml-auto truncate font-mono text-xs text-muted-foreground'
+                                    title={deviceSecondarySerial(device)}
+                                  >
+                                    {shortDeviceSerial(
+                                      deviceSecondarySerial(device)
+                                    )}
                                   </span>
                                 ) : null}
                               </button>
@@ -705,9 +715,17 @@ export function DispatchCampaignDialog({
                             size={16}
                             className='shrink-0 text-muted-foreground'
                           />
-                          <span className='min-w-0 flex-1 truncate font-mono'>
-                            {device.serial}
+                          <span className='min-w-0 flex-1 truncate font-medium'>
+                            {deviceLabel(device)}
                           </span>
+                          {deviceSecondarySerial(device) ? (
+                            <span
+                              className='shrink-0 truncate font-mono text-xs text-muted-foreground'
+                              title={deviceSecondarySerial(device)}
+                            >
+                              {shortDeviceSerial(deviceSecondarySerial(device))}
+                            </span>
+                          ) : null}
                           {hasOverride ? (
                             <Badge
                               variant='secondary'
@@ -732,7 +750,9 @@ export function DispatchCampaignDialog({
                     onDraftChange={handleDraftChange}
                     loading={backendCampaignLoading}
                     jsonError={currentJsonError}
-                    deviceLabel={activeDevice?.serial}
+                    deviceLabel={
+                      activeDevice ? deviceLabel(activeDevice) : undefined
+                    }
                     baseVariables={globalVariablesPreview}
                     globalVariablesPreview={globalVariablesPreview}
                     className='flex min-h-0 min-w-0 flex-1 flex-col'
@@ -787,7 +807,7 @@ export function DispatchCampaignDialog({
                   <div className='flex flex-wrap gap-2'>
                     {selectedDevices.map((device) => (
                       <Badge key={device.id} variant='secondary'>
-                        {device.serial}
+                        {deviceLabel(device)}
                       </Badge>
                     ))}
                   </div>

@@ -877,7 +877,7 @@ class TestCheckpointKeepsAbsoluteStepIndices:
 
         from temporal.workflows import ScenarioStepsWorkflow
 
-        src = inspect.getsource(ScenarioStepsWorkflow.run)
+        src = inspect.getsource(ScenarioStepsWorkflow._run_steps)
         # After a checkpoint the workflow must hand on the whole list plus a
         # resume point, never the slice.
         assert "next_steps, next_start = inp.steps, idx" in src

@@ -20,7 +20,6 @@ class AccountStateChangedEvent:
     from_state: str
     to_state: str
     reason: str
-    ttl_seconds: Optional[int]
     actor: str
     platform: Optional[str] = None
 
@@ -41,7 +40,6 @@ def publish_account_state_changed(event: AccountStateChangedEvent) -> None:
             "from": event.from_state,
             "to": event.to_state,
             "reason": event.reason,
-            "ttl_seconds": event.ttl_seconds,
             "actor": event.actor,
         },
     )

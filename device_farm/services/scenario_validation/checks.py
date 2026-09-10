@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from common.scenario_schema import unknown_step_fields
 from common.variable_resolver import _BUILTIN_NAMES, _VAR_PATTERN, normalize_variable_map
 from services.scenario_validation import codes as C
 from services.scenario_validation.graph_reachability import (
@@ -20,6 +21,9 @@ from services.scenario_validation.variable_contracts import step_output_variable
 
 _MAX_NESTING_DEPTH = 10
 _ERROR_POLICIES = frozenset({"pause", "continue", "stop"})
+# Mirrors _GLOBAL_VERIFY_CONTENT_ACTIONS (steps/social_actions.py:40): the
+# actions with no readable "before" state.
+_VERIFY_REQUIRED_ACTIONS = frozenset({"comment", "share"})
 
 # Skip ${var} scan inside heavy / non-interpolated fields (screenshots, anchors).
 # Nested step containers are walked separately via StepIndex — do not recurse into
@@ -185,6 +189,56 @@ def check_on_error_targets(index: StepIndex, result: ValidationResult) -> None:
                     location=loc_on_error,
                 )
             )
+
+
+def check_step_fields(index: StepIndex, result: ValidationResult) -> None:
+    """Report keys the node contract does not declare.
+
+    Warning, not error: both validators ignore extra keys today, so a typo has
+    always been accepted and silently dropped at runtime. Saying so is the fix;
+    rejecting the save would break scenarios that worked yesterday.
+    """
+    for step, loc, _sid in index.entries:
+        for field in unknown_step_fields(step):
+            result.add(
+                ValidationIssue(
+                    level="warning",
+                    code=C.UNKNOWN_STEP_FIELD,
+                    message=(
+                        f"{step.get('type')} does not declare {field!r}; "
+                        "it will be ignored at runtime"
+                    ),
+                    location=f"{loc}.{field}",
+                )
+            )
+
+
+def check_content_interaction_verify(index: StepIndex, result: ValidationResult) -> None:
+    """comment/share must say how completion is verified.
+
+    Neither action leaves a readable "before" state, so the already-applied
+    dedupe pass (social_actions.py:2192) cannot recognise a repeat. Without
+    completion_verify, a manual retry or a declared `retry:` block posts twice.
+    Runtime is unchanged — this only blocks re-saving such a step.
+    """
+    for step, loc, _sid in index.entries:
+        if str(step.get("type") or "") != "content_interaction":
+            continue
+        if str(step.get("action") or "") not in _VERIFY_REQUIRED_ACTIONS:
+            continue
+        if step.get("completion_verify"):
+            continue
+        result.add(
+            ValidationIssue(
+                level="error",
+                code=C.COMPLETION_VERIFY_REQUIRED,
+                message=(
+                    f"content_interaction action={step.get('action')} requires "
+                    "completion_verify: it cannot be deduped by state"
+                ),
+                location=f"{loc}.completion_verify",
+            )
+        )
 
 
 def check_retry_config(index: StepIndex, result: ValidationResult) -> None:

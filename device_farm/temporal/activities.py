@@ -53,6 +53,22 @@ def _generate_totp(secret: str, *, now: int | None = None, digits: int = 6, peri
 _SERIAL_RE = re.compile(r"^[\w.:_-]{1,128}$")
 
 
+def _parse_event_timestamp(value: Any) -> Any:
+    """ISO string stamped by the workflow → datetime, or None to use DB now().
+
+    Buffered telemetry is written later than it happened, so the workflow's own
+    clock reading is what keeps the UI timeline in order.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
 class CampaignDeviceClaimLostError(RuntimeError):
     """The execution no longer owns a live campaign claim for this device."""
 
@@ -2727,6 +2743,84 @@ class DeviceActivities:
                     ),
                 )
             await db.commit()
+
+    @activity.defn
+    async def emit_execution_events_batch(self, inp: dict) -> int:
+        """Write a workflow's buffered telemetry events in one session.
+
+        One activity per ~50 events instead of one per event: awaiting an
+        activity per emit was roughly two thirds of the workflow's Temporal
+        event history, which is what pushed long runs into server termination.
+
+        Each event carries the occurred_at the workflow stamped when it happened,
+        so batching cannot reorder the timeline the UI renders.
+        """
+        events = inp.get("events")
+        if not isinstance(events, list) or not events:
+            return 0
+        execution_id = str(inp.get("execution_id") or "")
+        if not execution_id:
+            return 0
+
+        from db.database import activity_session
+        from services.execution.activity_events import (
+            emit_control_flow_step_event,
+            emit_temporal_activity_event,
+        )
+        from services.execution.event_publisher import resolve_execution_event_context
+        from tenancy.context import tenant_context
+
+        written = 0
+        async with activity_session() as db:
+            _execution, org_id, default_campaign_id = await resolve_execution_event_context(
+                db,
+                execution_id,
+            )
+            if not org_id:
+                return 0
+            with tenant_context(org_id):
+                for event in events:
+                    if not isinstance(event, dict):
+                        continue
+                    emit = (
+                        emit_control_flow_step_event
+                        if event.get("event_kind") == "control_flow"
+                        else emit_temporal_activity_event
+                    )
+                    try:
+                        await emit(
+                            db,
+                            execution_id=execution_id,
+                            org_id=org_id,
+                            campaign_id=event.get("campaign_id") or default_campaign_id,
+                            event_type=str(event.get("event_type") or ""),
+                            step_id=str(event.get("step_id") or event.get("step_index") or ""),
+                            step_index=int(event.get("step_index") or 0),
+                            step_type=str(event.get("step_type") or ""),
+                            depth=int(event.get("depth") or 0),
+                            trace_context=(
+                                event.get("trace")
+                                if isinstance(event.get("trace"), dict)
+                                else None
+                            ),
+                            payload=(
+                                event.get("payload")
+                                if isinstance(event.get("payload"), dict)
+                                else {}
+                            ),
+                            occurred_at=_parse_event_timestamp(event.get("occurred_at")),
+                        )
+                        written += 1
+                    except Exception:
+                        # One malformed event must not discard the other 49.
+                        log.warning(
+                            "emit_execution_events_batch: skipped %s for execution %s",
+                            event.get("event_type"),
+                            execution_id,
+                            exc_info=True,
+                        )
+            await db.commit()
+        return written
 
     @activity.defn
     async def finalize_campaign(self, inp: dict) -> None:

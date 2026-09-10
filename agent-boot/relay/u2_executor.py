@@ -1753,6 +1753,25 @@ def _fb_nearby_labels(
     return labels
 
 
+def _fb_labels_overlapping_vertical_band(
+    root: Any,
+    *,
+    top: int,
+    bottom: int,
+) -> list[str]:
+    labels: list[str] = []
+    for node in root.iter("node"):
+        node_bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if node_bounds is None:
+            continue
+        if node_bounds[3] < top or node_bounds[1] > bottom:
+            continue
+        label = _fb_node_label(node)
+        if label:
+            labels.append(label)
+    return labels
+
+
 def _fb_bool_param(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
@@ -3140,6 +3159,15 @@ def _fb_screen_right(root: Any) -> int:
     return right or 1260
 
 
+def _fb_screen_bottom(root: Any) -> int:
+    bottom = 0
+    for node in root.iter("node"):
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if bounds is not None:
+            bottom = max(bottom, bounds[3])
+    return bottom or 2800
+
+
 _FB_AUTHOR_NOISE_PHRASES = LabelSet(
     name="author_noise_phrases",
     mode=MODE_PHRASE,
@@ -3402,7 +3430,11 @@ def _fb_visible_post_candidates(
             max(like_bounds[2], comment_bounds[2]),
             max(like_bounds[3], comment_bounds[3]),
         )
-        context_labels = _fb_nearby_labels(root, context_bounds, y_padding=760)
+        context_labels = _fb_labels_overlapping_vertical_band(
+            root,
+            top=max(0, action_top - 2200),
+            bottom=action_top + 140,
+        )
         context_text = " ".join(dict.fromkeys(context_labels))
         folded_context = _fb_fold(context_text)
         if any(token in folded_context for token in forbidden_context_terms):
@@ -3523,6 +3555,22 @@ def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
             xml = dev.dump_hierarchy(compressed=False)
         last_xml = xml
         screen_expands = 0
+        while screen_expands < 2:
+            root = _xml_parse_root(xml)
+            expand_bounds = _fb_visible_post_text_see_more_bounds(root)
+            if expand_bounds is None:
+                break
+            expand_key = ":".join(str(part) for part in expand_bounds)
+            if expand_key in seen_expand_keys:
+                break
+            seen_expand_keys.add(expand_key)
+            left, top, right, bottom = expand_bounds
+            dev.click((left + right) // 2, (top + bottom) // 2)
+            expanded_more_count += 1
+            screen_expands += 1
+            time.sleep(0.2)
+            xml = dev.dump_hierarchy(compressed=False)
+            last_xml = xml
         while True:
             candidates, qualified, expand_requests, rows_seen = _fb_visible_post_candidates(
                 xml,
@@ -3824,8 +3872,12 @@ def _fb_see_more_bounds_near(
         if node_bounds is None:
             continue
         if folded in ("xem them", "see more"):
+            if not _fb_see_more_button_belongs_to_truncated_text(root, node_bounds):
+                continue
             tap_bounds = node_bounds
         elif _FB_SEE_MORE_TOKENS.matches_folded(folded):
+            if "…" not in label and "..." not in label:
+                continue
             node_left, node_top, node_right, node_bottom = node_bounds
             tap_bounds = (
                 max(node_left, node_right - 320),
@@ -3840,6 +3892,55 @@ def _fb_see_more_bounds_near(
         if tap_bounds[3] < top - 80 or tap_bounds[1] > bottom + 80:
             continue
         matches.append(tap_bounds)
+    if not matches:
+        return None
+    return min(matches, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
+
+
+def _fb_see_more_button_belongs_to_truncated_text(
+    root: Any,
+    button_bounds: tuple[int, int, int, int],
+) -> bool:
+    left, top, right, bottom = button_bounds
+    for node in root.iter("node"):
+        label = _fb_node_label(node)
+        folded = _fb_fold(label)
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if not label or bounds is None:
+            continue
+        if folded in ("xem them", "see more"):
+            continue
+        if not _FB_SEE_MORE_TOKENS.matches_folded(folded):
+            continue
+        if "…" not in label and "..." not in label:
+            continue
+        node_left, node_top, node_right, node_bottom = bounds
+        horizontal_overlap = min(right, node_right) - max(left, node_left)
+        vertical_overlap = min(bottom, node_bottom) - max(top, node_top)
+        if horizontal_overlap > 0 and vertical_overlap > 0:
+            return True
+    return False
+
+
+def _fb_visible_post_text_see_more_bounds(root: Any) -> tuple[int, int, int, int] | None:
+    matches: list[tuple[int, int, int, int]] = []
+    screen_bottom = _fb_screen_bottom(root)
+    for node in root.iter("node"):
+        label = _fb_node_label(node)
+        folded = _fb_fold(label)
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if not label or bounds is None:
+            continue
+        if bounds[1] > screen_bottom * 0.9:
+            continue
+        if not _FB_SEE_MORE_TOKENS.matches_folded(folded):
+            continue
+        if folded in ("xem them", "see more"):
+            continue
+        if "…" not in label and "..." not in label:
+            continue
+        tap_bounds = _fb_see_more_bounds_near(root, bounds)
+        matches.append(tap_bounds or bounds)
     if not matches:
         return None
     return min(matches, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
@@ -5399,8 +5500,12 @@ def _flow_social_select_target(dev: Any, p: dict) -> dict:
 # Not a LabelSet: these are never matched on their own. They are only ever the
 # tail of _FB_COUNT_RE, so a digit must immediately precede them — which is why
 # bare "friend" and "ban be" are safe here and nowhere else.
+# "nguoi ban" is what the Vietnamese app actually prints on the profile header
+# ("2 người bạn") — measured on a real vivo V2352A. Without it the account's own
+# count reads as "not visible" on every Vietnamese device, which is the one
+# screen this whole signal exists for.
 _FB_COUNT_LABELS: dict[str, tuple[str, ...]] = {
-    "friends": ("ban be", "friends", "friend"),
+    "friends": ("nguoi ban", "ban be", "friends", "friend"),
     "followers": ("nguoi theo doi", "followers", "follower"),
 }
 _FB_COUNT_RE = r"(\d[\d.,]*)\s*(?:tr|m|k|n)?\s*"
@@ -5496,12 +5601,129 @@ def _fb_read_count(hierarchy_xml: str, metric: str = "friends") -> dict[str, Any
     }
 
 
+# Controls Facebook only draws on the profile you own. Their presence is what
+# says "this header belongs to the logged-in account" — without one of them the
+# name below could be any stranger whose profile happens to be open.
+_FB_OWN_PROFILE_ACTIONS = LabelSet(
+    name="own_profile_actions",
+    mode=MODE_WORD,
+    why=(
+        "Multi-word control labels. Word mode so 'them vao tin' cannot match "
+        "inside a longer sentence, and no Vietnamese name spans these pairs."
+    ),
+    tokens=(
+        "chinh sua trang ca nhan",
+        "edit profile",
+        "them vao tin",
+        "add to story",
+    ),
+)
+
+# Everything else the header draws around the name: the cover, the avatar and
+# their edit affordances. Matched to find where the chrome ends, so the name is
+# looked for between it and the first own-profile control rather than anywhere
+# above.
+_FB_PROFILE_HEADER_CHROME = LabelSet(
+    name="profile_header_chrome",
+    mode=MODE_WORD,
+    why=(
+        "Two- and three-word chrome labels. Word mode keeps 'anh dai dien' from "
+        "matching inside a name while still catching 'Ảnh đại diện của X'."
+    ),
+    tokens=(
+        "anh dai dien",
+        "them anh bia",
+        "anh bia",
+        "cover photo",
+        "profile picture",
+        "profile photo",
+    ),
+)
+
+
+def _fb_is_count_fragment(folded: str) -> bool:
+    """True for the count row and the pieces Facebook splits it into.
+
+    The header renders "2 người bạn" as a button plus two separate views, "2"
+    and "người bạn". All three sit right above the name and would otherwise be
+    mistaken for it.
+    """
+    if not folded:
+        return True
+    if folded.isdigit():
+        return True
+    for tokens in _FB_COUNT_LABELS.values():
+        for token in tokens:
+            if folded == token:
+                return True
+            if re.search(_FB_COUNT_RE + re.escape(token), folded):
+                return True
+    return False
+
+
+def _fb_profile_owner_name(root: Any) -> dict[str, Any]:
+    """Read the display name off the header of the account's own profile.
+
+    Bounded on both sides by controls the app itself draws: below the cover and
+    avatar chrome, above the first own-profile action. Facebook gives the name
+    no id, no distinguishing class and no relation to anything else in the tree,
+    so this is the only anchor available — and when either bound is missing the
+    answer is a refusal, not the nearest label. Reading a stranger's name here
+    would be recorded as the account's own.
+    """
+    anchor_top: int | None = None
+    chrome_bottom: int | None = None
+    for node in root.iter("node"):
+        folded = _fb_fold(_fb_node_label(node))
+        if not folded:
+            continue
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if not bounds:
+            continue
+        if _FB_OWN_PROFILE_ACTIONS.matches_folded(folded):
+            if anchor_top is None or bounds[1] < anchor_top:
+                anchor_top = bounds[1]
+        if _FB_PROFILE_HEADER_CHROME.matches_folded(folded):
+            if chrome_bottom is None or bounds[3] > chrome_bottom:
+                chrome_bottom = bounds[3]
+
+    if anchor_top is None:
+        return {"found": False, "reason": "not_own_profile"}
+    if chrome_bottom is None:
+        return {"found": False, "reason": "profile_header_not_recognised"}
+
+    best: tuple[int, str] | None = None
+    for node in root.iter("node"):
+        label = _fb_node_label(node)
+        folded = _fb_fold(label)
+        if not folded or _fb_is_count_fragment(folded):
+            continue
+        if _FB_OWN_PROFILE_ACTIONS.matches_folded(folded):
+            continue
+        if _FB_PROFILE_HEADER_CHROME.matches_folded(folded):
+            continue
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if not bounds:
+            continue
+        if bounds[1] < chrome_bottom or bounds[1] >= anchor_top:
+            continue
+        if best is None or bounds[1] > best[0]:
+            best = (bounds[1], label)
+
+    if best is None:
+        return {"found": False, "reason": "owner_name_not_visible"}
+    return {"found": True, "value": best[1][:255], "source": "profile_header"}
+
+
 def _flow_fb_read_connection_count(dev: Any, p: dict) -> dict:
-    """Read the account's own friend count from the profile screen."""
+    """Read the account's own friend count and display name from its profile."""
     metric = str(p.get("metric") or "friends").strip().casefold()
     xml = dev.dump_hierarchy(compressed=False)
     result = _fb_read_count(xml, metric)
     result["xml_chars"] = len(xml or "")
+    owner = _fb_profile_owner_name(_xml_parse_root(xml))
+    result["display_name"] = owner.get("value") if owner.get("found") else None
+    result["display_name_reason"] = owner.get("reason")
     if not result.get("found"):
         result["message"] = (
             f"{metric} count is not visible on the current screen; "

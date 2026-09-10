@@ -83,6 +83,7 @@ class OrgScenarioValidateIn(BaseModel):
     nodes: Optional[list[dict[str, Any]]] = None
     edges: Optional[list[dict[str, Any]]] = None
     variables: Optional[dict[str, Any]] = None
+    requirements: Optional[dict[str, Any]] = None
     campaign_variables: Optional[dict[str, Any]] = None
 
 

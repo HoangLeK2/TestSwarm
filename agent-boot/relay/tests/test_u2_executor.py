@@ -731,6 +731,115 @@ def test_flow_social_scan_posts_interact_forwards_author_binding(monkeypatch):
     assert result["actions"][0]["author_tap"] == [393, 485]
 
 
+def test_flow_social_scan_posts_interact_expands_visible_text_before_matching(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    truncated = _fb_xml(
+        _fb_node("", bounds="[0,0][1260,2800]"),
+        _fb_node("Nguyen Van A", bounds="[210,452][576,518]", clickable=True),
+        _fb_node(
+            "Mình đang chia sẻ vài ghi chú dài… Xem thêm",
+            bounds="[42,2061][1218,2152]",
+            clickable=True,
+        ),
+        _fb_node("Xem thêm", bounds="[944,2056][1213,2122]", clickable=True),
+    )
+    expanded = _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[210,452][576,518]", clickable=True),
+        _fb_node(
+            "Mình đang chia sẻ vài ghi chú dài về công nghệ giáo dục",
+            bounds="[42,840][1218,1320]",
+        ),
+        _fb_node("Nút Thích", bounds="[0,1505][223,1659]", clickable=True),
+        _fb_node("Bình luận", bounds="[227,1505][457,1659]", clickable=True),
+    )
+    dev = _FlowDevice(truncated, expanded)
+
+    result = u2_exec_mod._flow_social_scan_posts_interact(
+        dev,
+        {
+            "keywords": ["công nghệ"],
+            "comment_text": "",
+            "target_count": 1,
+            "max_scrolls": 0,
+            "verify_like": False,
+        },
+    )
+
+    assert result["verified"] is True
+    assert result["expanded_more_count"] == 1
+    assert result["actions"][0]["matched_keywords"] == ["cong nghe"]
+    assert dev.clicks[0] == (1078, 2089)
+
+
+def test_flow_social_scan_posts_interact_does_not_expand_standalone_cta(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    feed = _fb_xml(
+        _fb_node("Xem thêm", bounds="[148,650][300,720]", clickable=True),
+        _fb_node("Xem lại", bounds="[500,650][650,720]", clickable=True),
+        _fb_node("Chia sẻ", bounds="[800,650][980,720]", clickable=True),
+        _fb_node("Gửi Lọ Lem và Hạt Dẻ", bounds="[42,1200][1218,1387]"),
+        _fb_node("Nút Thích", bounds="[0,1505][223,1659]", clickable=True),
+        _fb_node("Bình luận", bounds="[227,1505][457,1659]", clickable=True),
+    )
+    dev = _FlowDevice(feed)
+
+    result = u2_exec_mod._flow_social_scan_posts_interact(
+        dev,
+        {
+            "keywords": ["công nghệ"],
+            "comment_text": "",
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+
+    assert result["expanded_more_count"] == 0
+    assert result["interacted_count"] == 0
+    assert dev.clicks == []
+
+
+def test_flow_social_scan_posts_interact_keeps_context_inside_tall_media_post(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    feed = _fb_xml(
+        _fb_node("Quyen Linh", bounds="[210,133][442,177]", clickable=True),
+        _fb_node("9 thg 8•Chia sẻ với: Công khai", bounds="[210,177][442,226]"),
+        _fb_node(
+            "Gửi Lọ Lem và Hạt Dẻ trong năm học mới",
+            bounds="[42,278][1218,440]",
+            clickable=True,
+        ),
+        _fb_node("Thích. Nhấn đúp và giữ để bày tỏ cảm xúc.", bounds="[0,2132][420,2286]", clickable=True),
+        _fb_node("Bình luận", bounds="[420,2132][840,2286]", clickable=True),
+        _fb_node("Ảnh đại diện của Head and Shoulders", bounds="[42,2360][182,2500]", clickable=True),
+        _fb_node("Được tài trợ•Chia sẻ với: Công khai", bounds="[210,2423][536,2472]"),
+        _fb_node(
+            "Về kể không ai tin: Dầu gội chu… Xem thêm",
+            bounds="[42,2524][1218,2615]",
+            clickable=True,
+        ),
+        _fb_node("Xem thêm", bounds="[920,2519][1189,2585]", clickable=True),
+    )
+    dev = _FlowDevice(feed)
+
+    result = u2_exec_mod._flow_social_scan_posts_interact(
+        dev,
+        {
+            "keywords": ["năm học mới"],
+            "comment_text": "",
+            "target_count": 1,
+            "max_scrolls": 0,
+            "like_post": False,
+            "require_comment": False,
+        },
+    )
+
+    assert result["verified"] is True
+    assert result["rows_seen"] == 1
+    assert result["expanded_more_count"] == 0
+    assert result["actions"][0]["matched_keywords"] == ["nam hoc moi"]
+    assert dev.clicks == []
+
+
 def test_flow_social_scan_posts_interact_can_skip_like_and_comment(monkeypatch):
     monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
     feed = _fb_xml(

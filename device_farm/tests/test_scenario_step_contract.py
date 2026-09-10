@@ -1,12 +1,32 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from api.schemas.scenario import ScenarioModel
+from common.scenario_schema import SCENARIO_STEP_TYPES
 from services.scenario_step_contract import (
     extract_data_var_for_entity,
     normalize_extract_step,
     normalize_social_comment_step,
     normalize_save_extraction_step,
 )
+
+
+def _walk_steps(steps: list[dict]) -> list[dict]:
+    found: list[dict] = []
+    for step in steps:
+        found.append(step)
+        if isinstance(step.get("steps"), list):
+            found.extend(_walk_steps(step["steps"]))
+        if isinstance(step.get("then"), list):
+            found.extend(_walk_steps(step["then"]))
+        if isinstance(step.get("else"), list):
+            found.extend(_walk_steps(step["else"]))
+        for branch in step.get("branches") or []:
+            if isinstance(branch, dict) and isinstance(branch.get("steps"), list):
+                found.extend(_walk_steps(branch["steps"]))
+    return found
 
 
 def test_normalize_social_comment_step_applies_crawl_defaults() -> None:
@@ -72,8 +92,8 @@ def test_normalize_extract_step_applies_fb_posts_open_post_default() -> None:
     )
     assert step.get("open_post_before_extract") is True
     assert step.get("open_post_press_back_after_extract") is False
-    assert step.get("post_open_verify_retries") == 1
-    assert step.get("post_open_verify_retry_pause_s") == 0.18
+    assert step.get("post_open_verify_retries") == 3
+    assert step.get("post_open_verify_retry_pause_s") == 0.8
 
 
 def test_normalize_alias_for_parent_id_var() -> None:
@@ -218,3 +238,55 @@ def test_scenario_model_rejects_invalid_extract_profile() -> None:
     )
     assert errors
     assert "extract_profile" in errors[0]
+
+
+def test_fb_feed_keyword_like_comment_scenario_uses_existing_nodes_and_1_5s_timeouts() -> None:
+    path = Path(__file__).resolve().parents[1] / "scenarios" / "fb_feed_keyword_like_comment.json"
+    scenario = json.loads(path.read_text(encoding="utf-8"))
+
+    assert ScenarioModel.validate_dict(scenario) == []
+
+    steps = _walk_steps(scenario["steps"])
+    assert {step["type"] for step in steps} <= set(SCENARIO_STEP_TYPES)
+    assert [step["type"] for step in steps].count("social_scan_posts_interact") == 3
+    assert [step.get("comment_text") for step in steps if step["type"] == "social_scan_posts_interact"] == [
+        "Chúc các bé chăm ngoan học giỏi",
+        "Tuyệt",
+        "Rất vui được giao lưu ạ",
+    ]
+    assert all(step["timeout"] == 1.5 for step in steps if "timeout" in step)
+
+
+def test_fb_feed_keyword_like_comment_template_matches_timeout_contract() -> None:
+    from db.seeds.scenario_templates import _FACEBOOK_TEMPLATES
+
+    template = next(
+        item
+        for item in _FACEBOOK_TEMPLATES
+        if item["name"] == "Nuôi Facebook - Like/comment Feed theo keyword"
+    )
+
+    steps = _walk_steps(template["steps"])
+    assert ScenarioModel.validate_dict({"steps": template["steps"], "variables": template["variables"]}) == []
+    assert [step["type"] for step in steps].count("social_scan_posts_interact") == 3
+    assert all(step["timeout"] == 1.5 for step in steps if "timeout" in step)
+
+
+def test_facebook_social_scan_templates_use_short_scan_timeouts() -> None:
+    from db.seeds.scenario_templates import _FACEBOOK_TEMPLATES
+
+    templates = [
+        template
+        for template in _FACEBOOK_TEMPLATES
+        if any(step["type"] == "social_scan_posts_interact" for step in _walk_steps(template["steps"]))
+    ]
+
+    assert templates
+    for template in templates:
+        variables = template.get("variables") or {}
+        if "POST_SCAN_TIMEOUT_SECONDS" in variables:
+            assert variables["POST_SCAN_TIMEOUT_SECONDS"] <= 1.5, template["name"]
+        if "COMMENTER_STEP_TIMEOUT" in variables:
+            assert variables["COMMENTER_STEP_TIMEOUT"] <= 1.5, template["name"]
+        if "MAX_SCROLLS" in variables:
+            assert variables["MAX_SCROLLS"] <= 1, template["name"]

@@ -21365,19 +21365,6 @@
             "minLength": 1,
             "title": "Reason"
           },
-          "ttl_seconds": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 1.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ttl Seconds",
-            "description": "Required when to=cooldown; cooldown_until = now + ttl_seconds"
-          },
           "expected_state_changed_at": {
             "anyOf": [
               {
@@ -21470,17 +21457,6 @@
             "type": "string",
             "title": "Reason",
             "default": "legacy PATCH /status"
-          },
-          "ttl_seconds": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ttl Seconds"
           }
         },
         "type": "object",

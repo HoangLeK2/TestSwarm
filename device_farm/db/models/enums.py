@@ -64,10 +64,16 @@ class ExecutionResultStatus(StrEnum):
 
 
 class AccountState(StrEnum):
-    """Account lifecycle FSM (DF-T-07-005). Canonical field: ``accounts.state``."""
+    """Account lifecycle FSM (DF-T-07-005). Canonical field: ``accounts.state``.
 
+    ``cooldown`` is deliberately not a state: resting is an eligibility gate on
+    ``accounts.cooldown_until``, checked independently of ``state`` by the
+    campaign resolver and group pickers. Legacy ``cooldown`` rows normalize to
+    ``active`` and keep their ``cooldown_until``.
+    """
+
+    UNASSIGNED = "unassigned"
     ACTIVE = "active"
-    COOLDOWN = "cooldown"
     SUSPENDED = "suspended"
     BANNED = "banned"
     RETIRED = "retired"

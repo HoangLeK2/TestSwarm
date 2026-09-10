@@ -5,20 +5,21 @@ from typing import Final
 
 from db.models.enums import AccountState
 
-# Allowed targets from each source state (auto cooldown→active is handled by cron, not API).
+# Allowed targets from each source state. ``unassigned``↔``active`` is normally
+# driven by device link/unlink (db.crud.account) rather than by an operator.
 _TRANSITIONS: Final[dict[AccountState, frozenset[AccountState]]] = {
-    AccountState.ACTIVE: frozenset(
+    AccountState.UNASSIGNED: frozenset(
         {
-            AccountState.COOLDOWN,
-            AccountState.SUSPENDED,
+            AccountState.ACTIVE,
             AccountState.BANNED,
             AccountState.RETIRED,
         }
     ),
-    AccountState.COOLDOWN: frozenset(
+    AccountState.ACTIVE: frozenset(
         {
-            AccountState.ACTIVE,
+            AccountState.UNASSIGNED,
             AccountState.SUSPENDED,
+            AccountState.BANNED,
             AccountState.RETIRED,
         }
     ),
@@ -45,6 +46,9 @@ def normalize_state(value: str | AccountState | None) -> AccountState:
     raw = str(value).strip().lower()
     if raw == "disabled":
         return AccountState.SUSPENDED
+    if raw == "cooldown":
+        # Legacy state, now an eligibility gate on ``cooldown_until`` (migration 128).
+        return AccountState.ACTIVE
     try:
         return AccountState(raw)
     except ValueError:

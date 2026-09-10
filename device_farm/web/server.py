@@ -509,28 +509,16 @@ def create_app(
 
             async def _account_maintenance_loop() -> None:
                 import asyncio as _aio
-                from services.account_manager import (
-                    check_and_reset_cooldowns,
-                    reset_daily_usage,
-                )
-                from services.account_state.temporal_schedule import (
-                    COOLDOWN_TICK_INTERVAL_SECONDS,
-                )
+                from services.account_manager import reset_daily_usage
 
-                tick = 0
+                # Rest windows expire on their own (pickers gate on
+                # cooldown_until), so this loop only does the daily usage reset.
                 while True:
-                    await _aio.sleep(COOLDOWN_TICK_INTERVAL_SECONDS)
-                    tick += 1
+                    await _aio.sleep(3600)
                     try:
-                        await check_and_reset_cooldowns()
+                        await reset_daily_usage()
                     except Exception as exc:
-                        log.warning("account cooldown reset failed: %s", exc)
-                    # 288 × 5 min ≈ 24 h — midnight-style daily usage reset
-                    if tick % 288 == 0:
-                        try:
-                            await reset_daily_usage()
-                        except Exception as exc:
-                            log.warning("account daily usage reset failed: %s", exc)
+                        log.warning("account daily usage reset failed: %s", exc)
 
             lifecycle.register_task(
                 LifecyclePhase.BACKGROUND,
@@ -811,18 +799,6 @@ def create_app(
                 temporal_client = await get_temporal_client(config.temporal)
                 _app.state.temporal_client = temporal_client
                 temporal_threads = start_temporal_worker(manager, config.temporal, queue=queue)
-                try:
-                    from services.account_state import ensure_account_cooldown_schedule
-
-                    await ensure_account_cooldown_schedule(
-                        temporal_client,
-                        task_queue=config.temporal.task_queue,
-                    )
-                except Exception as sched_exc:
-                    log.warning(
-                        "Account cooldown Temporal schedule registration failed: %s",
-                        sched_exc,
-                    )
             except Exception as exc:
                 log.warning("Temporal worker failed to start: %s — campaign execution will be unavailable", exc)
         else:

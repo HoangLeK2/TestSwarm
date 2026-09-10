@@ -365,7 +365,7 @@ async def _swipe_feed(executor: Any, serial: str) -> None:
 
 
 async def _key_back(executor: Any, serial: str) -> None:
-    await executor.run_batch(serial, [{"op": "press", "key": "back"}])
+    await executor.run_batch(serial, [{"op": "press_key", "key": "back"}])
     await asyncio.sleep(0.55)
 
 
@@ -375,7 +375,7 @@ def _make_executor(loop: asyncio.AbstractEventLoop) -> tuple[Any, Any]:
 
     pool = U2SessionPool(loop=loop)
 
-    def _http_dump(s: str, timeout: float, compressed: bool = False) -> str:
+    def _http_dump(s: str, timeout: float, compressed: bool = False, **_kwargs: Any) -> str:
         xml, _ = _mcp_hierarchy(s, refresh=True)
         return xml or ""
 

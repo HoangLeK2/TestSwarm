@@ -1,0 +1,4995 @@
+{
+  "description": "Scenario JSON dùng bởi device_farm MCP và run_scenario_task. AI phải output đúng format này.",
+  "example_bad": {
+    "instructions": "BAD: dùng wait cố định — fragile, không biết app đã load chưa",
+    "steps": [
+      {
+        "package": "com.example.app",
+        "type": "launch_app"
+      },
+      {
+        "seconds": 5,
+        "type": "wait"
+      },
+      {
+        "type": "tap_ratio",
+        "x": 0.5,
+        "y": 0.2
+      },
+      {
+        "seconds": 2,
+        "type": "wait"
+      }
+    ]
+  },
+  "example_good": {
+    "instructions": "GOOD: dùng u2 — chờ đúng element, gõ vào đúng field, tự động xử lý popup",
+    "steps": [
+      {
+        "package": "com.example.app",
+        "type": "launch_app",
+        "wait_after": 3.0
+      },
+      {
+        "retries": 3,
+        "type": "dismiss_popup"
+      },
+      {
+        "by": "text",
+        "timeout": 10,
+        "type": "wait_element",
+        "value": "Đăng nhập"
+      },
+      {
+        "by": "text",
+        "timeout": 5,
+        "type": "assert_element",
+        "value": "Chào mừng"
+      },
+      {
+        "by": "resource-id",
+        "text": "user@email.com",
+        "type": "input_selector",
+        "value": "com.example.app:id/edit_email"
+      },
+      {
+        "by": "resource-id",
+        "text": "password123",
+        "type": "input_selector",
+        "value": "com.example.app:id/edit_password"
+      },
+      {
+        "by": "text",
+        "timeout": 5,
+        "type": "tap_selector",
+        "value": "Đăng nhập"
+      },
+      {
+        "stable_duration": 0.4,
+        "timeout": 5.0,
+        "type": "wait_stable"
+      },
+      {
+        "by": "text",
+        "timeout": 10,
+        "type": "wait_element",
+        "value": "Trang chủ"
+      }
+    ]
+  },
+  "node_capabilities": [
+    {
+      "description": "Open app by package. Optional activity/component, stop_before, use_monkey. wait_after (default 2s).",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "supports_shell"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "launch_app"
+    },
+    {
+      "description": "Force-stop app (am force-stop / u2 stopPackage).",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "high",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "stop_app"
+    },
+    {
+      "description": "Clear app data (pm clear). Removes login state.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "supports_shell"
+      ],
+      "risk": "high",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "clear_app"
+    },
+    {
+      "description": "Wait until app is in foreground (default timeout 20s).",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "wait_app"
+    },
+    {
+      "description": "Push local file to device path (requires agent-boot u2 session).",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "supports_file_ops"
+      ],
+      "risk": "medium",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "push_file"
+    },
+    {
+      "description": "Pull device file to local path (requires agent-boot u2 session).",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "supports_file_ops"
+      ],
+      "risk": "medium",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "pull_file"
+    },
+    {
+      "description": "Mở URL. package (optional): e.g. com.android.chrome để ép mở bằng app đó.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "open_url"
+    },
+    {
+      "description": "Install APK on the device. url accepts http(s), absolute local path, or ${VARIABLE}. timeout defaults to 90s.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "supports_install_apk"
+      ],
+      "risk": "high",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor",
+        "frontend"
+      ],
+      "type": "install_apk"
+    },
+    {
+      "description": "Tạm dừng cố định (giây). Ưu tiên dùng wait_element thay thế.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "wait"
+    },
+    {
+      "description": "Tap tại vị trí logic: top_center | middle_center | bottom_center | search_bar.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "tap_position"
+    },
+    {
+      "description": "Tap tại tỷ lệ màn hình (0–1). Fallback khi không có selector.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "tap_ratio"
+    },
+    {
+      "description": "Tap vào vị trí khớp ảnh mẫu trên màn hình. template_key: khoá ảnh trong object storage (cắt từ màn hình lúc thiết kế). threshold: ngưỡng khớp 0–1 (mặc định 0.8; khớp thật thường 0.96–1.00). scale: tỷ lệ thu nhỏ khi tìm (mặc định 0.25 — nhanh hơn ~70 lần mà không giảm độ chính xác). template_screen_w/h: kích thước màn lúc cắt, để hiệu chỉnh khi máy khác độ phân giải. Khớp chạy trên agent-boot; mỗi lần thử tốn 1 ảnh chụp + ~11ms so khớp.",
+      "group": "action",
+      "inspector_hints": [
+        "show_template_match"
+      ],
+      "recorder_evidence": [
+        "template_key",
+        "match_score",
+        "match_bounds"
+      ],
+      "requires": [
+        "has_image_match",
+        "has_opencv"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor",
+        "agent_image_match"
+      ],
+      "type": "tap_image"
+    },
+    {
+      "description": "Swipe giữa hai điểm tỷ lệ (0–1). duration_ms mặc định 300.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "swipe_ratio"
+    },
+    {
+      "description": "⚡ Unified tap step (recorded by control-record-view). selector: {by, value} — uiautomator2 element find. fallback: {rx, ry} — ratio tap if selector fails. screen: {package, hash, texts, screenshot, element_image, screenshot_anchor} — context captured at record time. screen.screenshot_anchor: {image: base64, region: {rx, ry, rw, rh}} — ROI crop around tap point for faster image matching (optional). implicit_wait: number (timeout secs) or {timeout, poll} — Tenacity retry-until-visible before tapping (default 10s/0.5s poll). Executor: retry-find-element → image match (ROI→full) → fallback ratio → ok.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [
+        "selector",
+        "fallback_ratio",
+        "screen_hash",
+        "image_anchor"
+      ],
+      "requires": [
+        "has_u2"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "tap"
+    },
+    {
+      "description": "Tap theo uiautomator2 selector. selector: {by, value, conditions?, instance?, chain?} (canonical) hoặc legacy by/value. conditions: AND fields (className, resourceId, clickable, …). chain: child | sibling | relative | child_by_text | child_by_description. fallback / fallback_rx/ry: tọa độ ratio khi không tìm thấy element.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [
+        "selector",
+        "fallback_ratio"
+      ],
+      "requires": [
+        "has_u2"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "tap_selector"
+    },
+    {
+      "description": "Dump UI XML fresh, find first node by attr contains/equals, then tap center from bounds. Useful for Facebook result rows whose u2 selector surface is unstable.",
+      "group": "action",
+      "inspector_hints": [
+        "show_hierarchy_match"
+      ],
+      "recorder_evidence": [
+        "hierarchy_xml",
+        "matched_bounds"
+      ],
+      "requires": [
+        "has_u2"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "tap_xml_match"
+    },
+    {
+      "description": "⚡ PREFERRED thay cho 'wait N giây'. Poll liên tục cho đến khi element xuất hiện (mặc định timeout=10s). Dùng sau launch_app, open_url, hay bất kỳ bước nào khiến màn hình thay đổi. by: text | resource-id | xpath.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [
+        "selector",
+        "timeout"
+      ],
+      "requires": [
+        "has_u2"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "wait_element"
+    },
+    {
+      "description": "✓ Xác nhận element đang hiển thị. Fail scenario ngay nếu không thấy element. Dùng để kiểm tra đang đúng màn hình trước khi thao tác tiếp. timeout mặc định 5s.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "has_u2"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "assert_element"
+    },
+    {
+      "description": "Tìm input field theo selector, xóa nội dung cũ (clear_first=true mặc định), rồi gõ text. implicit_wait: Tenacity retry-until-visible (default 10s/0.5s poll). by: resource-id (ưu tiên) | text | xpath.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "has_u2"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "input_selector"
+    },
+    {
+      "description": "Long press element tìm theo selector. duration_ms mặc định 800ms. implicit_wait: Tenacity retry-until-visible (default 10s/0.5s poll).",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "has_u2"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "long_tap_selector"
+    },
+    {
+      "description": "Scroll (swipe) cho đến khi element xuất hiện. direction: down (mặc định) | up. max_swipes mặc định 5.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "has_u2"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "scroll_to"
+    },
+    {
+      "description": "Gõ text vào element đang focused. via: u2. clear_first=true để xóa nội dung cũ trước khi gõ. Ưu tiên dùng input_selector khi có selector.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "input_text"
+    },
+    {
+      "description": "Profile-driven login. Detects logged-in state first, fills login_recipe fields from account/scenario/variables/secret references, then submits. Optional login_recipe.post_submit_actions can navigate intermediate 2FA screens before post_submit_fields such as account.totp_code are entered.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "has_u2"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "login_if_needed"
+    },
+    {
+      "description": "Account-scoped platform session gate. preflight reuses only a matching trusted session or requests login; confirm establishes provenance after this run logged in.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "platform_session_gate"
+    },
+    {
+      "description": "Fill a named form recipe from an app automation profile.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "has_u2"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "fill_form"
+    },
+    {
+      "description": "Assert current app state using package/text checks and optional semantic locator.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [
+        "hierarchy_xml",
+        "screenshot"
+      ],
+      "requires": [
+        "has_u2"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "assert_app_state"
+    },
+    {
+      "description": "Phím: enter, back, home, ...",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "key"
+    },
+    {
+      "description": "Chạy lệnh `adb shell` trên phone thật thông qua agent-boot. command hỗ trợ biến ${VAR}; timeout được giới hạn để tránh treo worker. save_as lưu output vào biến runtime để dùng ở bước sau. max_output_chars giới hạn output giữ trong kết quả/context.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "supports_shell"
+      ],
+      "risk": "high",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "adb_shell"
+    },
+    {
+      "description": "Vuốt xuống N lần (mặc định 1). start_x_ratio (0–1, mặc định 0.5): neo ngang — dùng ~0.15–0.25 để tránh vuốt xuyên ảnh full-width ở giữa feed Facebook. start_y_ratio/end_y_ratio/duration_ms/pause_seconds: tinh chỉnh gesture.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "scroll_down"
+    },
+    {
+      "description": "Chờ UI ngừng thay đổi (animation/transition xong). timeout: tối đa N giây chờ (mặc định 5.0). stable_duration: UI phải đứng yên bao lâu (mặc định 0.4s). Dùng sau swipe, mở tab mới, hay bất kỳ animation nào trước khi tap.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "supports_screenshot"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "wait_stable"
+    },
+    {
+      "description": "Visual Anchoring: so sánh SSIM giữa ảnh chụp lúc record và màn hình hiện tại. template_key: object-storage key của ảnh mẫu đã cắt/upload; screenshot: legacy base64 JPEG. ssim_threshold (0-1, default 0.75). timeout: chờ tối đa N giây cho màn hình khớp (default 8s). poll: tần suất kiểm tra (default 0.5s). Fail nếu SSIM dưới threshold.",
+      "group": "action",
+      "inspector_hints": [
+        "show_template_match"
+      ],
+      "recorder_evidence": [
+        "template_key",
+        "match_score",
+        "screen_hash"
+      ],
+      "requires": [
+        "has_image_match",
+        "has_opencv"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "verify_screen"
+    },
+    {
+      "description": "Tự động đóng popup/dialog đang hiển thị (permission request, update prompt, quảng cáo). retries: thử tối đa N lần (mặc định 3). Dùng sau launch_app hoặc bất kỳ lúc nào có khả năng xuất hiện dialog bất ngờ.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "has_u2"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "dismiss_popup"
+    },
+    {
+      "description": "Đặt hoặc cập nhật một runtime variable để dùng trong các step sau với ${NAME}. value: giá trị cụ thể (hỗ trợ ${VAR} interpolation). from_list: chọn 1 phần tử từ danh sách; mặc định chọn ngẫu nhiên. from_list_index: nếu có, chọn phần tử theo index sau khi resolve (ví dụ ${_loop_iter}). increment: tăng counter thêm N (bắt đầu từ 0 nếu chưa có). Chỉ dùng 1 trong 3 tùy chọn trên; 'value' là mặc định.",
+      "group": "variable",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "set_variable"
+    },
+    {
+      "description": "Lặp lại danh sách steps con N lần. count: số lần lặp (int). delay_between: thời gian chờ giữa các lần lặp (seconds, mặc định 0). ${__LOOP_INDEX__} được set tự động (0-based) trong mỗi lần lặp.",
+      "group": "control",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "repeat"
+    },
+    {
+      "description": "Lặp lại steps cho đến khi điều kiện thỏa mãn (dừng). max_iterations: giới hạn an toàn (mặc định 100). condition keys: element_exists | element_not_exists | variable_equals. Ví dụ: {\"element_exists\": {\"by\": \"text\", \"value\": \"End of feed\"}}.",
+      "group": "control",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "repeat_until"
+    },
+    {
+      "description": "Rẽ nhánh theo sự tồn tại của element. selector hoặc by/value; chain/conditions hỗ trợ như tap_selector.",
+      "group": "control",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "has_u2"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "if_element"
+    },
+    {
+      "description": "Re nhánh theo giá trị của variable. name: tên variable (không cần ${...}). Điều kiện: equals | not_equals | contains | greater_than. Nếu không có điều kiện → branch theo truthy (var có giá trị). then: steps chạy khi đúng. else: steps chạy khi sai (optional).",
+      "group": "control",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "if_variable"
+    },
+    {
+      "description": "Atomic step: tìm + tap nút 'Bình luận' topmost trong feed, tự set parent context cho extract entity=comments. platform: mặc định facebook. then: steps chạy khi tap thành công. else: chạy khi không tap được. comment_filter: most_relevant | newest | all_comments (hoặc none để giữ mặc định của app). Legacy switch_to_all_comments=false tắt đổi filter; true (default) = all_comments.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "has_u2"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "social_open_comments"
+    },
+    {
+      "description": "Find the visible comment button for the current post and cache its target without tapping. Use before social_tap_comment_target.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "has_u2"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "social_find_comment_button"
+    },
+    {
+      "description": "Tap the cached comment target from social_find_comment_button, verify the comment sheet opened, and set parent context for following entity=comments extraction.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "social_tap_comment_target"
+    },
+    {
+      "description": "Apply the comment sheet filter. comment_filter: most_relevant | newest | all_comments, or none to skip.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "social_apply_comment_filter"
+    },
+    {
+      "description": "Agent-boot resolver: score search results for the platform, open one verified target, and save the target proof. target_type: 'person' (default, uses display_name/profile_wait_s) or 'post' (uses display_text/detail_wait_s/current_detail). platform defaults to facebook.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "has_u2"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "social_select_target"
+    },
+    {
+      "description": "Agent-boot flow: open the platform friend suggestions, scan visible Add Friend rows, require common-context score, send verified requests in a bounded batch, and ledger each request.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "has_u2"
+      ],
+      "risk": "medium",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "social_connect_visible_people"
+    },
+    {
+      "description": "Agent-boot flow: scan visible feed/group posts, match configured keywords, then optionally like and comment on matched posts.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "has_u2"
+      ],
+      "risk": "medium",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "social_scan_posts_interact"
+    },
+    {
+      "description": "Platform adapter flow: open the author profile from a previously matched post action, verify profile suitability, and save target proof.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "has_u2"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "social_open_author_from_post_match"
+    },
+    {
+      "description": "Platform adapter flow: open comments for a previously matched feed post, open a commenter profile, verify suitability, and save target proof.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "has_u2"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "social_open_commenter_from_post_match"
+    },
+    {
+      "description": "Read how many connections the account has from the screen it is on, publish ACCOUNT_FRIEND_COUNT/ACCOUNT_STAGE for branching, and record the observation so growth is measurable.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "has_u2"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "social_sync_connections"
+    },
+    {
+      "description": "Interact with content on the current screen through a platform adapter. Supported actions come from the provider capability registry.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "medium",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "content_interaction"
+    },
+    {
+      "description": "Send an idempotent connection request on the current profile screen; use require_verified_target to bind it to a resolver result.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "medium",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "connection_request"
+    },
+    {
+      "description": "Atomically lease the highest-ranked ready connection candidate for the bound account; request discovery when none is ready.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "lease_connection_candidate"
+    },
+    {
+      "description": "Atomically reserve the next unused device target for the bound account and action.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "lease_source_target"
+    },
+    {
+      "description": "Join the community on the current screen and verify member or pending state.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "medium",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "community_membership"
+    },
+    {
+      "description": "Chọn ngẫu nhiên 1 nhánh để thực thi (weighted random). branches: list các nhánh, mỗi nhánh có steps (required) và weight (optional, mặc định 1). Weight cao hơn = xác suất được chọn cao hơn. Ví dụ: [{\"weight\": 3, \"steps\": [...]}, {\"weight\": 1, \"steps\": [...]}].",
+      "group": "control",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "random_pick"
+    },
+    {
+      "description": "Gọi một sub-scenario khác (flow composition). scenario_id: UUID của scenario trong cùng campaign. scenario_name: tên scenario (tìm trong campaign trước, rồi trong template library). variables: dict override variables cho sub-scenario (optional). Yêu cầu một trong hai: scenario_id hoặc scenario_name. Circular reference và max depth (10) được tự động bảo vệ.",
+      "group": "control",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "run_scenario"
+    },
+    {
+      "description": "Khai báo nguồn dữ liệu dùng cho campaign dispatch. Mặc định dùng external_entities facebook/group đã cào; mỗi device nhận một nguồn qua biến TARGET_* và alias theo output_prefix.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "use_source_pool"
+    },
+    {
+      "description": "Extract content data từ XML màn hình hiện tại qua agent-boot extra-data. entity: 'posts' — parse post card (author/text/timestamp/reactions/comments/shares/post_type/image_desc/comment_preview); 'comments' — parse comment rows + stats trong comment view/feed preview; 'groups'/'pages' — cào kết quả tìm kiếm và lưu vào external entity catalog; 'text_nodes' — thu thập text node vào context['text_nodes']. platform: facebook|instagram|tiktok|linkedin, hoặc 'auto' (mặc định) để agent-boot tự nhận diện parser theo app đang mở. extract_profile: balanced|aggressive|safe hoặc ${VAR} (áp defaults scan params). entity_version: lock behavior parser/runtime (vd: comments:v1). stop_if_no_new (bool, default False): set ctx['_break']=True khi không có bài mới trong no_new_threshold (default 3) lần scroll liên tiếp — dùng bên trong step 'loop'. expand_see_more (bool, default True): tự tap nút 'See more'/'Xem thêm' trước khi parse. open_post_before_extract (entity=posts): mở màn chi tiết bài trước extract. open_post_press_back_after_extract: tự Back sau extract; với entity=comments chỉ back khi còn ở comment sheet. entity=comments supports bounded crawl tuning: max_items, comment_scroll_passes, comment_swipes_per_dump, comment_max_snapshots, comment_scroll_wall_s. Nếu set collection/platform/content_type/dedupe_field thì agent-boot sẽ ghi trực tiếp vào content DB. ⚠ Dùng với step 'loop' (không phải 'repeat') để stop_if_no_new hoạt động.",
+      "group": "variable",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "extract"
+    },
+    {
+      "description": "Lặp lại steps theo count hoặc while-condition. count: số lần lặp cố định (chạy đúng N lần, không bị max_iterations cắt). duration_seconds: nếu > 0, dừng loop khi hết thời lượng kể cả chưa hết count. while: condition dict (element_exists | variable_equals) — lặp khi condition đúng. max_iterations: giới hạn an toàn chỉ khi dùng while (không có count, default 100). loop_var: tên biến runtime nhận index hiện tại để nested loop không ghi đè nhau. stall_after: dừng sau N vòng liên tiếp không thao tác được gì (0 = tắt). idle_delay_seconds: chờ bấy nhiêu giây sau một vòng không thao tác (0–300). ⚠ Vòng lặp dài có thể dừng sớm với reason_code=loop_history_limit khi run hết ngân sách event history — các vòng đã xong vẫn được giữ. Khác 'repeat': 'loop' kiểm tra ctx['_break'] sau mỗi vòng — cho phép step 'extract' với stop_if_no_new=True dừng sớm, hoặc step 'break_if' dừng khi đủ điều kiện. ${__LOOP_INDEX__} = chỉ số vòng lặp hiện tại (0-based).",
+      "group": "control",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "loop"
+    },
+    {
+      "description": "Dừng vòng lặp 'loop' bao ngoài khi condition thỏa mãn. condition keys: {'type': 'posts_count_gte', 'count': N} — dừng khi ctx['posts'] đạt N bài. {'element_exists': {'by': ..., 'value': ...}} — dừng khi element xuất hiện. {'variable_equals': {'name': ..., 'value': ...}} — dừng khi variable đạt giá trị. ⚠ Chỉ hoạt động bên trong step 'loop' (không phải 'repeat' hay 'repeat_until').",
+      "group": "control",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "break_if"
+    },
+    {
+      "description": "Extract text from UI Hierarchy XML (free, fastest, native views only). save_as: variable name to store result. format: 'text' (plain) or 'json' (structured with bounds/class/resource_id). filter_class: list of Android widget classes to include (null = all).",
+      "group": "variable",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "extract_text_hierarchy"
+    },
+    {
+      "description": "Extract text from screenshot using Tesseract OCR. Works on WebView, Canvas, images — anything visible on screen. save_as: variable name. region: {x1, y1, x2, y2} as ratios 0-1 to crop before OCR. language: Tesseract lang code (e.g. 'eng', 'vie+eng'). psm: Page Segmentation Mode (3=auto, 6=block, 7=line, 11=sparse).",
+      "group": "variable",
+      "inspector_hints": [
+        "show_ocr_overlay"
+      ],
+      "recorder_evidence": [
+        "ocr_boxes",
+        "screenshot_on_empty"
+      ],
+      "requires": [
+        "has_ocr",
+        "has_tesseract"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor",
+        "agent_ocr"
+      ],
+      "type": "extract_text_ocr"
+    },
+    {
+      "description": "Extract structured data from screenshot using AI Vision (OpenAI/Gemini). save_as: variable name. prompt: extraction instruction for the AI. provider: 'openai' or 'gemini'. format: 'json' (parsed dict) or 'text' (raw string). Requires OPENAI_API_KEY or GEMINI_API_KEY env var.",
+      "group": "variable",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "extract_text_ai"
+    },
+    {
+      "description": "Smart extraction: tries hierarchy → OCR → AI Vision (auto fallback). save_as: variable name. strategy: 'auto' (fallback chain), 'hierarchy', 'ocr', 'ai'. schema: expected output fields (used to validate extraction completeness).",
+      "group": "variable",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "extract_screen_data"
+    },
+    {
+      "description": "Save extracted data to content database with deduplication (DF-010). data_var: name of runtime variable containing the data (from extract_text_* or set_variable). collection: name of content collection (default: 'default'). dedupe_field: field in data to use for dedup hash (e.g. 'content'). parent_id_var (alias: save_parent_id_var): link children rows to parent hash from context. item_level: hierarchy level (0 post, 1 comment/reply). Data is saved to content_items table with SHA256 hash-based dedup.",
+      "group": "variable",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "save_extraction"
+    },
+    {
+      "description": "Double-tap at coordinates. rx/ry (0.0-1.0 relative) or x/y (absolute pixels). wait_after (float, default 0.5s). Requires TouchAccessibilityService or uiautomator2.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "supports_advanced_gestures"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "double_tap"
+    },
+    {
+      "description": "Pinch/zoom gesture. scale>1 = zoom in (spread), scale<1 = zoom out (pinch). Center: cx/cy (absolute) or rx/ry (relative, default 0.5/0.5). duration_ms (default 400). Requires TouchAccessibilityService.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "supports_advanced_gestures"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "pinch"
+    },
+    {
+      "description": "Drag-and-drop from point A to point B. Use rx1/ry1/rx2/ry2 for relative coords (0.0-1.0) or x1/y1/x2/y2 for absolute pixels. duration_ms (default 1000) — longer = more reliable hold detection.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "supports_advanced_gestures"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "drag"
+    },
+    {
+      "description": "Capture device screenshot. Result stored as base64 in step_result['screenshot']. Optional save_path: write JPEG to disk at that absolute path.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "supports_screenshot"
+      ],
+      "risk": "low",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "take_screenshot"
+    },
+    {
+      "description": "Set device clipboard text. Uses STFService → uiautomator2 → ADB broadcast fallback. After this step, use input_text or key(paste) to paste clipboard content.",
+      "group": "action",
+      "inspector_hints": [],
+      "recorder_evidence": [],
+      "requires": [
+        "supports_clipboard"
+      ],
+      "risk": "medium",
+      "surfaces": [
+        "schema",
+        "api_schema",
+        "executor"
+      ],
+      "type": "set_clipboard"
+    }
+  ],
+  "node_catalog": {
+    "execution_model": "deterministic_sequence",
+    "nodes": [
+      {
+        "category": "App",
+        "defaults": {
+          "stop_before": false,
+          "use_monkey": false,
+          "wait_after": 2
+        },
+        "description": "Open app by package. Optional activity/component, stop_before, use_monkey. wait_after (default 2s).",
+        "display_name": "Launch App",
+        "fields": [
+          {
+            "advanced": false,
+            "group": "required",
+            "label": "Package",
+            "label_key": "appLifecycle.packageLabel",
+            "name": "package",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "advanced": false,
+            "default": 2,
+            "group": "options",
+            "label": "Wait After",
+            "label_key": "appLifecycle.waitAfterLaunch",
+            "max": 30,
+            "min": 0,
+            "name": "wait_after",
+            "required": false,
+            "type": "number"
+          },
+          {
+            "advanced": false,
+            "group": "options",
+            "label": "Activity",
+            "label_key": "appLifecycle.activityLabel",
+            "name": "activity",
+            "placeholder_key": "appLifecycle.activityPlaceholder",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "advanced": false,
+            "group": "options",
+            "label": "Component",
+            "name": "component",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "advanced": false,
+            "default": false,
+            "group": "options",
+            "label": "Stop Before",
+            "label_key": "appLifecycle.stopBefore",
+            "name": "stop_before",
+            "required": false,
+            "type": "boolean"
+          },
+          {
+            "advanced": false,
+            "default": false,
+            "group": "options",
+            "label": "Use Monkey",
+            "label_key": "appLifecycle.useMonkey",
+            "name": "use_monkey",
+            "required": false,
+            "type": "boolean"
+          }
+        ],
+        "legacy": {},
+        "node_type": "launch_app",
+        "optional": [
+          "wait_after",
+          "activity",
+          "component",
+          "stop_before",
+          "use_monkey",
+          "package_fallbacks",
+          "adb_fallback"
+        ],
+        "presets": [],
+        "required": [
+          "package"
+        ],
+        "required_any": [],
+        "runtime_step_type": "launch_app",
+        "schema_version": 1
+      },
+      {
+        "category": "App",
+        "defaults": {},
+        "description": "Force-stop app (am force-stop / u2 stopPackage).",
+        "display_name": "Stop App",
+        "fields": [
+          {
+            "advanced": false,
+            "group": "required",
+            "label": "Package",
+            "label_key": "appLifecycle.packageLabel",
+            "name": "package",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "legacy": {},
+        "node_type": "stop_app",
+        "optional": [],
+        "presets": [],
+        "required": [
+          "package"
+        ],
+        "required_any": [],
+        "runtime_step_type": "stop_app",
+        "schema_version": 1
+      },
+      {
+        "category": "App",
+        "defaults": {},
+        "description": "Clear app data (pm clear). Removes login state.",
+        "display_name": "Clear App",
+        "fields": [
+          {
+            "advanced": false,
+            "group": "required",
+            "label": "Package",
+            "label_key": "appLifecycle.packageLabel",
+            "name": "package",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "legacy": {},
+        "node_type": "clear_app",
+        "optional": [],
+        "presets": [],
+        "required": [
+          "package"
+        ],
+        "required_any": [],
+        "runtime_step_type": "clear_app",
+        "schema_version": 1
+      },
+      {
+        "category": "App",
+        "defaults": {
+          "front": true,
+          "timeout": 20
+        },
+        "description": "Wait until app is in foreground (default timeout 20s).",
+        "display_name": "Wait App",
+        "fields": [
+          {
+            "advanced": false,
+            "group": "required",
+            "label": "Package",
+            "label_key": "appLifecycle.packageLabel",
+            "name": "package",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "advanced": false,
+            "default": 20,
+            "group": "options",
+            "label": "Timeout",
+            "label_key": "appLifecycle.timeoutSeconds",
+            "max": 120,
+            "min": 0.1,
+            "name": "timeout",
+            "required": false,
+            "type": "number"
+          },
+          {
+            "advanced": false,
+            "default": true,
+            "group": "options",
+            "label": "Front",
+            "label_key": "appLifecycle.waitForeground",
+            "name": "front",
+            "required": false,
+            "type": "boolean"
+          }
+        ],
+        "legacy": {},
+        "node_type": "wait_app",
+        "optional": [
+          "timeout",
+          "front"
+        ],
+        "presets": [],
+        "required": [
+          "package"
+        ],
+        "required_any": [],
+        "runtime_step_type": "wait_app",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Push local file to device path (requires agent-boot u2 session).",
+        "display_name": "Push File",
+        "fields": [],
+        "legacy": {},
+        "node_type": "push_file",
+        "optional": [
+          "mode"
+        ],
+        "presets": [],
+        "required": [
+          "local_path",
+          "remote_path"
+        ],
+        "required_any": [],
+        "runtime_step_type": "push_file",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Pull device file to local path (requires agent-boot u2 session).",
+        "display_name": "Pull File",
+        "fields": [],
+        "legacy": {},
+        "node_type": "pull_file",
+        "optional": [],
+        "presets": [],
+        "required": [
+          "local_path",
+          "remote_path"
+        ],
+        "required_any": [],
+        "runtime_step_type": "pull_file",
+        "schema_version": 1
+      },
+      {
+        "category": "App",
+        "defaults": {},
+        "description": "Mở URL. package (optional): e.g. com.android.chrome để ép mở bằng app đó.",
+        "display_name": "Open Url",
+        "fields": [
+          {
+            "advanced": false,
+            "group": "required",
+            "label": "Url",
+            "name": "url",
+            "pattern": "^https?://",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "advanced": false,
+            "group": "options",
+            "label": "Package",
+            "label_key": "stepFields.browserPackage",
+            "name": "package",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "legacy": {},
+        "node_type": "open_url",
+        "optional": [
+          "package"
+        ],
+        "presets": [],
+        "required": [
+          "url"
+        ],
+        "required_any": [],
+        "runtime_step_type": "open_url",
+        "schema_version": 1
+      },
+      {
+        "category": "App",
+        "defaults": {
+          "timeout": 90
+        },
+        "description": "Install APK on the device. url accepts http(s), absolute local path, or ${VARIABLE}. timeout defaults to 90s.",
+        "display_name": "Install Apk",
+        "fields": [
+          {
+            "advanced": false,
+            "group": "required",
+            "label": "Url",
+            "label_key": "appLifecycle.installApkUrlLabel",
+            "name": "url",
+            "placeholder_key": "appLifecycle.installApkUrlPlaceholder",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "advanced": false,
+            "default": 90,
+            "group": "options",
+            "label": "Timeout",
+            "label_key": "appLifecycle.installApkTimeoutLabel",
+            "max": 600,
+            "min": 10,
+            "name": "timeout",
+            "required": false,
+            "type": "number"
+          }
+        ],
+        "legacy": {},
+        "node_type": "install_apk",
+        "optional": [
+          "timeout"
+        ],
+        "presets": [],
+        "required": [
+          "url"
+        ],
+        "required_any": [],
+        "runtime_step_type": "install_apk",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {
+          "seconds": 1
+        },
+        "description": "Tạm dừng cố định (giây). Ưu tiên dùng wait_element thay thế.",
+        "display_name": "Wait",
+        "fields": [
+          {
+            "advanced": false,
+            "default": 1,
+            "group": "options",
+            "label": "Seconds",
+            "label_key": "stepFields.durationSeconds",
+            "min": 0,
+            "name": "seconds",
+            "required": false,
+            "type": "number"
+          }
+        ],
+        "legacy": {},
+        "node_type": "wait",
+        "optional": [
+          "seconds"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "wait",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Tap tại vị trí logic: top_center | middle_center | bottom_center | search_bar.",
+        "display_name": "Tap Position",
+        "fields": [
+          {
+            "advanced": false,
+            "group": "required",
+            "label": "Pos",
+            "label_key": "stepFields.position",
+            "name": "pos",
+            "required": true,
+            "type": "enum",
+            "values": [
+              {
+                "label_key": "stepFields.posTopCenter",
+                "value": "top_center"
+              },
+              {
+                "label_key": "stepFields.posMiddleCenter",
+                "value": "middle_center"
+              },
+              {
+                "label_key": "stepFields.posBottomCenter",
+                "value": "bottom_center"
+              },
+              {
+                "label_key": "stepFields.posSearchBar",
+                "value": "search_bar"
+              }
+            ]
+          }
+        ],
+        "legacy": {},
+        "node_type": "tap_position",
+        "optional": [],
+        "presets": [],
+        "required": [
+          "pos"
+        ],
+        "required_any": [],
+        "runtime_step_type": "tap_position",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Tap tại tỷ lệ màn hình (0–1). Fallback khi không có selector.",
+        "display_name": "Tap Ratio",
+        "fields": [],
+        "legacy": {},
+        "node_type": "tap_ratio",
+        "optional": [],
+        "presets": [],
+        "required": [
+          "x",
+          "y"
+        ],
+        "required_any": [],
+        "runtime_step_type": "tap_ratio",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Tap vào vị trí khớp ảnh mẫu trên màn hình. template_key: khoá ảnh trong object storage (cắt từ màn hình lúc thiết kế). threshold: ngưỡng khớp 0–1 (mặc định 0.8; khớp thật thường 0.96–1.00). scale: tỷ lệ thu nhỏ khi tìm (mặc định 0.25 — nhanh hơn ~70 lần mà không giảm độ chính xác). template_screen_w/h: kích thước màn lúc cắt, để hiệu chỉnh khi máy khác độ phân giải. Khớp chạy trên agent-boot; mỗi lần thử tốn 1 ảnh chụp + ~11ms so khớp.",
+        "display_name": "Tap Image",
+        "fields": [],
+        "legacy": {},
+        "node_type": "tap_image",
+        "optional": [
+          "threshold",
+          "scale",
+          "template_screen_w",
+          "template_screen_h",
+          "timeout",
+          "poll"
+        ],
+        "presets": [],
+        "required": [
+          "template_key"
+        ],
+        "required_any": [],
+        "runtime_step_type": "tap_image",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Swipe giữa hai điểm tỷ lệ (0–1). duration_ms mặc định 300.",
+        "display_name": "Swipe Ratio",
+        "fields": [],
+        "legacy": {},
+        "node_type": "swipe_ratio",
+        "optional": [
+          "duration_ms"
+        ],
+        "presets": [],
+        "required": [
+          "x1",
+          "y1",
+          "x2",
+          "y2"
+        ],
+        "required_any": [],
+        "runtime_step_type": "swipe_ratio",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "⚡ Unified tap step (recorded by control-record-view). selector: {by, value} — uiautomator2 element find. fallback: {rx, ry} — ratio tap if selector fails. screen: {package, hash, texts, screenshot, element_image, screenshot_anchor} — context captured at record time. screen.screenshot_anchor: {image: base64, region: {rx, ry, rw, rh}} — ROI crop around tap point for faster image matching (optional). implicit_wait: number (timeout secs) or {timeout, poll} — Tenacity retry-until-visible before tapping (default 10s/0.5s poll). Executor: retry-find-element → image match (ROI→full) → fallback ratio → ok.",
+        "display_name": "Tap",
+        "fields": [],
+        "legacy": {},
+        "node_type": "tap",
+        "optional": [
+          "selector",
+          "fallback",
+          "screen",
+          "timeout",
+          "implicit_wait"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "tap",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Tap theo uiautomator2 selector. selector: {by, value, conditions?, instance?, chain?} (canonical) hoặc legacy by/value. conditions: AND fields (className, resourceId, clickable, …). chain: child | sibling | relative | child_by_text | child_by_description. fallback / fallback_rx/ry: tọa độ ratio khi không tìm thấy element.",
+        "display_name": "Tap Selector",
+        "fields": [],
+        "legacy": {},
+        "node_type": "tap_selector",
+        "optional": [
+          "selector",
+          "by",
+          "value",
+          "fallback",
+          "fallback_rx",
+          "fallback_ry",
+          "timeout",
+          "implicit_wait",
+          "element_image"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [
+          [
+            "selector",
+            "by"
+          ],
+          [
+            "selector",
+            "value"
+          ]
+        ],
+        "runtime_step_type": "tap_selector",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Dump UI XML fresh, find first node by attr contains/equals, then tap center from bounds. Useful for Facebook result rows whose u2 selector surface is unstable.",
+        "display_name": "Tap Xml Match",
+        "fields": [],
+        "legacy": {},
+        "node_type": "tap_xml_match",
+        "optional": [
+          "attr",
+          "by",
+          "contains",
+          "equals",
+          "value",
+          "clickable",
+          "timeout",
+          "poll"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [
+          [
+            "contains",
+            "equals",
+            "value"
+          ]
+        ],
+        "runtime_step_type": "tap_xml_match",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "⚡ PREFERRED thay cho 'wait N giây'. Poll liên tục cho đến khi element xuất hiện (mặc định timeout=10s). Dùng sau launch_app, open_url, hay bất kỳ bước nào khiến màn hình thay đổi. by: text | resource-id | xpath.",
+        "display_name": "Wait Element",
+        "fields": [],
+        "legacy": {},
+        "node_type": "wait_element",
+        "optional": [
+          "selector",
+          "by",
+          "value",
+          "timeout",
+          "poll"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [
+          [
+            "selector",
+            "by"
+          ],
+          [
+            "selector",
+            "value"
+          ]
+        ],
+        "runtime_step_type": "wait_element",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "✓ Xác nhận element đang hiển thị. Fail scenario ngay nếu không thấy element. Dùng để kiểm tra đang đúng màn hình trước khi thao tác tiếp. timeout mặc định 5s.",
+        "display_name": "Assert Element",
+        "fields": [],
+        "legacy": {},
+        "node_type": "assert_element",
+        "optional": [
+          "selector",
+          "by",
+          "value",
+          "timeout",
+          "poll"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [
+          [
+            "selector",
+            "by"
+          ],
+          [
+            "selector",
+            "value"
+          ]
+        ],
+        "runtime_step_type": "assert_element",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Tìm input field theo selector, xóa nội dung cũ (clear_first=true mặc định), rồi gõ text. implicit_wait: Tenacity retry-until-visible (default 10s/0.5s poll). by: resource-id (ưu tiên) | text | xpath.",
+        "display_name": "Input Selector",
+        "fields": [],
+        "legacy": {},
+        "node_type": "input_selector",
+        "optional": [
+          "selector",
+          "by",
+          "value",
+          "clear_first",
+          "implicit_wait"
+        ],
+        "presets": [],
+        "required": [
+          "text"
+        ],
+        "required_any": [
+          [
+            "selector",
+            "by"
+          ],
+          [
+            "selector",
+            "value"
+          ]
+        ],
+        "runtime_step_type": "input_selector",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Long press element tìm theo selector. duration_ms mặc định 800ms. implicit_wait: Tenacity retry-until-visible (default 10s/0.5s poll).",
+        "display_name": "Long Tap Selector",
+        "fields": [],
+        "legacy": {},
+        "node_type": "long_tap_selector",
+        "optional": [
+          "selector",
+          "by",
+          "value",
+          "duration_ms",
+          "implicit_wait"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [
+          [
+            "selector",
+            "by"
+          ],
+          [
+            "selector",
+            "value"
+          ]
+        ],
+        "runtime_step_type": "long_tap_selector",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Scroll (swipe) cho đến khi element xuất hiện. direction: down (mặc định) | up. max_swipes mặc định 5.",
+        "display_name": "Scroll To",
+        "fields": [],
+        "legacy": {},
+        "node_type": "scroll_to",
+        "optional": [
+          "selector",
+          "by",
+          "value",
+          "direction",
+          "max_swipes",
+          "scroll_duration_s",
+          "scroll_settle_s",
+          "scroll_step_ratio",
+          "scroll_to_timeout_s",
+          "timeout"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [
+          [
+            "selector",
+            "by"
+          ],
+          [
+            "selector",
+            "value"
+          ]
+        ],
+        "runtime_step_type": "scroll_to",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Gõ text vào element đang focused. via: u2. clear_first=true để xóa nội dung cũ trước khi gõ. Ưu tiên dùng input_selector khi có selector.",
+        "display_name": "Input Text",
+        "fields": [],
+        "legacy": {},
+        "node_type": "input_text",
+        "optional": [
+          "via",
+          "clear_first"
+        ],
+        "presets": [],
+        "required": [
+          "text"
+        ],
+        "required_any": [],
+        "runtime_step_type": "input_text",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Profile-driven login. Detects logged-in state first, fills login_recipe fields from account/scenario/variables/secret references, then submits. Optional login_recipe.post_submit_actions can navigate intermediate 2FA screens before post_submit_fields such as account.totp_code are entered.",
+        "display_name": "Login If Needed",
+        "fields": [],
+        "legacy": {},
+        "node_type": "login_if_needed",
+        "optional": [
+          "profile",
+          "clear_first",
+          "implicit_wait"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "login_if_needed",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Account-scoped platform session gate. preflight reuses only a matching trusted session or requests login; confirm establishes provenance after this run logged in.",
+        "display_name": "Platform Session Gate",
+        "fields": [],
+        "legacy": {},
+        "node_type": "platform_session_gate",
+        "optional": [
+          "phase",
+          "timeout",
+          "poll_interval"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "platform_session_gate",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Fill a named form recipe from an app automation profile.",
+        "display_name": "Fill Form",
+        "fields": [],
+        "legacy": {},
+        "node_type": "fill_form",
+        "optional": [
+          "profile",
+          "recipe",
+          "form",
+          "clear_first",
+          "implicit_wait"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "fill_form",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Assert current app state using package/text checks and optional semantic locator.",
+        "display_name": "Assert App State",
+        "fields": [],
+        "legacy": {},
+        "node_type": "assert_app_state",
+        "optional": [
+          "profile",
+          "package",
+          "any_text",
+          "all_text",
+          "not_text",
+          "locator"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "assert_app_state",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Phím: enter, back, home, ...",
+        "display_name": "Key",
+        "fields": [
+          {
+            "advanced": false,
+            "group": "required",
+            "label": "Key",
+            "label_key": "stepFields.key",
+            "name": "key",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "legacy": {},
+        "node_type": "key",
+        "optional": [],
+        "presets": [],
+        "required": [
+          "key"
+        ],
+        "required_any": [],
+        "runtime_step_type": "key",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {
+          "fail_on_error": true,
+          "max_output_chars": 8000,
+          "timeout": 30
+        },
+        "description": "Chạy lệnh `adb shell` trên phone thật thông qua agent-boot. command hỗ trợ biến ${VAR}; timeout được giới hạn để tránh treo worker. save_as lưu output vào biến runtime để dùng ở bước sau. max_output_chars giới hạn output giữ trong kết quả/context.",
+        "display_name": "Adb Shell",
+        "fields": [
+          {
+            "advanced": false,
+            "group": "required",
+            "label": "Command",
+            "label_key": "adbShell.commandLabel",
+            "name": "command",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "advanced": false,
+            "default": 30,
+            "group": "options",
+            "label": "Timeout",
+            "label_key": "adbShell.timeoutLabel",
+            "max": 120,
+            "min": 1,
+            "name": "timeout",
+            "required": false,
+            "type": "number"
+          },
+          {
+            "advanced": false,
+            "default": true,
+            "group": "options",
+            "label": "Fail On Error",
+            "label_key": "adbShell.failOnErrorLabel",
+            "name": "fail_on_error",
+            "required": false,
+            "type": "boolean"
+          },
+          {
+            "advanced": false,
+            "group": "options",
+            "label": "Save As",
+            "label_key": "adbShell.saveAsLabel",
+            "name": "save_as",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "advanced": false,
+            "default": 8000,
+            "group": "options",
+            "label": "Max Output Chars",
+            "label_key": "adbShell.maxOutputLabel",
+            "max": 50000,
+            "min": 1000,
+            "name": "max_output_chars",
+            "required": false,
+            "type": "number"
+          }
+        ],
+        "legacy": {},
+        "node_type": "adb_shell",
+        "optional": [
+          "timeout",
+          "fail_on_error",
+          "save_as",
+          "max_output_chars"
+        ],
+        "presets": [],
+        "required": [
+          "command"
+        ],
+        "required_any": [],
+        "runtime_step_type": "adb_shell",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Vuốt xuống N lần (mặc định 1). start_x_ratio (0–1, mặc định 0.5): neo ngang — dùng ~0.15–0.25 để tránh vuốt xuyên ảnh full-width ở giữa feed Facebook. start_y_ratio/end_y_ratio/duration_ms/pause_seconds: tinh chỉnh gesture.",
+        "display_name": "Scroll Down",
+        "fields": [],
+        "legacy": {},
+        "node_type": "scroll_down",
+        "optional": [
+          "repeats",
+          "start_x_ratio",
+          "start_y_ratio",
+          "end_y_ratio",
+          "duration_ms",
+          "pause_seconds",
+          "smart_scroll"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "scroll_down",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Chờ UI ngừng thay đổi (animation/transition xong). timeout: tối đa N giây chờ (mặc định 5.0). stable_duration: UI phải đứng yên bao lâu (mặc định 0.4s). Dùng sau swipe, mở tab mới, hay bất kỳ animation nào trước khi tap.",
+        "display_name": "Wait Stable",
+        "fields": [],
+        "legacy": {},
+        "node_type": "wait_stable",
+        "optional": [
+          "timeout",
+          "stable_duration"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "wait_stable",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Visual Anchoring: so sánh SSIM giữa ảnh chụp lúc record và màn hình hiện tại. template_key: object-storage key của ảnh mẫu đã cắt/upload; screenshot: legacy base64 JPEG. ssim_threshold (0-1, default 0.75). timeout: chờ tối đa N giây cho màn hình khớp (default 8s). poll: tần suất kiểm tra (default 0.5s). Fail nếu SSIM dưới threshold.",
+        "display_name": "Verify Screen",
+        "fields": [],
+        "legacy": {},
+        "node_type": "verify_screen",
+        "optional": [
+          "template_key",
+          "screenshot",
+          "template_screen_w",
+          "template_screen_h",
+          "ssim_threshold",
+          "platform",
+          "timeout",
+          "poll"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [
+          [
+            "template_key",
+            "screenshot"
+          ]
+        ],
+        "runtime_step_type": "verify_screen",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Tự động đóng popup/dialog đang hiển thị (permission request, update prompt, quảng cáo). retries: thử tối đa N lần (mặc định 3). Dùng sau launch_app hoặc bất kỳ lúc nào có khả năng xuất hiện dialog bất ngờ.",
+        "display_name": "Dismiss Popup",
+        "fields": [],
+        "legacy": {},
+        "node_type": "dismiss_popup",
+        "optional": [
+          "retries"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "dismiss_popup",
+        "schema_version": 1
+      },
+      {
+        "category": "Data",
+        "defaults": {},
+        "description": "Đặt hoặc cập nhật một runtime variable để dùng trong các step sau với ${NAME}. value: giá trị cụ thể (hỗ trợ ${VAR} interpolation). from_list: chọn 1 phần tử từ danh sách; mặc định chọn ngẫu nhiên. from_list_index: nếu có, chọn phần tử theo index sau khi resolve (ví dụ ${_loop_iter}). increment: tăng counter thêm N (bắt đầu từ 0 nếu chưa có). Chỉ dùng 1 trong 3 tùy chọn trên; 'value' là mặc định.",
+        "display_name": "Set Variable",
+        "fields": [],
+        "legacy": {},
+        "node_type": "set_variable",
+        "optional": [
+          "value",
+          "from_list",
+          "from_list_index",
+          "increment"
+        ],
+        "presets": [],
+        "required": [
+          "name"
+        ],
+        "required_any": [],
+        "runtime_step_type": "set_variable",
+        "schema_version": 1
+      },
+      {
+        "category": "Control Flow",
+        "defaults": {},
+        "description": "Lặp lại danh sách steps con N lần. count: số lần lặp (int). delay_between: thời gian chờ giữa các lần lặp (seconds, mặc định 0). ${__LOOP_INDEX__} được set tự động (0-based) trong mỗi lần lặp.",
+        "display_name": "Repeat",
+        "fields": [],
+        "legacy": {},
+        "node_type": "repeat",
+        "optional": [
+          "delay_between"
+        ],
+        "presets": [],
+        "required": [
+          "count",
+          "steps"
+        ],
+        "required_any": [],
+        "runtime_step_type": "repeat",
+        "schema_version": 1
+      },
+      {
+        "category": "Control Flow",
+        "defaults": {},
+        "description": "Lặp lại steps cho đến khi điều kiện thỏa mãn (dừng). max_iterations: giới hạn an toàn (mặc định 100). condition keys: element_exists | element_not_exists | variable_equals. Ví dụ: {\"element_exists\": {\"by\": \"text\", \"value\": \"End of feed\"}}.",
+        "display_name": "Repeat Until",
+        "fields": [],
+        "legacy": {},
+        "node_type": "repeat_until",
+        "optional": [
+          "max_iterations"
+        ],
+        "presets": [],
+        "required": [
+          "condition",
+          "steps"
+        ],
+        "required_any": [],
+        "runtime_step_type": "repeat_until",
+        "schema_version": 1
+      },
+      {
+        "category": "Control Flow",
+        "defaults": {},
+        "description": "Rẽ nhánh theo sự tồn tại của element. selector hoặc by/value; chain/conditions hỗ trợ như tap_selector.",
+        "display_name": "If Element",
+        "fields": [],
+        "legacy": {},
+        "node_type": "if_element",
+        "optional": [
+          "selector",
+          "by",
+          "value",
+          "timeout",
+          "else"
+        ],
+        "presets": [],
+        "required": [
+          "then"
+        ],
+        "required_any": [
+          [
+            "selector",
+            "by"
+          ],
+          [
+            "selector",
+            "value"
+          ]
+        ],
+        "runtime_step_type": "if_element",
+        "schema_version": 1
+      },
+      {
+        "category": "Control Flow",
+        "defaults": {},
+        "description": "Re nhánh theo giá trị của variable. name: tên variable (không cần ${...}). Điều kiện: equals | not_equals | contains | greater_than. Nếu không có điều kiện → branch theo truthy (var có giá trị). then: steps chạy khi đúng. else: steps chạy khi sai (optional).",
+        "display_name": "If Variable",
+        "fields": [],
+        "legacy": {},
+        "node_type": "if_variable",
+        "optional": [
+          "equals",
+          "not_equals",
+          "contains",
+          "greater_than",
+          "else"
+        ],
+        "presets": [],
+        "required": [
+          "name",
+          "then"
+        ],
+        "required_any": [],
+        "runtime_step_type": "if_variable",
+        "schema_version": 1
+      },
+      {
+        "capability_id": "social.comments.open",
+        "category": "Advanced / Provider Primitive",
+        "defaults": {},
+        "description": "Atomic step: tìm + tap nút 'Bình luận' topmost trong feed, tự set parent context cho extract entity=comments. platform: mặc định facebook. then: steps chạy khi tap thành công. else: chạy khi không tap được. comment_filter: most_relevant | newest | all_comments (hoặc none để giữ mặc định của app). Legacy switch_to_all_comments=false tắt đổi filter; true (default) = all_comments.",
+        "display_name": "Open Comments",
+        "fields": [],
+        "legacy": {
+          "compound": true,
+          "replacement": "social_find_comment_button -> social_tap_comment_target -> extract"
+        },
+        "node_type": "social_open_comments",
+        "optional": [
+          "platform",
+          "timeout",
+          "poll",
+          "dedupe_field",
+          "ignore_error",
+          "switch_to_all_comments",
+          "comment_filter",
+          "post_tap_wait_s",
+          "comment_filter_settle_s",
+          "require_post_before_comment",
+          "pre_scroll",
+          "pre_scroll_distance",
+          "pre_scroll_duration_ms",
+          "pre_scroll_x_ratio",
+          "pre_scroll_start_y_ratio",
+          "pre_scroll_end_y_ratio",
+          "pre_scroll_pause_s",
+          "then",
+          "else"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "social_open_comments",
+        "schema_version": 2
+      },
+      {
+        "category": "Social",
+        "defaults": {},
+        "description": "Find the visible comment button for the current post and cache its target without tapping. Use before social_tap_comment_target.",
+        "display_name": "Social Find Comment Button",
+        "fields": [],
+        "legacy": {},
+        "node_type": "social_find_comment_button",
+        "optional": [
+          "platform",
+          "timeout",
+          "poll",
+          "dedupe_field",
+          "ignore_error",
+          "switch_to_all_comments",
+          "comment_filter"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "social_find_comment_button",
+        "schema_version": 1
+      },
+      {
+        "category": "Social",
+        "defaults": {},
+        "description": "Tap the cached comment target from social_find_comment_button, verify the comment sheet opened, and set parent context for following entity=comments extraction.",
+        "display_name": "Social Tap Comment Target",
+        "fields": [],
+        "legacy": {},
+        "node_type": "social_tap_comment_target",
+        "optional": [
+          "platform",
+          "ignore_error",
+          "post_tap_wait_s"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "social_tap_comment_target",
+        "schema_version": 1
+      },
+      {
+        "category": "Social",
+        "defaults": {},
+        "description": "Apply the comment sheet filter. comment_filter: most_relevant | newest | all_comments, or none to skip.",
+        "display_name": "Social Apply Comment Filter",
+        "fields": [],
+        "legacy": {},
+        "node_type": "social_apply_comment_filter",
+        "optional": [
+          "platform",
+          "switch_to_all_comments",
+          "comment_filter",
+          "comment_filter_settle_s",
+          "comment_filter_step_pause_s",
+          "comment_filter_post_select_s"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "social_apply_comment_filter",
+        "schema_version": 1
+      },
+      {
+        "category": "Social",
+        "defaults": {},
+        "description": "Agent-boot resolver: score search results for the platform, open one verified target, and save the target proof. target_type: 'person' (default, uses display_name/profile_wait_s) or 'post' (uses display_text/detail_wait_s/current_detail). platform defaults to facebook.",
+        "display_name": "Social Select Target",
+        "fields": [],
+        "legacy": {},
+        "node_type": "social_select_target",
+        "optional": [
+          "platform",
+          "target_type",
+          "search",
+          "display_name",
+          "display_text",
+          "row_text",
+          "required_keywords",
+          "optional_keywords",
+          "forbidden_keywords",
+          "min_score",
+          "require_unique",
+          "timeout",
+          "profile_wait_s",
+          "detail_wait_s",
+          "current_detail",
+          "save_as",
+          "save_success_as",
+          "skip_candidate_on_not_verified",
+          "candidate_entity_id",
+          "candidate_lease_token",
+          "skip_candidate_defer_hours"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "social_select_target",
+        "schema_version": 1
+      },
+      {
+        "category": "Social",
+        "defaults": {},
+        "description": "Agent-boot flow: open the platform friend suggestions, scan visible Add Friend rows, require common-context score, send verified requests in a bounded batch, and ledger each request.",
+        "display_name": "Social Connect Visible People",
+        "fields": [],
+        "legacy": {},
+        "node_type": "social_connect_visible_people",
+        "optional": [
+          "platform",
+          "min_score",
+          "require_common",
+          "common_keywords",
+          "forbidden_keywords",
+          "timeout",
+          "verify_wait_s",
+          "save_as",
+          "account_action_id",
+          "open_surface",
+          "target_count",
+          "batch_size",
+          "max_scrolls",
+          "no_more_common_limit",
+          "dry_run",
+          "scroll_wait_s",
+          "surface_wait_s",
+          "stop_on_unverified"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "social_connect_visible_people",
+        "schema_version": 1
+      },
+      {
+        "category": "Social",
+        "defaults": {},
+        "description": "Agent-boot flow: scan visible feed/group posts, match configured keywords, then optionally like and comment on matched posts.",
+        "display_name": "Social Scan Posts Interact",
+        "fields": [],
+        "legacy": {},
+        "node_type": "social_scan_posts_interact",
+        "optional": [
+          "platform",
+          "keywords",
+          "match_mode",
+          "comment_text",
+          "target_count",
+          "batch_size",
+          "max_scrolls",
+          "timeout",
+          "scroll_x_ratio",
+          "scroll_y1_ratio",
+          "scroll_y2_ratio",
+          "scroll_duration_s",
+          "scroll_wait_s",
+          "comment_wait_s",
+          "submit_wait_s",
+          "require_comment",
+          "like_post",
+          "save_as"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "social_scan_posts_interact",
+        "schema_version": 1
+      },
+      {
+        "category": "Social",
+        "defaults": {},
+        "description": "Platform adapter flow: open the author profile from a previously matched post action, verify profile suitability, and save target proof.",
+        "display_name": "Social Open Author From Post Match",
+        "fields": [],
+        "legacy": {},
+        "node_type": "social_open_author_from_post_match",
+        "optional": [
+          "platform",
+          "source_var",
+          "action_index",
+          "search",
+          "display_name",
+          "required_keywords",
+          "optional_keywords",
+          "forbidden_keywords",
+          "required_keywords_var",
+          "optional_keywords_var",
+          "forbidden_keywords_var",
+          "min_score",
+          "timeout",
+          "comment_wait_s",
+          "profile_wait_s",
+          "max_commenters",
+          "save_as",
+          "save_success_as",
+          "save_opened_as",
+          "save_sheet_opened_as"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "social_open_author_from_post_match",
+        "schema_version": 1
+      },
+      {
+        "category": "Social",
+        "defaults": {},
+        "description": "Platform adapter flow: open comments for a previously matched feed post, open a commenter profile, verify suitability, and save target proof.",
+        "display_name": "Social Open Commenter From Post Match",
+        "fields": [],
+        "legacy": {},
+        "node_type": "social_open_commenter_from_post_match",
+        "optional": [
+          "platform",
+          "source_var",
+          "action_index",
+          "search",
+          "display_name",
+          "required_keywords",
+          "optional_keywords",
+          "forbidden_keywords",
+          "required_keywords_var",
+          "optional_keywords_var",
+          "forbidden_keywords_var",
+          "min_score",
+          "timeout",
+          "comment_wait_s",
+          "profile_wait_s",
+          "max_commenters",
+          "save_as",
+          "save_success_as",
+          "save_opened_as",
+          "save_sheet_opened_as"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "social_open_commenter_from_post_match",
+        "schema_version": 1
+      },
+      {
+        "category": "Social",
+        "defaults": {},
+        "description": "Read how many connections the account has from the screen it is on, publish ACCOUNT_FRIEND_COUNT/ACCOUNT_STAGE for branching, and record the observation so growth is measurable.",
+        "display_name": "Social Sync Connections",
+        "fields": [],
+        "legacy": {},
+        "node_type": "social_sync_connections",
+        "optional": [
+          "platform",
+          "metric",
+          "timeout",
+          "persist",
+          "save_as"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "social_sync_connections",
+        "schema_version": 1
+      },
+      {
+        "capability_id": "social.content.interact",
+        "category": "Engagement",
+        "defaults": {},
+        "description": "Interact with content on the current screen through a platform adapter. Supported actions come from the provider capability registry.",
+        "display_name": "Engage with Content",
+        "fields": [
+          {
+            "advanced": false,
+            "depends_on": [],
+            "description": "Provider/app adapter used to execute this semantic action.",
+            "group": "runTarget",
+            "label": "Run on",
+            "name": "platform",
+            "options": [],
+            "placeholder": "",
+            "required": true,
+            "type": "provider",
+            "visible_when": {}
+          },
+          {
+            "advanced": false,
+            "depends_on": [],
+            "description": "Verified target variable produced by a select/lease step.",
+            "group": "target",
+            "label": "Target content/profile",
+            "name": "require_verified_target",
+            "options": [],
+            "placeholder": "_people_target",
+            "required": false,
+            "type": "resourceRef",
+            "visible_when": {}
+          },
+          {
+            "advanced": false,
+            "depends_on": [
+              "platform"
+            ],
+            "description": "",
+            "group": "content",
+            "label": "Action",
+            "name": "action",
+            "options": [],
+            "placeholder": "",
+            "required": true,
+            "type": "select",
+            "visible_when": {}
+          },
+          {
+            "advanced": false,
+            "depends_on": [
+              "action"
+            ],
+            "description": "",
+            "group": "content",
+            "label": "Comment text",
+            "name": "comment_text",
+            "options": [],
+            "placeholder": "${COMMENT_TEXT}",
+            "required": true,
+            "type": "textarea",
+            "visible_when": {
+              "action": "comment"
+            }
+          },
+          {
+            "advanced": true,
+            "depends_on": [],
+            "description": "",
+            "group": "options",
+            "label": "Find button timeout",
+            "name": "timeout",
+            "options": [],
+            "placeholder": "",
+            "required": false,
+            "type": "number",
+            "visible_when": {}
+          },
+          {
+            "advanced": true,
+            "depends_on": [],
+            "description": "",
+            "group": "options",
+            "label": "Verify timeout",
+            "name": "verify_timeout",
+            "options": [],
+            "placeholder": "",
+            "required": false,
+            "type": "number",
+            "visible_when": {}
+          }
+        ],
+        "legacy": {},
+        "node_type": "content_interaction",
+        "optional": [
+          "platform",
+          "action",
+          "timeout",
+          "poll",
+          "verify_timeout",
+          "settle_seconds",
+          "save_as",
+          "require_verified_target",
+          "comment_text",
+          "require_completion",
+          "completion_steps",
+          "completion_verify",
+          "candidate_entity_id",
+          "require_candidate_status",
+          "candidate_lease_token",
+          "account_action_id"
+        ],
+        "presets": [
+          {
+            "defaults": {
+              "action": "like",
+              "platform": "auto",
+              "type": "content_interaction"
+            },
+            "description": "Add a provider-supported reaction to selected content.",
+            "display_name": "React to Content",
+            "id": "content.reaction.add",
+            "runtime_step_type": "content_interaction"
+          },
+          {
+            "defaults": {
+              "action": "comment",
+              "comment_text": "${COMMENT_TEXT}",
+              "platform": "auto",
+              "type": "content_interaction"
+            },
+            "description": "Write a comment on selected content.",
+            "display_name": "Add Comment",
+            "id": "content.comment.create",
+            "runtime_step_type": "content_interaction"
+          },
+          {
+            "defaults": {
+              "action": "share",
+              "platform": "auto",
+              "type": "content_interaction"
+            },
+            "description": "Share provider-supported content.",
+            "display_name": "Share / Repost",
+            "id": "content.share.create",
+            "runtime_step_type": "content_interaction"
+          }
+        ],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "content_interaction",
+        "schema_version": 2
+      },
+      {
+        "category": "Social",
+        "defaults": {},
+        "description": "Send an idempotent connection request on the current profile screen; use require_verified_target to bind it to a resolver result.",
+        "display_name": "Connection Request",
+        "fields": [],
+        "legacy": {},
+        "node_type": "connection_request",
+        "optional": [
+          "platform",
+          "action",
+          "timeout",
+          "poll",
+          "verify_timeout",
+          "settle_seconds",
+          "save_as",
+          "require_verified_target",
+          "require_completion",
+          "completion_steps",
+          "completion_verify",
+          "candidate_entity_id",
+          "require_candidate_status",
+          "candidate_lease_token",
+          "account_action_id"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "connection_request",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Atomically lease the highest-ranked ready connection candidate for the bound account; request discovery when none is ready.",
+        "display_name": "Lease Connection Candidate",
+        "fields": [],
+        "legacy": {},
+        "node_type": "lease_connection_candidate",
+        "optional": [
+          "platform"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "lease_connection_candidate",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Atomically reserve the next unused device target for the bound account and action.",
+        "display_name": "Lease Source Target",
+        "fields": [],
+        "legacy": {},
+        "node_type": "lease_source_target",
+        "optional": [
+          "platform",
+          "entity_type",
+          "action_type",
+          "action",
+          "statuses",
+          "keywords",
+          "search"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "lease_source_target",
+        "schema_version": 1
+      },
+      {
+        "category": "Social",
+        "defaults": {},
+        "description": "Join the community on the current screen and verify member or pending state.",
+        "display_name": "Community Membership",
+        "fields": [],
+        "legacy": {},
+        "node_type": "community_membership",
+        "optional": [
+          "platform",
+          "action",
+          "timeout",
+          "poll",
+          "verify_timeout",
+          "settle_seconds",
+          "save_as",
+          "require_verified_target",
+          "require_completion",
+          "completion_steps",
+          "completion_verify",
+          "candidate_entity_id",
+          "require_candidate_status",
+          "candidate_lease_token",
+          "account_action_id"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "community_membership",
+        "schema_version": 1
+      },
+      {
+        "category": "Control Flow",
+        "defaults": {},
+        "description": "Chọn ngẫu nhiên 1 nhánh để thực thi (weighted random). branches: list các nhánh, mỗi nhánh có steps (required) và weight (optional, mặc định 1). Weight cao hơn = xác suất được chọn cao hơn. Ví dụ: [{\"weight\": 3, \"steps\": [...]}, {\"weight\": 1, \"steps\": [...]}].",
+        "display_name": "Random Pick",
+        "fields": [],
+        "legacy": {},
+        "node_type": "random_pick",
+        "optional": [],
+        "presets": [],
+        "required": [
+          "branches"
+        ],
+        "required_any": [],
+        "runtime_step_type": "random_pick",
+        "schema_version": 1
+      },
+      {
+        "category": "Control Flow",
+        "defaults": {},
+        "description": "Gọi một sub-scenario khác (flow composition). scenario_id: UUID của scenario trong cùng campaign. scenario_name: tên scenario (tìm trong campaign trước, rồi trong template library). variables: dict override variables cho sub-scenario (optional). Yêu cầu một trong hai: scenario_id hoặc scenario_name. Circular reference và max depth (10) được tự động bảo vệ.",
+        "display_name": "Run Scenario",
+        "fields": [],
+        "legacy": {},
+        "node_type": "run_scenario",
+        "optional": [
+          "scenario_id",
+          "scenario_name",
+          "variables"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [
+          [
+            "scenario_id",
+            "scenario_name"
+          ]
+        ],
+        "runtime_step_type": "run_scenario",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Khai báo nguồn dữ liệu dùng cho campaign dispatch. Mặc định dùng external_entities facebook/group đã cào; mỗi device nhận một nguồn qua biến TARGET_* và alias theo output_prefix.",
+        "display_name": "Use Source Pool",
+        "fields": [],
+        "legacy": {},
+        "node_type": "use_source_pool",
+        "optional": [
+          "platform",
+          "entity_type",
+          "search",
+          "output_prefix",
+          "statuses",
+          "allocation_policy"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "use_source_pool",
+        "schema_version": 1
+      },
+      {
+        "capability_id": "content.extract",
+        "category": "Data",
+        "defaults": {},
+        "description": "Extract content data từ XML màn hình hiện tại qua agent-boot extra-data. entity: 'posts' — parse post card (author/text/timestamp/reactions/comments/shares/post_type/image_desc/comment_preview); 'comments' — parse comment rows + stats trong comment view/feed preview; 'groups'/'pages' — cào kết quả tìm kiếm và lưu vào external entity catalog; 'text_nodes' — thu thập text node vào context['text_nodes']. platform: facebook|instagram|tiktok|linkedin, hoặc 'auto' (mặc định) để agent-boot tự nhận diện parser theo app đang mở. extract_profile: balanced|aggressive|safe hoặc ${VAR} (áp defaults scan params). entity_version: lock behavior parser/runtime (vd: comments:v1). stop_if_no_new (bool, default False): set ctx['_break']=True khi không có bài mới trong no_new_threshold (default 3) lần scroll liên tiếp — dùng bên trong step 'loop'. expand_see_more (bool, default True): tự tap nút 'See more'/'Xem thêm' trước khi parse. open_post_before_extract (entity=posts): mở màn chi tiết bài trước extract. open_post_press_back_after_extract: tự Back sau extract; với entity=comments chỉ back khi còn ở comment sheet. entity=comments supports bounded crawl tuning: max_items, comment_scroll_passes, comment_swipes_per_dump, comment_max_snapshots, comment_scroll_wall_s. Nếu set collection/platform/content_type/dedupe_field thì agent-boot sẽ ghi trực tiếp vào content DB. ⚠ Dùng với step 'loop' (không phải 'repeat') để stop_if_no_new hoạt động.",
+        "display_name": "Extract Content",
+        "fields": [
+          {
+            "advanced": false,
+            "depends_on": [],
+            "description": "",
+            "group": "runTarget",
+            "label": "Run on",
+            "name": "platform",
+            "options": [],
+            "placeholder": "",
+            "required": true,
+            "type": "provider",
+            "visible_when": {}
+          },
+          {
+            "advanced": false,
+            "depends_on": [
+              "platform"
+            ],
+            "description": "",
+            "group": "target",
+            "label": "What to extract",
+            "name": "entity",
+            "options": [],
+            "placeholder": "",
+            "required": true,
+            "type": "select",
+            "visible_when": {}
+          },
+          {
+            "advanced": false,
+            "depends_on": [],
+            "description": "",
+            "group": "options",
+            "label": "Save to collection",
+            "name": "collection",
+            "options": [],
+            "placeholder": "",
+            "required": false,
+            "type": "text",
+            "visible_when": {}
+          }
+        ],
+        "legacy": {},
+        "node_type": "extract",
+        "optional": [
+          "stop_if_no_new",
+          "no_new_threshold",
+          "edge_extra_data",
+          "expand_see_more",
+          "expand_see_more_max_passes",
+          "expand_see_more_scroll",
+          "expand_see_more_scroll_distance",
+          "expand_completion_retries",
+          "extract_profile",
+          "open_post_before_extract",
+          "open_post_press_back_after_extract",
+          "require_open_post_detail",
+          "entity_version",
+          "collection",
+          "platform",
+          "content_type",
+          "dedupe_field",
+          "tags",
+          "extract_var",
+          "save_parent_id_var",
+          "parent_id_var",
+          "parent_post_id_var",
+          "item_level",
+          "max_items",
+          "comment_scroll_passes",
+          "comment_swipes_per_dump",
+          "comment_scroll_distance",
+          "comment_scroll_duration_ms",
+          "comment_scroll_pause_s",
+          "comment_scroll_wall_s",
+          "comment_require_complete",
+          "comment_auto_coverage_target_max",
+          "allow_partial_comments",
+          "comment_no_growth_break",
+          "min_comment_scan_passes",
+          "comment_max_snapshots",
+          "comment_stop_if_no_new",
+          "comment_no_new_threshold"
+        ],
+        "presets": [
+          {
+            "defaults": {
+              "content_type": "fb_post",
+              "entity": "posts",
+              "platform": "facebook",
+              "type": "extract"
+            },
+            "description": "Preset for extracting provider posts.",
+            "display_name": "Extract Posts",
+            "id": "extract_posts",
+            "runtime_step_type": "extract"
+          },
+          {
+            "defaults": {
+              "content_type": "fb_comment",
+              "entity": "comments",
+              "platform": "facebook",
+              "type": "extract"
+            },
+            "description": "Preset for extracting comments from the active content.",
+            "display_name": "Extract Comments",
+            "id": "extract_comments",
+            "runtime_step_type": "extract"
+          }
+        ],
+        "required": [
+          "entity"
+        ],
+        "required_any": [],
+        "runtime_step_type": "extract",
+        "schema_version": 2
+      },
+      {
+        "category": "Control Flow",
+        "defaults": {
+          "idle_delay_seconds": 0,
+          "stall_after": 0
+        },
+        "description": "Lặp lại steps theo count hoặc while-condition. count: số lần lặp cố định (chạy đúng N lần, không bị max_iterations cắt). duration_seconds: nếu > 0, dừng loop khi hết thời lượng kể cả chưa hết count. while: condition dict (element_exists | variable_equals) — lặp khi condition đúng. max_iterations: giới hạn an toàn chỉ khi dùng while (không có count, default 100). loop_var: tên biến runtime nhận index hiện tại để nested loop không ghi đè nhau. stall_after: dừng sau N vòng liên tiếp không thao tác được gì (0 = tắt). idle_delay_seconds: chờ bấy nhiêu giây sau một vòng không thao tác (0–300). ⚠ Vòng lặp dài có thể dừng sớm với reason_code=loop_history_limit khi run hết ngân sách event history — các vòng đã xong vẫn được giữ. Khác 'repeat': 'loop' kiểm tra ctx['_break'] sau mỗi vòng — cho phép step 'extract' với stop_if_no_new=True dừng sớm, hoặc step 'break_if' dừng khi đủ điều kiện. ${__LOOP_INDEX__} = chỉ số vòng lặp hiện tại (0-based).",
+        "display_name": "Loop",
+        "fields": [
+          {
+            "advanced": false,
+            "group": "options",
+            "label": "Duration Seconds",
+            "label_key": "controlFlow.loopDurationSecondsLabel",
+            "min": 0,
+            "name": "duration_seconds",
+            "required": false,
+            "type": "number"
+          },
+          {
+            "advanced": false,
+            "default": 0,
+            "group": "options",
+            "label": "Stall After",
+            "label_key": "controlFlow.loopStallAfterLabel",
+            "min": 0,
+            "name": "stall_after",
+            "required": false,
+            "type": "number"
+          },
+          {
+            "advanced": true,
+            "default": 0,
+            "group": "options",
+            "label": "Idle Delay Seconds",
+            "label_key": "controlFlow.loopIdleDelayLabel",
+            "max": 300,
+            "min": 0,
+            "name": "idle_delay_seconds",
+            "required": false,
+            "type": "number"
+          },
+          {
+            "advanced": true,
+            "group": "options",
+            "label": "Loop Var",
+            "label_key": "controlFlow.loopVarLabel",
+            "name": "loop_var",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "legacy": {},
+        "node_type": "loop",
+        "optional": [
+          "count",
+          "while",
+          "max_iterations",
+          "loop_var",
+          "duration_seconds",
+          "stall_after",
+          "idle_delay_seconds"
+        ],
+        "presets": [],
+        "required": [
+          "steps"
+        ],
+        "required_any": [],
+        "runtime_step_type": "loop",
+        "schema_version": 1
+      },
+      {
+        "category": "Control Flow",
+        "defaults": {},
+        "description": "Dừng vòng lặp 'loop' bao ngoài khi condition thỏa mãn. condition keys: {'type': 'posts_count_gte', 'count': N} — dừng khi ctx['posts'] đạt N bài. {'element_exists': {'by': ..., 'value': ...}} — dừng khi element xuất hiện. {'variable_equals': {'name': ..., 'value': ...}} — dừng khi variable đạt giá trị. ⚠ Chỉ hoạt động bên trong step 'loop' (không phải 'repeat' hay 'repeat_until').",
+        "display_name": "Break If",
+        "fields": [],
+        "legacy": {},
+        "node_type": "break_if",
+        "optional": [],
+        "presets": [],
+        "required": [
+          "condition"
+        ],
+        "required_any": [],
+        "runtime_step_type": "break_if",
+        "schema_version": 1
+      },
+      {
+        "category": "Data",
+        "defaults": {},
+        "description": "Extract text from UI Hierarchy XML (free, fastest, native views only). save_as: variable name to store result. format: 'text' (plain) or 'json' (structured with bounds/class/resource_id). filter_class: list of Android widget classes to include (null = all).",
+        "display_name": "Extract Text Hierarchy",
+        "fields": [],
+        "legacy": {},
+        "node_type": "extract_text_hierarchy",
+        "optional": [
+          "filter_class",
+          "exclude_empty",
+          "format"
+        ],
+        "presets": [],
+        "required": [
+          "save_as"
+        ],
+        "required_any": [],
+        "runtime_step_type": "extract_text_hierarchy",
+        "schema_version": 1
+      },
+      {
+        "category": "Data",
+        "defaults": {},
+        "description": "Extract text from screenshot using Tesseract OCR. Works on WebView, Canvas, images — anything visible on screen. save_as: variable name. region: {x1, y1, x2, y2} as ratios 0-1 to crop before OCR. language: Tesseract lang code (e.g. 'eng', 'vie+eng'). psm: Page Segmentation Mode (3=auto, 6=block, 7=line, 11=sparse).",
+        "display_name": "Extract Text Ocr",
+        "fields": [],
+        "legacy": {},
+        "node_type": "extract_text_ocr",
+        "optional": [
+          "region",
+          "language",
+          "psm",
+          "preprocess",
+          "scale_factor",
+          "confidence_threshold"
+        ],
+        "presets": [],
+        "required": [
+          "save_as"
+        ],
+        "required_any": [],
+        "runtime_step_type": "extract_text_ocr",
+        "schema_version": 1
+      },
+      {
+        "category": "Data",
+        "defaults": {},
+        "description": "Extract structured data from screenshot using AI Vision (OpenAI/Gemini). save_as: variable name. prompt: extraction instruction for the AI. provider: 'openai' or 'gemini'. format: 'json' (parsed dict) or 'text' (raw string). Requires OPENAI_API_KEY or GEMINI_API_KEY env var.",
+        "display_name": "Extract Text Ai",
+        "fields": [],
+        "legacy": {},
+        "node_type": "extract_text_ai",
+        "optional": [
+          "provider",
+          "format",
+          "model",
+          "region"
+        ],
+        "presets": [],
+        "required": [
+          "save_as",
+          "prompt"
+        ],
+        "required_any": [],
+        "runtime_step_type": "extract_text_ai",
+        "schema_version": 1
+      },
+      {
+        "category": "Data",
+        "defaults": {},
+        "description": "Smart extraction: tries hierarchy → OCR → AI Vision (auto fallback). save_as: variable name. strategy: 'auto' (fallback chain), 'hierarchy', 'ocr', 'ai'. schema: expected output fields (used to validate extraction completeness).",
+        "display_name": "Extract Screen Data",
+        "fields": [],
+        "legacy": {},
+        "node_type": "extract_screen_data",
+        "optional": [
+          "schema",
+          "strategy",
+          "language"
+        ],
+        "presets": [],
+        "required": [
+          "save_as"
+        ],
+        "required_any": [],
+        "runtime_step_type": "extract_screen_data",
+        "schema_version": 1
+      },
+      {
+        "category": "Data",
+        "defaults": {},
+        "description": "Save extracted data to content database with deduplication (DF-010). data_var: name of runtime variable containing the data (from extract_text_* or set_variable). collection: name of content collection (default: 'default'). dedupe_field: field in data to use for dedup hash (e.g. 'content'). parent_id_var (alias: save_parent_id_var): link children rows to parent hash from context. item_level: hierarchy level (0 post, 1 comment/reply). Data is saved to content_items table with SHA256 hash-based dedup.",
+        "display_name": "Save Extraction",
+        "fields": [],
+        "legacy": {},
+        "node_type": "save_extraction",
+        "optional": [
+          "collection",
+          "platform",
+          "content_type",
+          "dedupe_field",
+          "tags",
+          "parent_id_var",
+          "save_parent_id_var",
+          "item_level",
+          "dedup_action",
+          "save_batch_size"
+        ],
+        "presets": [],
+        "required": [
+          "data_var"
+        ],
+        "required_any": [],
+        "runtime_step_type": "save_extraction",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Double-tap at coordinates. rx/ry (0.0-1.0 relative) or x/y (absolute pixels). wait_after (float, default 0.5s). Requires TouchAccessibilityService or uiautomator2.",
+        "display_name": "Double Tap",
+        "fields": [],
+        "legacy": {},
+        "node_type": "double_tap",
+        "optional": [
+          "x",
+          "y",
+          "rx",
+          "ry",
+          "wait_after"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "double_tap",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Pinch/zoom gesture. scale>1 = zoom in (spread), scale<1 = zoom out (pinch). Center: cx/cy (absolute) or rx/ry (relative, default 0.5/0.5). duration_ms (default 400). Requires TouchAccessibilityService.",
+        "display_name": "Pinch",
+        "fields": [],
+        "legacy": {},
+        "node_type": "pinch",
+        "optional": [
+          "cx",
+          "cy",
+          "rx",
+          "ry",
+          "duration_ms"
+        ],
+        "presets": [],
+        "required": [
+          "scale"
+        ],
+        "required_any": [],
+        "runtime_step_type": "pinch",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Drag-and-drop from point A to point B. Use rx1/ry1/rx2/ry2 for relative coords (0.0-1.0) or x1/y1/x2/y2 for absolute pixels. duration_ms (default 1000) — longer = more reliable hold detection.",
+        "display_name": "Drag",
+        "fields": [],
+        "legacy": {},
+        "node_type": "drag",
+        "optional": [
+          "x1",
+          "y1",
+          "x2",
+          "y2",
+          "rx1",
+          "ry1",
+          "rx2",
+          "ry2",
+          "duration_ms"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "drag",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Capture device screenshot. Result stored as base64 in step_result['screenshot']. Optional save_path: write JPEG to disk at that absolute path.",
+        "display_name": "Take Screenshot",
+        "fields": [],
+        "legacy": {},
+        "node_type": "take_screenshot",
+        "optional": [
+          "save_path"
+        ],
+        "presets": [],
+        "required": [],
+        "required_any": [],
+        "runtime_step_type": "take_screenshot",
+        "schema_version": 1
+      },
+      {
+        "category": "Device",
+        "defaults": {},
+        "description": "Set device clipboard text. Uses STFService → uiautomator2 → ADB broadcast fallback. After this step, use input_text or key(paste) to paste clipboard content.",
+        "display_name": "Set Clipboard",
+        "fields": [],
+        "legacy": {},
+        "node_type": "set_clipboard",
+        "optional": [],
+        "presets": [],
+        "required": [
+          "text"
+        ],
+        "required_any": [],
+        "runtime_step_type": "set_clipboard",
+        "schema_version": 1
+      }
+    ],
+    "providers": [
+      {
+        "capabilities": {
+          "platform.session.check": {
+            "execution_mode": "adapter_code",
+            "facets": {
+              "login_state_markers": "facebook_readiness",
+              "session_surface": "facebook_app"
+            },
+            "generic_recipes": [],
+            "provider_fields": [],
+            "status": "active",
+            "unsupported_reason": ""
+          },
+          "social.comments.open": {
+            "execution_mode": "adapter_code",
+            "facets": {
+              "comment_filter_modes": [
+                "most_relevant",
+                "newest",
+                "all_comments"
+              ],
+              "comment_surface": "overlay",
+              "locator_strategy": "facebook_comment_button"
+            },
+            "generic_recipes": [],
+            "provider_fields": [
+              {
+                "advanced": true,
+                "group": "provider",
+                "label": "Comment ordering",
+                "name": "comment_filter",
+                "options": [
+                  "most_relevant",
+                  "newest",
+                  "all_comments"
+                ],
+                "type": "select"
+              }
+            ],
+            "status": "active",
+            "unsupported_reason": ""
+          },
+          "social.community.membership": {
+            "execution_mode": "adapter_code",
+            "facets": {
+              "community_surface": "group",
+              "membership_state": "member_or_pending"
+            },
+            "generic_recipes": [],
+            "provider_fields": [],
+            "status": "active",
+            "unsupported_reason": ""
+          },
+          "social.connection.request": {
+            "execution_mode": "adapter_code",
+            "facets": {
+              "connection_kind": "friend_request",
+              "profile_surface": "facebook_profile"
+            },
+            "generic_recipes": [],
+            "provider_fields": [],
+            "status": "active",
+            "unsupported_reason": ""
+          },
+          "social.connections.sync": {
+            "execution_mode": "adapter_code",
+            "facets": {
+              "connection_kind": "friend_request",
+              "metric": "friends"
+            },
+            "generic_recipes": [],
+            "provider_fields": [],
+            "status": "active",
+            "unsupported_reason": ""
+          },
+          "social.content.interact": {
+            "execution_mode": "adapter_code",
+            "facets": {
+              "comment_surface": "overlay",
+              "content_actions": [
+                "like",
+                "comment",
+                "share"
+              ]
+            },
+            "generic_recipes": [],
+            "provider_fields": [],
+            "status": "active",
+            "unsupported_reason": ""
+          },
+          "social.content.scan": {
+            "execution_mode": "adapter_code",
+            "facets": {
+              "comment_surface": "overlay",
+              "content_surface": "feed_or_group",
+              "profile_surface": "facebook_profile"
+            },
+            "generic_recipes": [],
+            "provider_fields": [],
+            "status": "active",
+            "unsupported_reason": ""
+          },
+          "social.target.lease": {
+            "execution_mode": "generic_recipe",
+            "facets": {
+              "connection_kind": "friend_request"
+            },
+            "generic_recipes": [
+              "database_lease"
+            ],
+            "provider_fields": [],
+            "status": "active",
+            "unsupported_reason": ""
+          },
+          "social.target.select": {
+            "execution_mode": "adapter_code",
+            "facets": {
+              "locator_strategy": "facebook_hierarchy",
+              "post_surface": "facebook_post_detail",
+              "profile_surface": "facebook_profile",
+              "target_type": "person_or_post"
+            },
+            "generic_recipes": [],
+            "provider_fields": [],
+            "status": "active",
+            "unsupported_reason": ""
+          },
+          "social.visible_people.connect": {
+            "execution_mode": "adapter_code",
+            "facets": {
+              "common_context_markers": "mutual_friends_or_group",
+              "connection_kind": "friend_request"
+            },
+            "generic_recipes": [],
+            "provider_fields": [],
+            "status": "active",
+            "unsupported_reason": ""
+          }
+        },
+        "capability_schemas": {
+          "platform.session.check": {
+            "facets": [
+              "session_surface",
+              "login_state_markers"
+            ],
+            "id": "platform.session.check",
+            "input_schema_version": 1,
+            "mutates_platform_state": false,
+            "output_schema_version": 1,
+            "requires_account": false,
+            "safe_generic_recipes": [],
+            "step_types": [
+              "platform_session_gate"
+            ]
+          },
+          "social.comments.open": {
+            "facets": [
+              "comment_surface",
+              "comment_filter_modes",
+              "locator_strategy"
+            ],
+            "id": "social.comments.open",
+            "input_schema_version": 1,
+            "mutates_platform_state": false,
+            "output_schema_version": 1,
+            "requires_account": false,
+            "safe_generic_recipes": [],
+            "step_types": [
+              "social_open_comments",
+              "social_find_comment_button",
+              "social_tap_comment_target",
+              "social_apply_comment_filter"
+            ]
+          },
+          "social.community.membership": {
+            "facets": [
+              "community_surface",
+              "membership_state"
+            ],
+            "id": "social.community.membership",
+            "input_schema_version": 1,
+            "mutates_platform_state": true,
+            "output_schema_version": 1,
+            "requires_account": true,
+            "safe_generic_recipes": [],
+            "step_types": [
+              "community_membership"
+            ]
+          },
+          "social.connection.request": {
+            "facets": [
+              "connection_kind",
+              "profile_surface"
+            ],
+            "id": "social.connection.request",
+            "input_schema_version": 1,
+            "mutates_platform_state": true,
+            "output_schema_version": 1,
+            "requires_account": true,
+            "safe_generic_recipes": [],
+            "step_types": [
+              "connection_request"
+            ]
+          },
+          "social.connections.sync": {
+            "facets": [
+              "connection_kind",
+              "metric"
+            ],
+            "id": "social.connections.sync",
+            "input_schema_version": 1,
+            "mutates_platform_state": false,
+            "output_schema_version": 1,
+            "requires_account": true,
+            "safe_generic_recipes": [],
+            "step_types": [
+              "social_sync_connections"
+            ]
+          },
+          "social.content.interact": {
+            "facets": [
+              "content_actions",
+              "comment_surface"
+            ],
+            "id": "social.content.interact",
+            "input_schema_version": 1,
+            "mutates_platform_state": true,
+            "output_schema_version": 1,
+            "requires_account": true,
+            "safe_generic_recipes": [],
+            "step_types": [
+              "content_interaction"
+            ]
+          },
+          "social.content.scan": {
+            "facets": [
+              "content_surface",
+              "comment_surface",
+              "profile_surface"
+            ],
+            "id": "social.content.scan",
+            "input_schema_version": 1,
+            "mutates_platform_state": true,
+            "output_schema_version": 1,
+            "requires_account": true,
+            "safe_generic_recipes": [],
+            "step_types": [
+              "social_scan_posts_interact",
+              "social_open_author_from_post_match",
+              "social_open_commenter_from_post_match"
+            ]
+          },
+          "social.target.lease": {
+            "facets": [
+              "target_entity",
+              "connection_kind"
+            ],
+            "id": "social.target.lease",
+            "input_schema_version": 1,
+            "mutates_platform_state": false,
+            "output_schema_version": 1,
+            "requires_account": true,
+            "safe_generic_recipes": [
+              "database_lease"
+            ],
+            "step_types": [
+              "lease_connection_candidate"
+            ]
+          },
+          "social.target.select": {
+            "facets": [
+              "target_type",
+              "locator_strategy",
+              "profile_surface",
+              "post_surface"
+            ],
+            "id": "social.target.select",
+            "input_schema_version": 1,
+            "mutates_platform_state": false,
+            "output_schema_version": 1,
+            "requires_account": false,
+            "safe_generic_recipes": [],
+            "step_types": [
+              "social_select_target"
+            ]
+          },
+          "social.visible_people.connect": {
+            "facets": [
+              "connection_kind",
+              "common_context_markers"
+            ],
+            "id": "social.visible_people.connect",
+            "input_schema_version": 1,
+            "mutates_platform_state": true,
+            "output_schema_version": 1,
+            "requires_account": true,
+            "safe_generic_recipes": [],
+            "step_types": [
+              "social_connect_visible_people"
+            ]
+          }
+        },
+        "content_types": [
+          {
+            "code": "fb_post",
+            "description": "Facebook post extracted and persisted by agent-boot extra_data",
+            "object_type": "post",
+            "persisted_in_device_farm": false,
+            "raw_data_owner": "agent-boot",
+            "storage_owner": "agent-boot"
+          },
+          {
+            "code": "fb_comment",
+            "description": "Facebook comment extracted and persisted by agent-boot extra_data",
+            "object_type": "comment",
+            "persisted_in_device_farm": false,
+            "raw_data_owner": "agent-boot",
+            "storage_owner": "agent-boot"
+          }
+        ],
+        "coverage": "L2 Active",
+        "enabled_by_default": true,
+        "entities": [
+          "posts",
+          "comments",
+          "groups",
+          "pages"
+        ],
+        "name": "facebook",
+        "step_types": [
+          "platform_session_gate",
+          "lease_connection_candidate",
+          "content_interaction",
+          "connection_request",
+          "community_membership",
+          "social_select_target",
+          "social_connect_visible_people",
+          "social_open_comments",
+          "social_find_comment_button",
+          "social_tap_comment_target",
+          "social_apply_comment_filter",
+          "social_scan_posts_interact",
+          "social_open_author_from_post_match",
+          "social_open_commenter_from_post_match",
+          "social_sync_connections"
+        ],
+        "version": "2.0.0"
+      },
+      {
+        "capabilities": {},
+        "capability_schemas": {},
+        "content_types": [
+          {
+            "code": "ig_comment",
+            "description": "instagram comment draft payload owned by agent-boot",
+            "object_type": "comment",
+            "persisted_in_device_farm": false,
+            "raw_data_owner": "agent-boot",
+            "storage_owner": "agent-boot"
+          },
+          {
+            "code": "ig_post",
+            "description": "instagram post draft payload owned by agent-boot",
+            "object_type": "post",
+            "persisted_in_device_farm": false,
+            "raw_data_owner": "agent-boot",
+            "storage_owner": "agent-boot"
+          }
+        ],
+        "coverage": "Draft",
+        "enabled_by_default": false,
+        "entities": [
+          "posts",
+          "comments"
+        ],
+        "name": "instagram",
+        "step_types": [],
+        "version": "0.1.0"
+      },
+      {
+        "capabilities": {},
+        "capability_schemas": {},
+        "content_types": [
+          {
+            "code": "threads_comment",
+            "description": "threads comment draft payload owned by agent-boot",
+            "object_type": "comment",
+            "persisted_in_device_farm": false,
+            "raw_data_owner": "agent-boot",
+            "storage_owner": "agent-boot"
+          },
+          {
+            "code": "threads_post",
+            "description": "threads post draft payload owned by agent-boot",
+            "object_type": "post",
+            "persisted_in_device_farm": false,
+            "raw_data_owner": "agent-boot",
+            "storage_owner": "agent-boot"
+          }
+        ],
+        "coverage": "Draft",
+        "enabled_by_default": false,
+        "entities": [
+          "posts",
+          "comments"
+        ],
+        "name": "threads",
+        "step_types": [],
+        "version": "0.1.0"
+      },
+      {
+        "capabilities": {},
+        "capability_schemas": {},
+        "content_types": [
+          {
+            "code": "tiktok_comment",
+            "description": "tiktok comment draft payload owned by agent-boot",
+            "object_type": "comment",
+            "persisted_in_device_farm": false,
+            "raw_data_owner": "agent-boot",
+            "storage_owner": "agent-boot"
+          },
+          {
+            "code": "tiktok_video",
+            "description": "tiktok video draft payload owned by agent-boot",
+            "object_type": "video",
+            "persisted_in_device_farm": false,
+            "raw_data_owner": "agent-boot",
+            "storage_owner": "agent-boot"
+          }
+        ],
+        "coverage": "Draft",
+        "enabled_by_default": false,
+        "entities": [
+          "posts",
+          "comments"
+        ],
+        "name": "tiktok",
+        "step_types": [],
+        "version": "0.1.0"
+      }
+    ],
+    "schema_version": 1
+  },
+  "scenario": {
+    "instructions": "string — câu lệnh gốc (giữ nguyên)",
+    "steps": "array of step objects — thứ tự thực thi"
+  },
+  "step_types": [
+    "launch_app",
+    "stop_app",
+    "clear_app",
+    "wait_app",
+    "push_file",
+    "pull_file",
+    "open_url",
+    "install_apk",
+    "wait",
+    "tap_position",
+    "tap_ratio",
+    "tap_image",
+    "swipe_ratio",
+    "tap",
+    "tap_selector",
+    "tap_xml_match",
+    "wait_element",
+    "assert_element",
+    "input_selector",
+    "long_tap_selector",
+    "scroll_to",
+    "input_text",
+    "login_if_needed",
+    "platform_session_gate",
+    "fill_form",
+    "assert_app_state",
+    "key",
+    "adb_shell",
+    "scroll_down",
+    "wait_stable",
+    "verify_screen",
+    "dismiss_popup",
+    "set_variable",
+    "repeat",
+    "repeat_until",
+    "if_element",
+    "if_variable",
+    "social_open_comments",
+    "social_find_comment_button",
+    "social_tap_comment_target",
+    "social_apply_comment_filter",
+    "social_select_target",
+    "social_connect_visible_people",
+    "social_scan_posts_interact",
+    "social_open_author_from_post_match",
+    "social_open_commenter_from_post_match",
+    "social_sync_connections",
+    "content_interaction",
+    "connection_request",
+    "lease_connection_candidate",
+    "lease_source_target",
+    "community_membership",
+    "random_pick",
+    "run_scenario",
+    "use_source_pool",
+    "extract",
+    "loop",
+    "break_if",
+    "extract_text_hierarchy",
+    "extract_text_ocr",
+    "extract_text_ai",
+    "extract_screen_data",
+    "save_extraction",
+    "double_tap",
+    "pinch",
+    "drag",
+    "take_screenshot",
+    "set_clipboard"
+  ],
+  "steps_schema": {
+    "adb_shell": {
+      "description": "Chạy lệnh `adb shell` trên phone thật thông qua agent-boot. command hỗ trợ biến ${VAR}; timeout được giới hạn để tránh treo worker. save_as lưu output vào biến runtime để dùng ở bước sau. max_output_chars giới hạn output giữ trong kết quả/context.",
+      "fields": {
+        "command": {
+          "label_key": "adbShell.commandLabel",
+          "type": "string"
+        },
+        "fail_on_error": {
+          "default": true,
+          "label_key": "adbShell.failOnErrorLabel",
+          "type": "boolean"
+        },
+        "max_output_chars": {
+          "default": 8000,
+          "label_key": "adbShell.maxOutputLabel",
+          "max": 50000,
+          "min": 1000,
+          "type": "number"
+        },
+        "save_as": {
+          "label_key": "adbShell.saveAsLabel",
+          "type": "string"
+        },
+        "timeout": {
+          "default": 30,
+          "label_key": "adbShell.timeoutLabel",
+          "max": 120,
+          "min": 1,
+          "type": "number"
+        }
+      },
+      "optional": [
+        "timeout",
+        "fail_on_error",
+        "save_as",
+        "max_output_chars"
+      ],
+      "required": [
+        "command"
+      ]
+    },
+    "assert_app_state": {
+      "description": "Assert current app state using package/text checks and optional semantic locator.",
+      "optional": [
+        "profile",
+        "package",
+        "any_text",
+        "all_text",
+        "not_text",
+        "locator"
+      ],
+      "required": []
+    },
+    "assert_element": {
+      "description": "✓ Xác nhận element đang hiển thị. Fail scenario ngay nếu không thấy element. Dùng để kiểm tra đang đúng màn hình trước khi thao tác tiếp. timeout mặc định 5s.",
+      "optional": [
+        "selector",
+        "by",
+        "value",
+        "timeout",
+        "poll"
+      ],
+      "required": [],
+      "required_any": [
+        [
+          "selector",
+          "by"
+        ],
+        [
+          "selector",
+          "value"
+        ]
+      ]
+    },
+    "break_if": {
+      "description": "Dừng vòng lặp 'loop' bao ngoài khi condition thỏa mãn. condition keys: {'type': 'posts_count_gte', 'count': N} — dừng khi ctx['posts'] đạt N bài. {'element_exists': {'by': ..., 'value': ...}} — dừng khi element xuất hiện. {'variable_equals': {'name': ..., 'value': ...}} — dừng khi variable đạt giá trị. ⚠ Chỉ hoạt động bên trong step 'loop' (không phải 'repeat' hay 'repeat_until').",
+      "optional": [],
+      "required": [
+        "condition"
+      ]
+    },
+    "clear_app": {
+      "description": "Clear app data (pm clear). Removes login state.",
+      "fields": {
+        "package": {
+          "label_key": "appLifecycle.packageLabel",
+          "type": "string"
+        }
+      },
+      "optional": [],
+      "required": [
+        "package"
+      ]
+    },
+    "community_membership": {
+      "description": "Join the community on the current screen and verify member or pending state.",
+      "optional": [
+        "platform",
+        "action",
+        "timeout",
+        "poll",
+        "verify_timeout",
+        "settle_seconds",
+        "save_as",
+        "require_verified_target",
+        "require_completion",
+        "completion_steps",
+        "completion_verify",
+        "candidate_entity_id",
+        "require_candidate_status",
+        "candidate_lease_token",
+        "account_action_id"
+      ],
+      "required": []
+    },
+    "connection_request": {
+      "description": "Send an idempotent connection request on the current profile screen; use require_verified_target to bind it to a resolver result.",
+      "optional": [
+        "platform",
+        "action",
+        "timeout",
+        "poll",
+        "verify_timeout",
+        "settle_seconds",
+        "save_as",
+        "require_verified_target",
+        "require_completion",
+        "completion_steps",
+        "completion_verify",
+        "candidate_entity_id",
+        "require_candidate_status",
+        "candidate_lease_token",
+        "account_action_id"
+      ],
+      "required": []
+    },
+    "content_interaction": {
+      "description": "Interact with content on the current screen through a platform adapter. Supported actions come from the provider capability registry.",
+      "optional": [
+        "platform",
+        "action",
+        "timeout",
+        "poll",
+        "verify_timeout",
+        "settle_seconds",
+        "save_as",
+        "require_verified_target",
+        "comment_text",
+        "require_completion",
+        "completion_steps",
+        "completion_verify",
+        "candidate_entity_id",
+        "require_candidate_status",
+        "candidate_lease_token",
+        "account_action_id"
+      ],
+      "required": []
+    },
+    "dismiss_popup": {
+      "description": "Tự động đóng popup/dialog đang hiển thị (permission request, update prompt, quảng cáo). retries: thử tối đa N lần (mặc định 3). Dùng sau launch_app hoặc bất kỳ lúc nào có khả năng xuất hiện dialog bất ngờ.",
+      "optional": [
+        "retries"
+      ],
+      "required": []
+    },
+    "double_tap": {
+      "description": "Double-tap at coordinates. rx/ry (0.0-1.0 relative) or x/y (absolute pixels). wait_after (float, default 0.5s). Requires TouchAccessibilityService or uiautomator2.",
+      "optional": [
+        "x",
+        "y",
+        "rx",
+        "ry",
+        "wait_after"
+      ],
+      "required": []
+    },
+    "drag": {
+      "description": "Drag-and-drop from point A to point B. Use rx1/ry1/rx2/ry2 for relative coords (0.0-1.0) or x1/y1/x2/y2 for absolute pixels. duration_ms (default 1000) — longer = more reliable hold detection.",
+      "optional": [
+        "x1",
+        "y1",
+        "x2",
+        "y2",
+        "rx1",
+        "ry1",
+        "rx2",
+        "ry2",
+        "duration_ms"
+      ],
+      "required": []
+    },
+    "extract": {
+      "description": "Extract content data từ XML màn hình hiện tại qua agent-boot extra-data. entity: 'posts' — parse post card (author/text/timestamp/reactions/comments/shares/post_type/image_desc/comment_preview); 'comments' — parse comment rows + stats trong comment view/feed preview; 'groups'/'pages' — cào kết quả tìm kiếm và lưu vào external entity catalog; 'text_nodes' — thu thập text node vào context['text_nodes']. platform: facebook|instagram|tiktok|linkedin, hoặc 'auto' (mặc định) để agent-boot tự nhận diện parser theo app đang mở. extract_profile: balanced|aggressive|safe hoặc ${VAR} (áp defaults scan params). entity_version: lock behavior parser/runtime (vd: comments:v1). stop_if_no_new (bool, default False): set ctx['_break']=True khi không có bài mới trong no_new_threshold (default 3) lần scroll liên tiếp — dùng bên trong step 'loop'. expand_see_more (bool, default True): tự tap nút 'See more'/'Xem thêm' trước khi parse. open_post_before_extract (entity=posts): mở màn chi tiết bài trước extract. open_post_press_back_after_extract: tự Back sau extract; với entity=comments chỉ back khi còn ở comment sheet. entity=comments supports bounded crawl tuning: max_items, comment_scroll_passes, comment_swipes_per_dump, comment_max_snapshots, comment_scroll_wall_s. Nếu set collection/platform/content_type/dedupe_field thì agent-boot sẽ ghi trực tiếp vào content DB. ⚠ Dùng với step 'loop' (không phải 'repeat') để stop_if_no_new hoạt động.",
+      "optional": [
+        "stop_if_no_new",
+        "no_new_threshold",
+        "edge_extra_data",
+        "expand_see_more",
+        "expand_see_more_max_passes",
+        "expand_see_more_scroll",
+        "expand_see_more_scroll_distance",
+        "expand_completion_retries",
+        "extract_profile",
+        "open_post_before_extract",
+        "open_post_press_back_after_extract",
+        "require_open_post_detail",
+        "entity_version",
+        "collection",
+        "platform",
+        "content_type",
+        "dedupe_field",
+        "tags",
+        "extract_var",
+        "save_parent_id_var",
+        "parent_id_var",
+        "parent_post_id_var",
+        "item_level",
+        "max_items",
+        "comment_scroll_passes",
+        "comment_swipes_per_dump",
+        "comment_scroll_distance",
+        "comment_scroll_duration_ms",
+        "comment_scroll_pause_s",
+        "comment_scroll_wall_s",
+        "comment_require_complete",
+        "comment_auto_coverage_target_max",
+        "allow_partial_comments",
+        "comment_no_growth_break",
+        "min_comment_scan_passes",
+        "comment_max_snapshots",
+        "comment_stop_if_no_new",
+        "comment_no_new_threshold"
+      ],
+      "required": [
+        "entity"
+      ]
+    },
+    "extract_screen_data": {
+      "description": "Smart extraction: tries hierarchy → OCR → AI Vision (auto fallback). save_as: variable name. strategy: 'auto' (fallback chain), 'hierarchy', 'ocr', 'ai'. schema: expected output fields (used to validate extraction completeness).",
+      "optional": [
+        "schema",
+        "strategy",
+        "language"
+      ],
+      "required": [
+        "save_as"
+      ]
+    },
+    "extract_text_ai": {
+      "description": "Extract structured data from screenshot using AI Vision (OpenAI/Gemini). save_as: variable name. prompt: extraction instruction for the AI. provider: 'openai' or 'gemini'. format: 'json' (parsed dict) or 'text' (raw string). Requires OPENAI_API_KEY or GEMINI_API_KEY env var.",
+      "optional": [
+        "provider",
+        "format",
+        "model",
+        "region"
+      ],
+      "required": [
+        "save_as",
+        "prompt"
+      ]
+    },
+    "extract_text_hierarchy": {
+      "description": "Extract text from UI Hierarchy XML (free, fastest, native views only). save_as: variable name to store result. format: 'text' (plain) or 'json' (structured with bounds/class/resource_id). filter_class: list of Android widget classes to include (null = all).",
+      "optional": [
+        "filter_class",
+        "exclude_empty",
+        "format"
+      ],
+      "required": [
+        "save_as"
+      ]
+    },
+    "extract_text_ocr": {
+      "description": "Extract text from screenshot using Tesseract OCR. Works on WebView, Canvas, images — anything visible on screen. save_as: variable name. region: {x1, y1, x2, y2} as ratios 0-1 to crop before OCR. language: Tesseract lang code (e.g. 'eng', 'vie+eng'). psm: Page Segmentation Mode (3=auto, 6=block, 7=line, 11=sparse).",
+      "optional": [
+        "region",
+        "language",
+        "psm",
+        "preprocess",
+        "scale_factor",
+        "confidence_threshold"
+      ],
+      "required": [
+        "save_as"
+      ]
+    },
+    "fill_form": {
+      "description": "Fill a named form recipe from an app automation profile.",
+      "optional": [
+        "profile",
+        "recipe",
+        "form",
+        "clear_first",
+        "implicit_wait"
+      ],
+      "required": []
+    },
+    "if_element": {
+      "description": "Rẽ nhánh theo sự tồn tại của element. selector hoặc by/value; chain/conditions hỗ trợ như tap_selector.",
+      "optional": [
+        "selector",
+        "by",
+        "value",
+        "timeout",
+        "else"
+      ],
+      "required": [
+        "then"
+      ],
+      "required_any": [
+        [
+          "selector",
+          "by"
+        ],
+        [
+          "selector",
+          "value"
+        ]
+      ]
+    },
+    "if_variable": {
+      "description": "Re nhánh theo giá trị của variable. name: tên variable (không cần ${...}). Điều kiện: equals | not_equals | contains | greater_than. Nếu không có điều kiện → branch theo truthy (var có giá trị). then: steps chạy khi đúng. else: steps chạy khi sai (optional).",
+      "optional": [
+        "equals",
+        "not_equals",
+        "contains",
+        "greater_than",
+        "else"
+      ],
+      "required": [
+        "name",
+        "then"
+      ]
+    },
+    "input_selector": {
+      "description": "Tìm input field theo selector, xóa nội dung cũ (clear_first=true mặc định), rồi gõ text. implicit_wait: Tenacity retry-until-visible (default 10s/0.5s poll). by: resource-id (ưu tiên) | text | xpath.",
+      "optional": [
+        "selector",
+        "by",
+        "value",
+        "clear_first",
+        "implicit_wait"
+      ],
+      "required": [
+        "text"
+      ],
+      "required_any": [
+        [
+          "selector",
+          "by"
+        ],
+        [
+          "selector",
+          "value"
+        ]
+      ]
+    },
+    "input_text": {
+      "description": "Gõ text vào element đang focused. via: u2. clear_first=true để xóa nội dung cũ trước khi gõ. Ưu tiên dùng input_selector khi có selector.",
+      "optional": [
+        "via",
+        "clear_first"
+      ],
+      "required": [
+        "text"
+      ]
+    },
+    "install_apk": {
+      "description": "Install APK on the device. url accepts http(s), absolute local path, or ${VARIABLE}. timeout defaults to 90s.",
+      "fields": {
+        "timeout": {
+          "default": 90,
+          "label_key": "appLifecycle.installApkTimeoutLabel",
+          "max": 600,
+          "min": 10,
+          "type": "number"
+        },
+        "url": {
+          "label_key": "appLifecycle.installApkUrlLabel",
+          "placeholder_key": "appLifecycle.installApkUrlPlaceholder",
+          "type": "string"
+        }
+      },
+      "optional": [
+        "timeout"
+      ],
+      "required": [
+        "url"
+      ]
+    },
+    "key": {
+      "description": "Phím: enter, back, home, ...",
+      "fields": {
+        "key": {
+          "label_key": "stepFields.key",
+          "type": "string"
+        }
+      },
+      "optional": [],
+      "required": [
+        "key"
+      ]
+    },
+    "launch_app": {
+      "description": "Open app by package. Optional activity/component, stop_before, use_monkey. wait_after (default 2s).",
+      "fields": {
+        "activity": {
+          "label_key": "appLifecycle.activityLabel",
+          "placeholder_key": "appLifecycle.activityPlaceholder",
+          "type": "string"
+        },
+        "component": {
+          "type": "string"
+        },
+        "package": {
+          "label_key": "appLifecycle.packageLabel",
+          "type": "string"
+        },
+        "stop_before": {
+          "default": false,
+          "label_key": "appLifecycle.stopBefore",
+          "type": "boolean"
+        },
+        "use_monkey": {
+          "default": false,
+          "label_key": "appLifecycle.useMonkey",
+          "type": "boolean"
+        },
+        "wait_after": {
+          "default": 2,
+          "label_key": "appLifecycle.waitAfterLaunch",
+          "max": 30,
+          "min": 0,
+          "type": "number"
+        }
+      },
+      "optional": [
+        "wait_after",
+        "activity",
+        "component",
+        "stop_before",
+        "use_monkey",
+        "package_fallbacks",
+        "adb_fallback"
+      ],
+      "required": [
+        "package"
+      ]
+    },
+    "lease_connection_candidate": {
+      "description": "Atomically lease the highest-ranked ready connection candidate for the bound account; request discovery when none is ready.",
+      "optional": [
+        "platform"
+      ],
+      "required": []
+    },
+    "lease_source_target": {
+      "description": "Atomically reserve the next unused device target for the bound account and action.",
+      "optional": [
+        "platform",
+        "entity_type",
+        "action_type",
+        "action",
+        "statuses",
+        "keywords",
+        "search"
+      ],
+      "required": []
+    },
+    "login_if_needed": {
+      "description": "Profile-driven login. Detects logged-in state first, fills login_recipe fields from account/scenario/variables/secret references, then submits. Optional login_recipe.post_submit_actions can navigate intermediate 2FA screens before post_submit_fields such as account.totp_code are entered.",
+      "optional": [
+        "profile",
+        "clear_first",
+        "implicit_wait"
+      ],
+      "required": []
+    },
+    "long_tap_selector": {
+      "description": "Long press element tìm theo selector. duration_ms mặc định 800ms. implicit_wait: Tenacity retry-until-visible (default 10s/0.5s poll).",
+      "optional": [
+        "selector",
+        "by",
+        "value",
+        "duration_ms",
+        "implicit_wait"
+      ],
+      "required": [],
+      "required_any": [
+        [
+          "selector",
+          "by"
+        ],
+        [
+          "selector",
+          "value"
+        ]
+      ]
+    },
+    "loop": {
+      "description": "Lặp lại steps theo count hoặc while-condition. count: số lần lặp cố định (chạy đúng N lần, không bị max_iterations cắt). duration_seconds: nếu > 0, dừng loop khi hết thời lượng kể cả chưa hết count. while: condition dict (element_exists | variable_equals) — lặp khi condition đúng. max_iterations: giới hạn an toàn chỉ khi dùng while (không có count, default 100). loop_var: tên biến runtime nhận index hiện tại để nested loop không ghi đè nhau. stall_after: dừng sau N vòng liên tiếp không thao tác được gì (0 = tắt). idle_delay_seconds: chờ bấy nhiêu giây sau một vòng không thao tác (0–300). ⚠ Vòng lặp dài có thể dừng sớm với reason_code=loop_history_limit khi run hết ngân sách event history — các vòng đã xong vẫn được giữ. Khác 'repeat': 'loop' kiểm tra ctx['_break'] sau mỗi vòng — cho phép step 'extract' với stop_if_no_new=True dừng sớm, hoặc step 'break_if' dừng khi đủ điều kiện. ${__LOOP_INDEX__} = chỉ số vòng lặp hiện tại (0-based).",
+      "fields": {
+        "duration_seconds": {
+          "label_key": "controlFlow.loopDurationSecondsLabel",
+          "min": 0,
+          "type": "number"
+        },
+        "idle_delay_seconds": {
+          "advanced": true,
+          "default": 0,
+          "label_key": "controlFlow.loopIdleDelayLabel",
+          "max": 300,
+          "min": 0,
+          "type": "number"
+        },
+        "loop_var": {
+          "advanced": true,
+          "label_key": "controlFlow.loopVarLabel",
+          "type": "string"
+        },
+        "stall_after": {
+          "default": 0,
+          "label_key": "controlFlow.loopStallAfterLabel",
+          "min": 0,
+          "type": "number"
+        }
+      },
+      "optional": [
+        "count",
+        "while",
+        "max_iterations",
+        "loop_var",
+        "duration_seconds",
+        "stall_after",
+        "idle_delay_seconds"
+      ],
+      "required": [
+        "steps"
+      ]
+    },
+    "open_url": {
+      "description": "Mở URL. package (optional): e.g. com.android.chrome để ép mở bằng app đó.",
+      "fields": {
+        "package": {
+          "label_key": "stepFields.browserPackage",
+          "type": "string"
+        },
+        "url": {
+          "pattern": "^https?://",
+          "type": "string"
+        }
+      },
+      "optional": [
+        "package"
+      ],
+      "required": [
+        "url"
+      ]
+    },
+    "pinch": {
+      "description": "Pinch/zoom gesture. scale>1 = zoom in (spread), scale<1 = zoom out (pinch). Center: cx/cy (absolute) or rx/ry (relative, default 0.5/0.5). duration_ms (default 400). Requires TouchAccessibilityService.",
+      "optional": [
+        "cx",
+        "cy",
+        "rx",
+        "ry",
+        "duration_ms"
+      ],
+      "required": [
+        "scale"
+      ]
+    },
+    "platform_session_gate": {
+      "description": "Account-scoped platform session gate. preflight reuses only a matching trusted session or requests login; confirm establishes provenance after this run logged in.",
+      "optional": [
+        "phase",
+        "timeout",
+        "poll_interval"
+      ],
+      "required": []
+    },
+    "pull_file": {
+      "description": "Pull device file to local path (requires agent-boot u2 session).",
+      "optional": [],
+      "required": [
+        "local_path",
+        "remote_path"
+      ]
+    },
+    "push_file": {
+      "description": "Push local file to device path (requires agent-boot u2 session).",
+      "optional": [
+        "mode"
+      ],
+      "required": [
+        "local_path",
+        "remote_path"
+      ]
+    },
+    "random_pick": {
+      "description": "Chọn ngẫu nhiên 1 nhánh để thực thi (weighted random). branches: list các nhánh, mỗi nhánh có steps (required) và weight (optional, mặc định 1). Weight cao hơn = xác suất được chọn cao hơn. Ví dụ: [{\"weight\": 3, \"steps\": [...]}, {\"weight\": 1, \"steps\": [...]}].",
+      "optional": [],
+      "required": [
+        "branches"
+      ]
+    },
+    "repeat": {
+      "description": "Lặp lại danh sách steps con N lần. count: số lần lặp (int). delay_between: thời gian chờ giữa các lần lặp (seconds, mặc định 0). ${__LOOP_INDEX__} được set tự động (0-based) trong mỗi lần lặp.",
+      "optional": [
+        "delay_between"
+      ],
+      "required": [
+        "count",
+        "steps"
+      ]
+    },
+    "repeat_until": {
+      "description": "Lặp lại steps cho đến khi điều kiện thỏa mãn (dừng). max_iterations: giới hạn an toàn (mặc định 100). condition keys: element_exists | element_not_exists | variable_equals. Ví dụ: {\"element_exists\": {\"by\": \"text\", \"value\": \"End of feed\"}}.",
+      "optional": [
+        "max_iterations"
+      ],
+      "required": [
+        "condition",
+        "steps"
+      ]
+    },
+    "run_scenario": {
+      "description": "Gọi một sub-scenario khác (flow composition). scenario_id: UUID của scenario trong cùng campaign. scenario_name: tên scenario (tìm trong campaign trước, rồi trong template library). variables: dict override variables cho sub-scenario (optional). Yêu cầu một trong hai: scenario_id hoặc scenario_name. Circular reference và max depth (10) được tự động bảo vệ.",
+      "optional": [
+        "scenario_id",
+        "scenario_name",
+        "variables"
+      ],
+      "required": [],
+      "required_any": [
+        [
+          "scenario_id",
+          "scenario_name"
+        ]
+      ]
+    },
+    "save_extraction": {
+      "description": "Save extracted data to content database with deduplication (DF-010). data_var: name of runtime variable containing the data (from extract_text_* or set_variable). collection: name of content collection (default: 'default'). dedupe_field: field in data to use for dedup hash (e.g. 'content'). parent_id_var (alias: save_parent_id_var): link children rows to parent hash from context. item_level: hierarchy level (0 post, 1 comment/reply). Data is saved to content_items table with SHA256 hash-based dedup.",
+      "optional": [
+        "collection",
+        "platform",
+        "content_type",
+        "dedupe_field",
+        "tags",
+        "parent_id_var",
+        "save_parent_id_var",
+        "item_level",
+        "dedup_action",
+        "save_batch_size"
+      ],
+      "required": [
+        "data_var"
+      ]
+    },
+    "scroll_down": {
+      "description": "Vuốt xuống N lần (mặc định 1). start_x_ratio (0–1, mặc định 0.5): neo ngang — dùng ~0.15–0.25 để tránh vuốt xuyên ảnh full-width ở giữa feed Facebook. start_y_ratio/end_y_ratio/duration_ms/pause_seconds: tinh chỉnh gesture.",
+      "optional": [
+        "repeats",
+        "start_x_ratio",
+        "start_y_ratio",
+        "end_y_ratio",
+        "duration_ms",
+        "pause_seconds",
+        "smart_scroll"
+      ],
+      "required": []
+    },
+    "scroll_to": {
+      "description": "Scroll (swipe) cho đến khi element xuất hiện. direction: down (mặc định) | up. max_swipes mặc định 5.",
+      "optional": [
+        "selector",
+        "by",
+        "value",
+        "direction",
+        "max_swipes",
+        "scroll_duration_s",
+        "scroll_settle_s",
+        "scroll_step_ratio",
+        "scroll_to_timeout_s",
+        "timeout"
+      ],
+      "required": [],
+      "required_any": [
+        [
+          "selector",
+          "by"
+        ],
+        [
+          "selector",
+          "value"
+        ]
+      ]
+    },
+    "set_clipboard": {
+      "description": "Set device clipboard text. Uses STFService → uiautomator2 → ADB broadcast fallback. After this step, use input_text or key(paste) to paste clipboard content.",
+      "optional": [],
+      "required": [
+        "text"
+      ]
+    },
+    "set_variable": {
+      "description": "Đặt hoặc cập nhật một runtime variable để dùng trong các step sau với ${NAME}. value: giá trị cụ thể (hỗ trợ ${VAR} interpolation). from_list: chọn 1 phần tử từ danh sách; mặc định chọn ngẫu nhiên. from_list_index: nếu có, chọn phần tử theo index sau khi resolve (ví dụ ${_loop_iter}). increment: tăng counter thêm N (bắt đầu từ 0 nếu chưa có). Chỉ dùng 1 trong 3 tùy chọn trên; 'value' là mặc định.",
+      "optional": [
+        "value",
+        "from_list",
+        "from_list_index",
+        "increment"
+      ],
+      "required": [
+        "name"
+      ]
+    },
+    "social_apply_comment_filter": {
+      "description": "Apply the comment sheet filter. comment_filter: most_relevant | newest | all_comments, or none to skip.",
+      "optional": [
+        "platform",
+        "switch_to_all_comments",
+        "comment_filter",
+        "comment_filter_settle_s",
+        "comment_filter_step_pause_s",
+        "comment_filter_post_select_s"
+      ],
+      "required": []
+    },
+    "social_connect_visible_people": {
+      "description": "Agent-boot flow: open the platform friend suggestions, scan visible Add Friend rows, require common-context score, send verified requests in a bounded batch, and ledger each request.",
+      "optional": [
+        "platform",
+        "min_score",
+        "require_common",
+        "common_keywords",
+        "forbidden_keywords",
+        "timeout",
+        "verify_wait_s",
+        "save_as",
+        "account_action_id",
+        "open_surface",
+        "target_count",
+        "batch_size",
+        "max_scrolls",
+        "no_more_common_limit",
+        "dry_run",
+        "scroll_wait_s",
+        "surface_wait_s",
+        "stop_on_unverified"
+      ],
+      "required": []
+    },
+    "social_find_comment_button": {
+      "description": "Find the visible comment button for the current post and cache its target without tapping. Use before social_tap_comment_target.",
+      "optional": [
+        "platform",
+        "timeout",
+        "poll",
+        "dedupe_field",
+        "ignore_error",
+        "switch_to_all_comments",
+        "comment_filter"
+      ],
+      "required": []
+    },
+    "social_open_author_from_post_match": {
+      "description": "Platform adapter flow: open the author profile from a previously matched post action, verify profile suitability, and save target proof.",
+      "optional": [
+        "platform",
+        "source_var",
+        "action_index",
+        "search",
+        "display_name",
+        "required_keywords",
+        "optional_keywords",
+        "forbidden_keywords",
+        "required_keywords_var",
+        "optional_keywords_var",
+        "forbidden_keywords_var",
+        "min_score",
+        "timeout",
+        "comment_wait_s",
+        "profile_wait_s",
+        "max_commenters",
+        "save_as",
+        "save_success_as",
+        "save_opened_as",
+        "save_sheet_opened_as"
+      ],
+      "required": []
+    },
+    "social_open_commenter_from_post_match": {
+      "description": "Platform adapter flow: open comments for a previously matched feed post, open a commenter profile, verify suitability, and save target proof.",
+      "optional": [
+        "platform",
+        "source_var",
+        "action_index",
+        "search",
+        "display_name",
+        "required_keywords",
+        "optional_keywords",
+        "forbidden_keywords",
+        "required_keywords_var",
+        "optional_keywords_var",
+        "forbidden_keywords_var",
+        "min_score",
+        "timeout",
+        "comment_wait_s",
+        "profile_wait_s",
+        "max_commenters",
+        "save_as",
+        "save_success_as",
+        "save_opened_as",
+        "save_sheet_opened_as"
+      ],
+      "required": []
+    },
+    "social_open_comments": {
+      "description": "Atomic step: tìm + tap nút 'Bình luận' topmost trong feed, tự set parent context cho extract entity=comments. platform: mặc định facebook. then: steps chạy khi tap thành công. else: chạy khi không tap được. comment_filter: most_relevant | newest | all_comments (hoặc none để giữ mặc định của app). Legacy switch_to_all_comments=false tắt đổi filter; true (default) = all_comments.",
+      "optional": [
+        "platform",
+        "timeout",
+        "poll",
+        "dedupe_field",
+        "ignore_error",
+        "switch_to_all_comments",
+        "comment_filter",
+        "post_tap_wait_s",
+        "comment_filter_settle_s",
+        "require_post_before_comment",
+        "pre_scroll",
+        "pre_scroll_distance",
+        "pre_scroll_duration_ms",
+        "pre_scroll_x_ratio",
+        "pre_scroll_start_y_ratio",
+        "pre_scroll_end_y_ratio",
+        "pre_scroll_pause_s",
+        "then",
+        "else"
+      ],
+      "required": []
+    },
+    "social_scan_posts_interact": {
+      "description": "Agent-boot flow: scan visible feed/group posts, match configured keywords, then optionally like and comment on matched posts.",
+      "optional": [
+        "platform",
+        "keywords",
+        "match_mode",
+        "comment_text",
+        "target_count",
+        "batch_size",
+        "max_scrolls",
+        "timeout",
+        "scroll_x_ratio",
+        "scroll_y1_ratio",
+        "scroll_y2_ratio",
+        "scroll_duration_s",
+        "scroll_wait_s",
+        "comment_wait_s",
+        "submit_wait_s",
+        "require_comment",
+        "like_post",
+        "save_as"
+      ],
+      "required": []
+    },
+    "social_select_target": {
+      "description": "Agent-boot resolver: score search results for the platform, open one verified target, and save the target proof. target_type: 'person' (default, uses display_name/profile_wait_s) or 'post' (uses display_text/detail_wait_s/current_detail). platform defaults to facebook.",
+      "optional": [
+        "platform",
+        "target_type",
+        "search",
+        "display_name",
+        "display_text",
+        "row_text",
+        "required_keywords",
+        "optional_keywords",
+        "forbidden_keywords",
+        "min_score",
+        "require_unique",
+        "timeout",
+        "profile_wait_s",
+        "detail_wait_s",
+        "current_detail",
+        "save_as",
+        "save_success_as",
+        "skip_candidate_on_not_verified",
+        "candidate_entity_id",
+        "candidate_lease_token",
+        "skip_candidate_defer_hours"
+      ],
+      "required": []
+    },
+    "social_sync_connections": {
+      "description": "Read how many connections the account has from the screen it is on, publish ACCOUNT_FRIEND_COUNT/ACCOUNT_STAGE for branching, and record the observation so growth is measurable.",
+      "optional": [
+        "platform",
+        "metric",
+        "timeout",
+        "persist",
+        "save_as"
+      ],
+      "required": []
+    },
+    "social_tap_comment_target": {
+      "description": "Tap the cached comment target from social_find_comment_button, verify the comment sheet opened, and set parent context for following entity=comments extraction.",
+      "optional": [
+        "platform",
+        "ignore_error",
+        "post_tap_wait_s"
+      ],
+      "required": []
+    },
+    "stop_app": {
+      "description": "Force-stop app (am force-stop / u2 stopPackage).",
+      "fields": {
+        "package": {
+          "label_key": "appLifecycle.packageLabel",
+          "type": "string"
+        }
+      },
+      "optional": [],
+      "required": [
+        "package"
+      ]
+    },
+    "swipe_ratio": {
+      "description": "Swipe giữa hai điểm tỷ lệ (0–1). duration_ms mặc định 300.",
+      "optional": [
+        "duration_ms"
+      ],
+      "required": [
+        "x1",
+        "y1",
+        "x2",
+        "y2"
+      ]
+    },
+    "take_screenshot": {
+      "description": "Capture device screenshot. Result stored as base64 in step_result['screenshot']. Optional save_path: write JPEG to disk at that absolute path.",
+      "optional": [
+        "save_path"
+      ],
+      "required": []
+    },
+    "tap": {
+      "description": "⚡ Unified tap step (recorded by control-record-view). selector: {by, value} — uiautomator2 element find. fallback: {rx, ry} — ratio tap if selector fails. screen: {package, hash, texts, screenshot, element_image, screenshot_anchor} — context captured at record time. screen.screenshot_anchor: {image: base64, region: {rx, ry, rw, rh}} — ROI crop around tap point for faster image matching (optional). implicit_wait: number (timeout secs) or {timeout, poll} — Tenacity retry-until-visible before tapping (default 10s/0.5s poll). Executor: retry-find-element → image match (ROI→full) → fallback ratio → ok.",
+      "optional": [
+        "selector",
+        "fallback",
+        "screen",
+        "timeout",
+        "implicit_wait"
+      ],
+      "required": []
+    },
+    "tap_image": {
+      "description": "Tap vào vị trí khớp ảnh mẫu trên màn hình. template_key: khoá ảnh trong object storage (cắt từ màn hình lúc thiết kế). threshold: ngưỡng khớp 0–1 (mặc định 0.8; khớp thật thường 0.96–1.00). scale: tỷ lệ thu nhỏ khi tìm (mặc định 0.25 — nhanh hơn ~70 lần mà không giảm độ chính xác). template_screen_w/h: kích thước màn lúc cắt, để hiệu chỉnh khi máy khác độ phân giải. Khớp chạy trên agent-boot; mỗi lần thử tốn 1 ảnh chụp + ~11ms so khớp.",
+      "optional": [
+        "threshold",
+        "scale",
+        "template_screen_w",
+        "template_screen_h",
+        "timeout",
+        "poll"
+      ],
+      "required": [
+        "template_key"
+      ]
+    },
+    "tap_position": {
+      "description": "Tap tại vị trí logic: top_center | middle_center | bottom_center | search_bar.",
+      "fields": {
+        "pos": {
+          "label_key": "stepFields.position",
+          "type": "enum",
+          "values": [
+            {
+              "label_key": "stepFields.posTopCenter",
+              "value": "top_center"
+            },
+            {
+              "label_key": "stepFields.posMiddleCenter",
+              "value": "middle_center"
+            },
+            {
+              "label_key": "stepFields.posBottomCenter",
+              "value": "bottom_center"
+            },
+            {
+              "label_key": "stepFields.posSearchBar",
+              "value": "search_bar"
+            }
+          ]
+        }
+      },
+      "optional": [],
+      "required": [
+        "pos"
+      ]
+    },
+    "tap_ratio": {
+      "description": "Tap tại tỷ lệ màn hình (0–1). Fallback khi không có selector.",
+      "optional": [],
+      "required": [
+        "x",
+        "y"
+      ]
+    },
+    "tap_selector": {
+      "description": "Tap theo uiautomator2 selector. selector: {by, value, conditions?, instance?, chain?} (canonical) hoặc legacy by/value. conditions: AND fields (className, resourceId, clickable, …). chain: child | sibling | relative | child_by_text | child_by_description. fallback / fallback_rx/ry: tọa độ ratio khi không tìm thấy element.",
+      "optional": [
+        "selector",
+        "by",
+        "value",
+        "fallback",
+        "fallback_rx",
+        "fallback_ry",
+        "timeout",
+        "implicit_wait",
+        "element_image"
+      ],
+      "required": [],
+      "required_any": [
+        [
+          "selector",
+          "by"
+        ],
+        [
+          "selector",
+          "value"
+        ]
+      ]
+    },
+    "tap_xml_match": {
+      "description": "Dump UI XML fresh, find first node by attr contains/equals, then tap center from bounds. Useful for Facebook result rows whose u2 selector surface is unstable.",
+      "optional": [
+        "attr",
+        "by",
+        "contains",
+        "equals",
+        "value",
+        "clickable",
+        "timeout",
+        "poll"
+      ],
+      "required": [],
+      "required_any": [
+        [
+          "contains",
+          "equals",
+          "value"
+        ]
+      ]
+    },
+    "use_source_pool": {
+      "description": "Khai báo nguồn dữ liệu dùng cho campaign dispatch. Mặc định dùng external_entities facebook/group đã cào; mỗi device nhận một nguồn qua biến TARGET_* và alias theo output_prefix.",
+      "optional": [
+        "platform",
+        "entity_type",
+        "search",
+        "output_prefix",
+        "statuses",
+        "allocation_policy"
+      ],
+      "required": []
+    },
+    "verify_screen": {
+      "description": "Visual Anchoring: so sánh SSIM giữa ảnh chụp lúc record và màn hình hiện tại. template_key: object-storage key của ảnh mẫu đã cắt/upload; screenshot: legacy base64 JPEG. ssim_threshold (0-1, default 0.75). timeout: chờ tối đa N giây cho màn hình khớp (default 8s). poll: tần suất kiểm tra (default 0.5s). Fail nếu SSIM dưới threshold.",
+      "optional": [
+        "template_key",
+        "screenshot",
+        "template_screen_w",
+        "template_screen_h",
+        "ssim_threshold",
+        "platform",
+        "timeout",
+        "poll"
+      ],
+      "required_any": [
+        [
+          "template_key",
+          "screenshot"
+        ]
+      ]
+    },
+    "wait": {
+      "description": "Tạm dừng cố định (giây). Ưu tiên dùng wait_element thay thế.",
+      "fields": {
+        "seconds": {
+          "default": 1,
+          "label_key": "stepFields.durationSeconds",
+          "min": 0,
+          "type": "number"
+        }
+      },
+      "optional": [
+        "seconds"
+      ],
+      "required": []
+    },
+    "wait_app": {
+      "description": "Wait until app is in foreground (default timeout 20s).",
+      "fields": {
+        "front": {
+          "default": true,
+          "label_key": "appLifecycle.waitForeground",
+          "type": "boolean"
+        },
+        "package": {
+          "label_key": "appLifecycle.packageLabel",
+          "type": "string"
+        },
+        "timeout": {
+          "default": 20,
+          "label_key": "appLifecycle.timeoutSeconds",
+          "max": 120,
+          "min": 0.1,
+          "type": "number"
+        }
+      },
+      "optional": [
+        "timeout",
+        "front"
+      ],
+      "required": [
+        "package"
+      ]
+    },
+    "wait_element": {
+      "description": "⚡ PREFERRED thay cho 'wait N giây'. Poll liên tục cho đến khi element xuất hiện (mặc định timeout=10s). Dùng sau launch_app, open_url, hay bất kỳ bước nào khiến màn hình thay đổi. by: text | resource-id | xpath.",
+      "optional": [
+        "selector",
+        "by",
+        "value",
+        "timeout",
+        "poll"
+      ],
+      "required": [],
+      "required_any": [
+        [
+          "selector",
+          "by"
+        ],
+        [
+          "selector",
+          "value"
+        ]
+      ]
+    },
+    "wait_stable": {
+      "description": "Chờ UI ngừng thay đổi (animation/transition xong). timeout: tối đa N giây chờ (mặc định 5.0). stable_duration: UI phải đứng yên bao lâu (mặc định 0.4s). Dùng sau swipe, mở tab mới, hay bất kỳ animation nào trước khi tap.",
+      "optional": [
+        "timeout",
+        "stable_duration"
+      ],
+      "required": []
+    }
+  }
+}

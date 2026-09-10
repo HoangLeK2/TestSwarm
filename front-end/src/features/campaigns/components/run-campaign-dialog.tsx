@@ -50,6 +50,11 @@ import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import type { CampaignDeviceOut, ScenarioOut } from '../types';
 import type { FlowStep } from './scenario-steps/types';
 import { useConfirm } from '@/providers/modal-provider';
+import {
+  deviceDisplayName,
+  deviceSecondarySerial,
+  shortDeviceSerial
+} from '@/features/devices/lib/device-display-name';
 
 interface Props {
   open: boolean;
@@ -65,6 +70,10 @@ interface Props {
 
 const makePairKey = (scenarioId: string, deviceId: string) =>
   `${scenarioId}::${deviceId}`;
+
+function deviceLabel(device: CampaignDeviceOut) {
+  return deviceDisplayName(device);
+}
 
 type CampaignCapabilityPreflightState = {
   ok: boolean;
@@ -674,9 +683,17 @@ export function RunCampaignDialog({
                             size={12}
                             className='shrink-0 text-muted-foreground'
                           />
-                          <span className='min-w-0 truncate font-mono'>
-                            {device.serial}
+                          <span className='min-w-0 truncate font-medium'>
+                            {deviceLabel(device)}
                           </span>
+                          {deviceSecondarySerial(device) ? (
+                            <span
+                              className='ml-auto truncate font-mono text-[11px] text-muted-foreground'
+                              title={deviceSecondarySerial(device)}
+                            >
+                              {shortDeviceSerial(deviceSecondarySerial(device))}
+                            </span>
+                          ) : null}
                         </button>
                       </div>
                     );
@@ -694,7 +711,9 @@ export function RunCampaignDialog({
                     variableQuery.isLoading || campaignDetailQuery.isFetching
                   }
                   jsonError={currentJsonError}
-                  deviceLabel={activeDevice?.serial}
+                  deviceLabel={
+                    activeDevice ? deviceLabel(activeDevice) : undefined
+                  }
                   baseVariables={globalVariablesPreview}
                   globalVariablesPreview={globalVariablesPreview}
                   className='flex min-h-0 min-w-0 flex-1 flex-col'

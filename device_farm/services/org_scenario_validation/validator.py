@@ -12,11 +12,13 @@ from db.models.enums import ScenarioKind
 from db.models.org_scenario import OrgScenario
 from services.org_scenario_validation.checks import (
     build_org_ref_cache,
+    check_content_interaction_verify,
     check_lint_warnings,
     check_on_error_targets,
     check_org_graph,
     check_org_scenario_references,
     check_retry_config,
+    check_step_fields,
     check_variables,
 )
 from services.org_scenario_validation.step_index import OrgStepIndex
@@ -128,6 +130,8 @@ class OrgScenarioValidator:
             check_variables(index, scenario_vars, self.campaign_variables, result)
             check_on_error_targets(index, result)
             check_retry_config(index, result)
+            check_step_fields(index, result)
+            check_content_interaction_verify(index, result)
 
             ref_cache = await build_org_ref_cache(
                 self.db,

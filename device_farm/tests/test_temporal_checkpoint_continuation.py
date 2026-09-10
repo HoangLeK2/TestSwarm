@@ -13,12 +13,25 @@ from __future__ import annotations
 
 import pytest
 
-from temporal.shared import DeviceActionBatchResult, StepsInput, TASK_QUEUE_NAME
+from temporal.shared import (
+    CONTROL_TASK_QUEUE_NAME,
+    DeviceActionBatchResult,
+    StepsInput,
+    TASK_QUEUE_NAME,
+)
 from temporal.workflows import ScenarioStepsWorkflow
 
 
 def _steps(n: int) -> list[dict]:
     return [{"type": "wait", "seconds": 0} for _ in range(n)]
+
+
+def _activities_with_telemetry(temporal_activity, *activities):
+    @temporal_activity.defn(name="emit_execution_events_batch")
+    async def mock_emit_events_batch(_inp):
+        return None
+
+    return [*activities, mock_emit_events_batch]
 
 
 @pytest.mark.asyncio
@@ -75,11 +88,19 @@ async def test_indices_stay_absolute_across_a_checkpointed_continuation():
                 env.client,
                 task_queue=TASK_QUEUE_NAME,
                 workflows=[ScenarioStepsWorkflow],
-                activities=[mock_batch, mock_checkpoint],
+                activities=_activities_with_telemetry(
+                    temporal_activity,
+                    mock_batch,
+                    mock_checkpoint,
+                ),
                 # Unsandboxed so the lowered threshold below actually reaches the
                 # workflow: the sandbox re-imports the module, which is why
                 # patching it from the host process has no effect.
                 workflow_runner=UnsandboxedWorkflowRunner(),
+            ), TemporalWorker(
+                env.client,
+                task_queue=CONTROL_TASK_QUEUE_NAME,
+                activities=_activities_with_telemetry(temporal_activity),
             ):
                 await env.client.execute_workflow(
                     ScenarioStepsWorkflow.run,

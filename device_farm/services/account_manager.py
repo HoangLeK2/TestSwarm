@@ -1,10 +1,11 @@
 """
-services/account_manager.py — Account usage tracking and cooldown management.
+services/account_manager.py — Account usage tracking and rest windows.
 
 Usage lifecycle:
     start_account_usage(account_id)  → marks last_used_at = now
-    end_account_usage(account_id, duration_minutes)  → accumulates usage, triggers cooldown if limit hit
-    check_and_reset_cooldowns()  → background task: flip expired cooldowns back to active
+    end_account_usage(account_id, duration_minutes)  → accumulates usage; sets
+        cooldown_until when the daily limit is hit (the account stays `active`;
+        pickers gate on cooldown_until, so no expiry job is needed)
     reset_daily_usage()  → background task (midnight): zero usage_today_minutes
 """
 from __future__ import annotations
@@ -16,7 +17,6 @@ from datetime import datetime, timedelta, timezone
 from db.database import AsyncSessionLocal, activity_session
 from db.crud.account import get_account, update_account
 from db.models.enums import AccountEventType, AccountState
-from services.account_state import AccountStateService
 from services.account_event_recorder import get_account_event_recorder
 
 logger = logging.getLogger(__name__)
@@ -102,28 +102,20 @@ async def end_account_usage(
             "usage_reset_date": today,
         }
 
-        await update_account(db, account_id, reload=False, **kwargs)
-
         effective_state = getattr(account, "state", None) or account.status
         if new_today >= _DAILY_USAGE_LIMIT and effective_state == AccountState.ACTIVE.value:
-            try:
-                svc = AccountStateService()
-                await svc.transition(
-                    db,
-                    account_id,
-                    to=AccountState.COOLDOWN,
-                    reason="daily usage limit reached",
-                    ttl_seconds=int(_COOLDOWN_MINUTES * 60),
-                    actor="system",
-                )
-                entered_cooldown = True
-                logger.info(
-                    "Account %s entered cooldown (%.1f min used today)",
-                    account_id,
-                    new_today,
-                )
-            except Exception as exc:
-                logger.warning("account cooldown FSM transition failed: %s", exc)
+            # Resting is an eligibility gate, not a state: the account stays
+            # `active` and becomes pickable again once cooldown_until passes.
+            kwargs["cooldown_until"] = now + timedelta(minutes=_COOLDOWN_MINUTES)
+            entered_cooldown = True
+            logger.info(
+                "Account %s resting until %s (%.1f min used today)",
+                account_id,
+                kwargs["cooldown_until"],
+                new_today,
+            )
+
+        await update_account(db, account_id, reload=False, **kwargs)
 
         await db.commit()
 
@@ -157,23 +149,6 @@ async def end_account_usage(
                 n = await rec.flush(flush_db)
                 if n == 0:
                     break
-
-
-async def check_and_reset_cooldowns() -> int:
-    """
-    Background task: FSM transition cooldown → active when TTL elapsed.
-    Returns the number of accounts reset.
-    """
-    from services.account_state import process_expired_cooldowns
-
-    async with AsyncSessionLocal() as db:
-        reset_count = await process_expired_cooldowns(db)
-        await db.commit()
-        rec = get_account_event_recorder()
-        while rec._pending:
-            if await rec.flush(db) == 0:
-                break
-        return reset_count
 
 
 async def reset_daily_usage() -> int:

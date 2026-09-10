@@ -20,6 +20,23 @@ def test_junk_row_rejects_author_only() -> None:
     assert _is_junk_parsed_comment_row({"author": "Quang Đạo", "text": ""})
 
 
+def test_junk_row_rejects_comment_action_footer_body() -> None:
+    assert _is_junk_parsed_comment_row(
+        {
+            "author": "",
+            "text": "Thích. Nhấn đúp và giữ để bày tỏ cảm xúc. "
+            "Nút trả lời. Nhấn đúp để trả lời.",
+        }
+    )
+    assert _is_junk_parsed_comment_row(
+        {
+            "author": "Quang Huy",
+            "text": "Thích. Nhấn đúp và giữ để bày tỏ cảm xúc. "
+            "Nút trả lời. Nhấn đúp để trả lời.",
+        }
+    )
+
+
 def test_parse_comments_requires_comment_sheet() -> None:
     feed_xml = """<?xml version="1.0"?>
 <hierarchy>

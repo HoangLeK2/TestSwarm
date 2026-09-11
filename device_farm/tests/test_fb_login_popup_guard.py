@@ -197,15 +197,37 @@ def test_login_uses_existing_account_path_before_filling_fields(
     login_at = types.index("login_if_needed")
     before_login = login_steps[:login_at]
 
+    # Both labels are carried by the content-desc of a Bloks Button; the node
+    # holding the same string as *text* is clickable=false. Matching by text
+    # only ever worked because the two boxes overlap. Dumped from a V2352A.
     assert any(
         step.get("type") == "tap_selector"
-        and step.get("by") == "text"
+        and step.get("by") == "content-desc"
         and step.get("value") == "Tôi có trang cá nhân rồi"
         for step in before_login
     ), "Vietnamese Facebook existing-account path must be opened before locating username"
     assert any(
         step.get("type") == "tap_selector"
-        and step.get("by") == "text"
-        and step.get("value") == "I already have an account"
+        and step.get("by") == "content-desc"
+        and step.get("value") == "I already have a profile"
         for step in before_login
     ), "English Facebook existing-account path must be opened before locating username"
+
+
+def test_login_switches_app_language_to_vietnamese_before_logging_in(
+    login_steps: list[dict[str, Any]],
+) -> None:
+    """Every step after the login is written in Vietnamese labels."""
+    types = [step.get("type") for step in login_steps]
+    login_at = types.index("login_if_needed")
+    before_login = login_steps[:login_at]
+
+    assert any(
+        step.get("type") == "tap_selector"
+        and step.get("by") == "content-desc"
+        and step.get("value") == "Tiếng Việt"
+        for step in before_login
+    ), (
+        "a fresh install comes up in English (US); without the language switch "
+        "the post-login popup labels and 'Trang cá nhân' never match"
+    )

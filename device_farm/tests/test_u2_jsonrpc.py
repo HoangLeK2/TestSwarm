@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import base64
 import io
+import os
+import tempfile
 import threading
 import time
 import unittest
@@ -212,6 +214,35 @@ class TestRelaySession(unittest.TestCase):
         self.assertEqual(captured["path"], "/install")
         self.assertEqual(captured["body"], "url=https%3A%2F%2Fcdn.example%2Fa+b.apk")
         self.assertEqual(captured["content_type"], "application/x-www-form-urlencoded")
+
+    def test_post_files_remains_unsupported_over_relay(self):
+        class Relay:
+            async def u2_http(self, serial, method, path, body, content_type, timeout):
+                raise AssertionError("multipart files should not be sent over the relay stream")
+
+        import asyncio
+
+        loop = asyncio.new_event_loop()
+        thread = threading.Thread(target=loop.run_forever)
+        thread.start()
+        try:
+            session = _RelaySession("serial-1", Relay(), loop)
+            with self.assertRaises(NotImplementedError):
+                session.post(
+                    "http://127.0.0.1:7912/install",
+                    files={
+                        "file": (
+                            "facebook.apk",
+                            io.BytesIO(b"fake-apk"),
+                            "application/vnd.android.package-archive",
+                        )
+                    },
+                    timeout=90,
+                )
+        finally:
+            loop.call_soon_threadsafe(loop.stop)
+            thread.join(timeout=2)
+            loop.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -569,6 +600,25 @@ class TestInstall(unittest.TestCase):
             timeout=90.0,
         )
 
+    def test_install_uploads_local_apk_file(self):
+        self._mock_install_response(True)
+
+        with tempfile.NamedTemporaryFile(suffix=".apk") as apk:
+            apk.write(b"fake-apk")
+            apk.flush()
+
+            self.client.install(apk.name)
+
+        self.client._session.post.assert_called_once()
+        url, = self.client._session.post.call_args.args
+        kwargs = self.client._session.post.call_args.kwargs
+        filename, _file_obj, content_type = kwargs["files"]["file"]
+        self.assertEqual(url, "http://127.0.0.1:7912/install")
+        self.assertEqual(filename, os.path.basename(apk.name))
+        self.assertEqual(content_type, "application/vnd.android.package-archive")
+        self.assertNotIn("data", kwargs)
+        self.assertEqual(kwargs["timeout"], 90.0)
+
     def test_install_polls_atx_job_success(self):
         self._mock_install_response(9)
         status = Mock()
@@ -584,6 +634,28 @@ class TestInstall(unittest.TestCase):
             "http://127.0.0.1:7912/install/9",
             timeout=10.0,
         )
+
+    def test_install_task_returns_when_verify_package_is_present(self):
+        adb_shell = Mock(return_value="package:/data/app/com.facebook.katana/base.apk")
+        self.client = _make_client(port=7912, adb_shell=adb_shell)
+        self._mock_install_response(4)
+        status = Mock()
+        status.ok = True
+        status.status_code = 200
+        status.text = json.dumps({"status": "installing"})
+        status.json = Mock(return_value={"status": "installing"})
+        self.client._session.get = Mock(return_value=status)
+
+        self.client.install(
+            "https://cdn.example/facebook.apk",
+            verify_package="com.facebook.katana",
+        )
+
+        self.client._session.get.assert_called_once_with(
+            "http://127.0.0.1:7912/install/4",
+            timeout=10.0,
+        )
+        adb_shell.assert_called_once_with("pm path com.facebook.katana")
 
     def test_install_rejects_atx_job_failure(self):
         self._mock_install_response(1)

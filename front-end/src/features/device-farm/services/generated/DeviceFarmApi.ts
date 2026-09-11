@@ -408,6 +408,12 @@ export interface AccountOut {
   usage_today_minutes: number;
   /** Usage Reset Date */
   usage_reset_date: string | null;
+  /** Observed Display Name */
+  observed_display_name?: string | null;
+  /** Friends Count */
+  friends_count?: number | null;
+  /** Friends Observed At */
+  friends_observed_at?: string | null;
 }
 
 /** AccountStateTransitionBody */

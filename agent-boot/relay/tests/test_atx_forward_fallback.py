@@ -42,6 +42,32 @@ def _agent(*, lan_probe_interval_s: float = 0.0) -> RelayAgent:
     return agent
 
 
+def test_execute_command_runs_adb_reverse_tcp(monkeypatch):
+    agent = _agent()
+    agent._registry.on_adb_event("usb-serial", "device")
+    calls: list[tuple[tuple[str, ...], str | None, int]] = []
+
+    def fake_run(*args: str, serial: str | None = None, timeout: int = 30):
+        calls.append((args, serial, timeout))
+        return "8081\n", 0
+
+    monkeypatch.setattr(agent_mod, "_run", fake_run, raising=False)
+
+    result = agent_mod.loads(
+        agent._execute_command(
+            "msg-1",
+            "usb-serial",
+            agent_mod.dumps({"remote_port": 8081, "local_port": 8081}),
+            10,
+            agent_mod.CMD_REVERSE_TCP,
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["msg_id"] == "msg-1"
+    assert calls == [(("reverse", "tcp:8081", "tcp:8081"), "usb-serial", 10)]
+
+
 def test_atx_forward_host_prefers_explicit_override(monkeypatch):
     monkeypatch.setenv("ATX_FORWARD_HOST", "10.0.0.10")
     monkeypatch.setenv("ADB_SERVER_SOCKET", "tcp:host.docker.internal:5037")

@@ -290,8 +290,8 @@ def _prepare_account_row(
         "user_id": user_id,
         "org_id": org_id,
         "metadata": _metadata_from_import_row(row),
-        "status": "active",
-        "state": "active",
+        "status": AccountState.UNASSIGNED.value,
+        "state": AccountState.UNASSIGNED.value,
         "total_usage_minutes": 0.0,
         "usage_today_minutes": 0.0,
     }

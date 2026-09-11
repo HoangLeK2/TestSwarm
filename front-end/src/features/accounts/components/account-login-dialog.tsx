@@ -21,6 +21,7 @@ import {
   deviceFsmStateOf,
   isDeviceFsmDispatchable
 } from '@/features/devices/lib/device-fsm';
+import { DeviceControlEmbed } from '@/features/devices/components/device-control-embed';
 import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-scenario-templates';
 import { useAccountDevices } from '../hooks/use-accounts';
 import type { AccountOut } from '../services/api';
@@ -248,124 +249,154 @@ export function AccountLoginDialog({
           {t('trigger')}
         </Button>
       </DialogTrigger>
-      <DialogContent className='z-[1000] max-w-lg'>
+      {/* DialogContent's own `sm:max-w-lg` outranks a bare `max-w-*` here —
+          tailwind-merge only replaces a class at the same variant — so the
+          override has to carry the `sm:` prefix or the mirror stays boxed into
+          32rem next to a truncated device card. */}
+      <DialogContent className='z-[1000] w-[min(96vw,72rem)] sm:max-w-none'>
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
           <p className='text-sm text-muted-foreground'>
             {account.display_name || account.username} · {account.platform}
           </p>
         </DialogHeader>
-        <div className='space-y-4 pt-2'>
-          <div>
-            <p className='mb-2 text-xs font-medium'>{t('deviceSection')}</p>
-            {loading ? (
-              <p className='text-sm text-muted-foreground'>{t('loading')}</p>
-            ) : linkedDevices.length === 0 ? (
-              <p className='text-sm text-muted-foreground'>{t('noDevice')}</p>
+        <div className='grid gap-6 pt-2 sm:grid-cols-[minmax(0,340px)_minmax(0,1fr)]'>
+          {/* The step list says what the scenario decided; the mirror says what
+              the phone actually shows. A login is exactly where those two
+              diverge — a popup or a checkpoint reads as a green step. Keyed by
+              serial so switching phones restarts the stream on the new one. */}
+          <div className='min-w-0'>
+            {selected ? (
+              <DeviceControlEmbed
+                key={selected.device.serial}
+                initialSerial={selected.device.serial}
+                compact
+                hideStepMonitor
+                readOnlyPreview
+                forceStream
+              />
             ) : (
-              <ul className='max-h-40 space-y-1 overflow-y-auto rounded-lg border border-border/60 p-2'>
-                {linkedDevices.map(({ link, device }) => {
-                  const state = deviceFsmStateOf(device);
-                  return (
-                    <li key={link.id}>
-                      <button
-                        type='button'
-                        disabled={running}
-                        onClick={() => setSelectedDeviceId(device.id)}
-                        className={cn(
-                          'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-muted/50',
-                          selectedDeviceId === device.id && 'bg-muted'
-                        )}
-                      >
-                        <Smartphone
-                          size={14}
-                          className='shrink-0 text-muted-foreground'
-                        />
-                        <span className='min-w-0 flex-1'>
-                          <span className='block truncate text-sm font-medium'>
-                            {deviceLabel(device)}
-                            {link.is_primary ? ` · ${t('primary')}` : ''}
-                          </span>
-                          <span className='block truncate text-[10px] text-muted-foreground'>
-                            {device.serial} · {state}
-                          </span>
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
+              <div className='flex h-full min-h-[280px] items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 px-3 text-center'>
+                <p className='text-[11px] text-muted-foreground'>
+                  {t('pickDevice')}
+                </p>
+              </div>
             )}
           </div>
-
-          {lines.length > 0 || outcome ? (
-            <div className='space-y-1 rounded-lg border bg-muted/20 p-3'>
-              <p className='text-xs font-medium'>{t('progress')}</p>
-              <ul className='max-h-48 space-y-0.5 overflow-y-auto'>
-                {lines.map((line) => (
-                  <li
-                    key={`${line.index}-${line.type}`}
-                    className='flex items-start gap-1.5 text-[11px]'
-                  >
-                    {line.ok ? (
-                      <CheckCircle2
-                        size={12}
-                        className='mt-0.5 shrink-0 text-emerald-600'
-                      />
-                    ) : (
-                      <XCircle
-                        size={12}
-                        className='mt-0.5 shrink-0 text-destructive'
-                      />
-                    )}
-                    <span className='min-w-0 flex-1'>
-                      <span className='font-mono'>{line.type}</span>
-                      {line.message ? (
-                        <span className='text-muted-foreground'>
-                          {' '}
-                          — {line.message}
-                        </span>
-                      ) : null}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              {outcome ? (
-                <p
-                  className={cn(
-                    'pt-1 text-xs font-medium',
-                    outcome.ok ? 'text-emerald-600' : 'text-destructive'
-                  )}
-                >
-                  {outcome.ok
-                    ? t('runSuccess')
-                    : outcome.message || t('runFailed')}
-                </p>
-              ) : null}
-              {gateHint ? (
-                <p className='text-[11px] text-muted-foreground'>{gateHint}</p>
-              ) : null}
+          <div className='min-w-0 space-y-4'>
+            <div>
+              <p className='mb-2 text-xs font-medium'>{t('deviceSection')}</p>
+              {loading ? (
+                <p className='text-sm text-muted-foreground'>{t('loading')}</p>
+              ) : linkedDevices.length === 0 ? (
+                <p className='text-sm text-muted-foreground'>{t('noDevice')}</p>
+              ) : (
+                <ul className='max-h-40 space-y-1 overflow-y-auto rounded-lg border border-border/60 p-2'>
+                  {linkedDevices.map(({ link, device }) => {
+                    const state = deviceFsmStateOf(device);
+                    return (
+                      <li key={link.id}>
+                        <button
+                          type='button'
+                          disabled={running}
+                          onClick={() => setSelectedDeviceId(device.id)}
+                          className={cn(
+                            'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-muted/50',
+                            selectedDeviceId === device.id && 'bg-muted'
+                          )}
+                        >
+                          <Smartphone
+                            size={14}
+                            className='shrink-0 text-muted-foreground'
+                          />
+                          <span className='min-w-0 flex-1'>
+                            <span className='block truncate text-sm font-medium'>
+                              {deviceLabel(device)}
+                              {link.is_primary ? ` · ${t('primary')}` : ''}
+                            </span>
+                            <span className='block truncate text-[10px] text-muted-foreground'>
+                              {device.serial} · {state}
+                            </span>
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </div>
-          ) : null}
 
-          {blockedReason && !running ? (
-            <p className='text-xs text-muted-foreground'>{blockedReason}</p>
-          ) : null}
+            {lines.length > 0 || outcome ? (
+              <div className='space-y-1 rounded-lg border bg-muted/20 p-3'>
+                <p className='text-xs font-medium'>{t('progress')}</p>
+                <ul className='max-h-48 space-y-0.5 overflow-y-auto'>
+                  {lines.map((line) => (
+                    <li
+                      key={`${line.index}-${line.type}`}
+                      className='flex items-start gap-1.5 text-[11px]'
+                    >
+                      {line.ok ? (
+                        <CheckCircle2
+                          size={12}
+                          className='mt-0.5 shrink-0 text-emerald-600'
+                        />
+                      ) : (
+                        <XCircle
+                          size={12}
+                          className='mt-0.5 shrink-0 text-destructive'
+                        />
+                      )}
+                      <span className='min-w-0 flex-1'>
+                        <span className='font-mono'>{line.type}</span>
+                        {line.message ? (
+                          <span className='text-muted-foreground'>
+                            {' '}
+                            — {line.message}
+                          </span>
+                        ) : null}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                {outcome ? (
+                  <p
+                    className={cn(
+                      'pt-1 text-xs font-medium',
+                      outcome.ok ? 'text-emerald-600' : 'text-destructive'
+                    )}
+                  >
+                    {outcome.ok
+                      ? t('runSuccess')
+                      : outcome.message || t('runFailed')}
+                  </p>
+                ) : null}
+                {gateHint ? (
+                  <p className='text-[11px] text-muted-foreground'>
+                    {gateHint}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
 
-          <Button
-            className='w-full'
-            disabled={running || Boolean(blockedReason)}
-            onClick={handleRun}
-          >
-            {running ? (
-              <>
-                <Loader2 size={14} className='mr-2 animate-spin' />
-                {t('running')}
-              </>
-            ) : (
-              t('submit')
-            )}
-          </Button>
+            {blockedReason && !running ? (
+              <p className='text-xs text-muted-foreground'>{blockedReason}</p>
+            ) : null}
+
+            <Button
+              className='w-full'
+              disabled={running || Boolean(blockedReason)}
+              onClick={handleRun}
+            >
+              {running ? (
+                <>
+                  <Loader2 size={14} className='mr-2 animate-spin' />
+                  {t('running')}
+                </>
+              ) : (
+                t('submit')
+              )}
+            </Button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

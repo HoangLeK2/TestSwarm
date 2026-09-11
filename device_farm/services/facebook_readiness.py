@@ -44,6 +44,20 @@ _CHECKPOINT_MARKERS = (
             r"đăng nhập đáng ngờ|hoạt động bất thường|bảo mật tài khoản"
         ),
     ),
+    (
+        "selfie_video_verification",
+        (
+            r"(?=.*quay video selfie)(?=.*xác nhận bạn là người thật)"
+            r"(?=.*bắt đầu quay video selfie)"
+        ),
+    ),
+    (
+        "account_suspended_verification",
+        (
+            r"(?=.*đình chỉ tài khoản của bạn)"
+            r"(?=.*(?:kháng nghị|khong nghi|đăng xuất))"
+        ),
+    ),
 )
 
 _LOGGED_OUT_MARKERS = (
@@ -56,6 +70,18 @@ _LOGGED_OUT_MARKERS = (
         ),
     ),
     ("create_account", r"create new account|join facebook|tạo tài khoản mới"),
+    # The Vietnamese entry screen says "Tham gia Facebook" — none of the tokens
+    # above appear on it, so a phone that was plainly logged out read as
+    # INCONCLUSIVE and the preflight gate refused to start the login.
+    #
+    # Anchored to the pair, never to the headline alone: a feed post that quotes
+    # "tham gia Facebook" would otherwise send a signed-in account back through
+    # a full re-login. The blob is whitespace-folded to one line, so the
+    # lookaheads scan the whole screen regardless of node order.
+    (
+        "entry_screen",
+        r"(?=.*tham gia facebook)(?=.*tôi có trang cá nhân rồi)",
+    ),
 )
 
 _READY_MARKERS = (

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -309,6 +309,42 @@ async def record_display_name_observed(
     _bump(row)
     await db.flush()
     return row
+
+
+async def observed_display_names(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    account_ids: Sequence[str],
+    platform: str = FACEBOOK_PLATFORM,
+) -> dict[str, str]:
+    """Name each account's own profile last showed, keyed by account, in one query.
+
+    An account can sit on more than one phone; the most recently touched session
+    that still owns it wins. Read-only — the account row keeps whatever name the
+    operator typed, and this stays an observation next to it.
+    """
+    ids = [str(a) for a in account_ids if a]
+    if not ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(
+                DevicePlatformSession.account_id,
+                DevicePlatformSession.display_name_observed,
+            )
+            .where(
+                DevicePlatformSession.org_id == org_id,
+                DevicePlatformSession.platform == platform,
+                DevicePlatformSession.account_id.in_(ids),
+                DevicePlatformSession.display_name_observed.is_not(None),
+            )
+            .order_by(DevicePlatformSession.updated_at.asc())
+        )
+    ).all()
+    # Ascending order means a later row overwrites an earlier one, so the map
+    # ends up holding the newest observation per account.
+    return {account_id: name for account_id, name in rows if name}
 
 
 async def invalidate_platform_session(

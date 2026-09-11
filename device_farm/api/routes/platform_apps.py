@@ -6,7 +6,7 @@ import hashlib
 import hmac
 import os
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
@@ -107,11 +107,38 @@ def _install_download_url(request: Request, row) -> str:
     return f"{_install_download_base_url(request)}/api/platform-apps/facebook/install-download?token={quote(token)}"
 
 
+def _install_download_reverse_port(download_url: str) -> int | None:
+    parsed = urlparse(download_url)
+    if parsed.hostname not in {"127.0.0.1", "localhost"}:
+        return None
+    if parsed.port:
+        return int(parsed.port)
+    if parsed.scheme == "https":
+        return 443
+    return 80
+
+
+async def _ensure_install_download_reverse(runtime_device, download_url: str) -> None:
+    port = _install_download_reverse_port(download_url)
+    if port is None:
+        return
+    ensure_reverse = getattr(runtime_device, "ensure_reverse_tcp", None)
+    if ensure_reverse is None:
+        raise RuntimeError("install download reverse unavailable for this device")
+    await asyncio.to_thread(ensure_reverse, remote_port=port, local_port=port, timeout=10.0)
+
+
 async def _install_release_apk(runtime_device, row, download_url: str | None, *, timeout_seconds: float) -> None:
     del row
     if not download_url:
         raise RuntimeError("install download URL unavailable")
-    await asyncio.to_thread(runtime_device.install, download_url, timeout=timeout_seconds)
+    await _ensure_install_download_reverse(runtime_device, download_url)
+    await asyncio.to_thread(
+        runtime_device.install,
+        download_url,
+        timeout=timeout_seconds,
+        verify_package=FACEBOOK_PACKAGE,
+    )
 
 
 async def _active_facebook_release_or_404(db: DB):

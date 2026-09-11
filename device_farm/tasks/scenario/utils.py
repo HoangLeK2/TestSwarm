@@ -585,7 +585,12 @@ def _auto_dismiss_popup(device: "DeviceClient") -> bool:
     if u2 is None:
         return False
 
-    xml = device.hierarchy_xml(force_refresh=False)
+    # Must be a fresh dump. The cache is 2s and popups queue about a second
+    # apart, so a cached dump answers "is a popup on screen" for a screen that
+    # is already gone: the stale XML still lists the label, find_element below
+    # returns None because it was dismissed, the scan falls through every
+    # pattern and reports "no popup" while the next one is on screen.
+    xml = device.hierarchy_xml(force_refresh=True)
     if not xml:
         return False
     try:
@@ -609,6 +614,11 @@ def _auto_dismiss_popup(device: "DeviceClient") -> bool:
             eid = u2.find_element(by, value, timeout=0)
             if eid is not None:
                 u2.element_click(eid)
+                # Clicking through the raw u2 handle skips DeviceClient.tap*,
+                # which is what normally drops the cache. Without this every
+                # later reader — wait_stable's hash, the readiness gate — keeps
+                # scoring the pre-dismiss screen for up to 2s.
+                device.hierarchy_invalidate_cache()
                 log.info(f"[{device.serial}] popup dismissed: {by}={value!r}")
                 time.sleep(0.3)
                 return True

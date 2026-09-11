@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from runtime.transports.adb_relay_server import AdbRelayManager
+from runtime.transports.adb_relay_server import AdbRelayManager, CMD_REVERSE_TCP
 
 
 class _FakeRelayConn:
@@ -18,6 +18,7 @@ class _FakeRelayConn:
         self.u2_request_options: list[tuple[str | int | None, int | float | None]] = []
         self.json_requests: list[dict] = []
         self.json_messages: list[dict] = []
+        self.commands: list[tuple[str, str, float, int]] = []
         self.after_u2_request = None
         self.on_json_request = None
 
@@ -61,12 +62,38 @@ class _FakeRelayConn:
     async def send_json_message(self, msg: dict) -> None:
         self.json_messages.append(msg)
 
+    async def send_command(
+        self,
+        serial: str,
+        cmd: str,
+        timeout: float,
+        cmd_type: int = 0,
+    ) -> dict:
+        self.commands.append((serial, cmd, timeout, cmd_type))
+        return {"ok": True, "exit_code": 0, "output": "8081\n", "error": ""}
+
 
 def _manager_with_conn(conn: _FakeRelayConn) -> AdbRelayManager:
     manager = AdbRelayManager()
     manager._relays["relay-1"] = conn  # type: ignore[assignment]
     manager._serial_index["serial-1"] = "relay-1"
     return manager
+
+
+@pytest.mark.asyncio
+async def test_reverse_tcp_sends_dedicated_relay_command():
+    conn = _FakeRelayConn()
+    manager = _manager_with_conn(conn)
+
+    result = await manager.reverse_tcp("serial-1", 8081, 8081, timeout=10.0)
+
+    assert result["ok"] is True
+    assert len(conn.commands) == 1
+    serial, cmd, timeout, cmd_type = conn.commands[0]
+    assert serial == "serial-1"
+    assert json.loads(cmd) == {"remote_port": 8081, "local_port": 8081}
+    assert timeout == 10.0
+    assert cmd_type == CMD_REVERSE_TCP
 
 
 @pytest.mark.asyncio

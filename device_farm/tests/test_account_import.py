@@ -39,6 +39,8 @@ def test_prepare_valid_row():
     assert result is not None
     assert result["platform"] == "facebook"
     assert result["username"] == "alice"
+    assert result["status"] == "unassigned"
+    assert result["state"] == "unassigned"
 
 
 def test_prepare_missing_platform_returns_none():
@@ -319,8 +321,8 @@ async def test_insert_batch_accepts_metadata_column_key():
                 "tags": "",
                 "user_id": "u1",
                 "metadata": {"email": "user@example.com"},
-                "status": "active",
-                "state": "active",
+                "status": "unassigned",
+                "state": "unassigned",
                 "total_usage_minutes": 0.0,
                 "usage_today_minutes": 0.0,
             }

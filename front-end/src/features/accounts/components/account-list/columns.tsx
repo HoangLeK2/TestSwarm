@@ -124,6 +124,52 @@ export function getAccountColumns(
         </span>
       )
     },
+    // What the phone read off the account's own profile, next to — never on top
+    // of — the name the operator typed. A login scenario writes both of these;
+    // until now they were stored and never shown anywhere on this page.
+    {
+      id: 'observedName',
+      accessorKey: 'observed_display_name',
+      header: t('colObservedName'),
+      cell: ({ row }) => {
+        const name = row.original.observed_display_name;
+        if (!name)
+          return <span className='text-sm text-muted-foreground'>-</span>;
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className='truncate text-sm'>{name}</span>
+            </TooltipTrigger>
+            <TooltipContent>{t('observedNameHint')}</TooltipContent>
+          </Tooltip>
+        );
+      }
+    },
+    {
+      id: 'friends',
+      accessorKey: 'friends_count',
+      header: t('colFriends'),
+      cell: ({ row }) => {
+        const { friends_count: count, friends_observed_at: at } = row.original;
+        if (count === null || count === undefined)
+          return <span className='text-sm text-muted-foreground'>-</span>;
+        const label = <span className='text-sm tabular-nums'>{count}</span>;
+        if (!at) return label;
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>{label}</TooltipTrigger>
+            <TooltipContent>
+              {t('friendsHint', {
+                at: formatDistanceToNow(new Date(at), {
+                  addSuffix: true,
+                  locale: dateLocale
+                })
+              })}
+            </TooltipContent>
+          </Tooltip>
+        );
+      }
+    },
     {
       id: 'status',
       header: t('colStatus'),

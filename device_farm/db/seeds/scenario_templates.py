@@ -1327,6 +1327,64 @@ def _fb_session_guard_steps(
                 *deepcopy(post_confirm_cleanup),
             ],
             "else": [
+                # A fresh install comes up in English (US) while every step
+                # after the login — the popup labels, "Trang cá nhân", the
+                # social steps — is written in Vietnamese. Switch the app
+                # language here, on the only screen that offers the control,
+                # so one label set is authoritative for the whole run.
+                #
+                # Verified on a V2352A: every label on this screen is a Bloks
+                # Button carrying the label as content-desc, wrapping a View
+                # that repeats it as text. uiautomator resolves either
+                # attribute to the inner View and the tap reaches the Button
+                # through it — so content-desc is the authored attribute, not
+                # a fix for a broken tap.
+                {
+                    "id": f"{prefix}_switch_language_vi",
+                    "type": "if_element",
+                    "by": "content-desc",
+                    "value": "English (US)",
+                    "timeout": 2,
+                    "then": [
+                        {
+                            "type": "tap_selector",
+                            "by": "content-desc",
+                            "value": "English (US)",
+                            "timeout": 4,
+                        },
+                        {
+                            "type": "wait_stable",
+                            "timeout": 5,
+                            "stable_duration": 0.4,
+                        },
+                        {
+                            "type": "if_element",
+                            "by": "content-desc",
+                            "value": "Tiếng Việt",
+                            "timeout": 3,
+                            "then": [
+                                {
+                                    "type": "tap_selector",
+                                    "by": "content-desc",
+                                    "value": "Tiếng Việt",
+                                    "timeout": 4,
+                                },
+                                {
+                                    "type": "wait_stable",
+                                    "timeout": 8,
+                                    "stable_duration": 0.5,
+                                },
+                            ],
+                            # Sheet did not open, or this build lists no
+                            # Vietnamese. Close it rather than tapping whatever
+                            # sits under the finger.
+                            "else": [{"type": "key", "key": "back"}],
+                        },
+                    ],
+                    # Already Vietnamese, or a language this step does not
+                    # know. The English entry button below is the fallback.
+                    "else": [],
+                },
                 {
                     "type": "if_element",
                     "by": "content-desc",
@@ -1349,13 +1407,13 @@ def _fb_session_guard_steps(
                 },
                 {
                     "type": "if_element",
-                    "by": "text",
+                    "by": "content-desc",
                     "value": "Tôi có trang cá nhân rồi",
                     "timeout": 2,
                     "then": [
                         {
                             "type": "tap_selector",
-                            "by": "text",
+                            "by": "content-desc",
                             "value": "Tôi có trang cá nhân rồi",
                             "timeout": 4,
                         },
@@ -1367,16 +1425,21 @@ def _fb_session_guard_steps(
                     ],
                     "else": [],
                 },
+                # "I already have an account" is not what this build says: the
+                # English entry button reads "I already have a profile", the
+                # literal counterpart of the Vietnamese label. The old string
+                # never matched, so an English phone fell straight through to
+                # login_if_needed with the sign-up screen still on top.
                 {
                     "type": "if_element",
-                    "by": "text",
-                    "value": "I already have an account",
+                    "by": "content-desc",
+                    "value": "I already have a profile",
                     "timeout": 1,
                     "then": [
                         {
                             "type": "tap_selector",
-                            "by": "text",
-                            "value": "I already have an account",
+                            "by": "content-desc",
+                            "value": "I already have a profile",
                             "timeout": 4,
                         },
                         {
@@ -1386,6 +1449,19 @@ def _fb_session_guard_steps(
                         },
                     ],
                     "else": [],
+                },
+                # Tapping the entry button is what makes Facebook enumerate
+                # installed apps, and vivo answers that with a system dialog
+                # ("Facebook" wants to read the list of installed apps) sitting
+                # on top of the login form. Observed on a V2352A right after
+                # this tap — not at app start, which is the only place the
+                # template used to clear popups. It carries a countdown, so
+                # wait_stable never settles and login_if_needed would hunt for
+                # the username field underneath it.
+                {
+                    "id": f"{prefix}_dismiss_system_dialog",
+                    "type": "dismiss_popup",
+                    "retries": 2,
                 },
                 {
                     "type": "login_if_needed",

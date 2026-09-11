@@ -28,7 +28,7 @@ import csv
 import io
 import os
 from datetime import datetime, timezone
-from typing import List, NoReturn, Optional
+from typing import Any, List, NoReturn, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy import select
@@ -172,9 +172,46 @@ def _account_import_format_to_out(row) -> AccountImportFormatOut:
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
-def _account_to_out(account) -> AccountOut:
+async def _observations_for(db, accounts) -> dict[str, dict[str, Any]]:
+    """Latest profile reading per account: observed name and friend count.
+
+    Batched rather than per row — a page of 50 accounts would otherwise be 100
+    round trips. Failure here must not fail the listing: these are decorations
+    on an account, and losing them is better than a 500 on the accounts page.
+    """
+    from services.account_graph import latest_graph_metrics
+    from services.device_platform_session import observed_display_names
+
+    ids = [a.id for a in accounts]
+    if not ids:
+        return {}
+    org_id = getattr(accounts[0], "org_id", None)
+    if not org_id:
+        return {}
+    try:
+        names = await observed_display_names(db, org_id=org_id, account_ids=ids)
+        metrics = await latest_graph_metrics(db, org_id=org_id, account_ids=ids)
+    except Exception:
+        return {}
+    return {
+        account_id: {
+            "observed_display_name": names.get(account_id),
+            "friends_count": getattr(metrics.get(account_id), "value", None),
+            "friends_observed_at": getattr(
+                metrics.get(account_id), "observed_at", None
+            ),
+        }
+        for account_id in ids
+    }
+
+
+def _account_to_out(account, observed: dict[str, Any] | None = None) -> AccountOut:
     state = getattr(account, "state", None) or account.status
+    seen = observed or {}
     return AccountOut(
+        observed_display_name=seen.get("observed_display_name"),
+        friends_count=seen.get("friends_count"),
+        friends_observed_at=seen.get("friends_observed_at"),
         id=account.id,
         platform=account.platform,
         username=account.username,
@@ -352,7 +389,8 @@ async def list_accounts_endpoint(
         limit=limit,
         offset=offset,
     )
-    return [_account_to_out(a) for a in accounts]
+    observed = await _observations_for(db, accounts)
+    return [_account_to_out(a, observed.get(a.id)) for a in accounts]
 
 
 @router.post(

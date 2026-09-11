@@ -42,6 +42,7 @@ CMD_BOOTSTRAP    = 4  # push binaries + install APKs + start atx-agent + u2
 CMD_SCREENCAP    = 5  # screencap → base64 PNG in result["output"]
 CMD_PROBE_CAPS       = 6  # probe_capabilities() → JSON dict in result["output"]
 CMD_RESTART_SCRCPY   = 7  # stop + resume scrcpy session (must match agent-boot)
+CMD_REVERSE_TCP      = 8  # adb reverse tcp:<remote> tcp:<local> for device-local callbacks
 
 # Reply types that carry an "id" matching a pending send_json_request future.
 # Every request/reply message type the agent can answer must be listed here, or
@@ -1151,6 +1152,29 @@ class AdbRelayManager:
     async def restart_scrcpy(self, serial: str, timeout: float = 30.0) -> dict:
         """Stop + resume scrcpy for serial via the video/WS relay command queue."""
         return await self.run_command(serial, "", timeout, cmd_type=CMD_RESTART_SCRCPY)
+
+    async def reverse_tcp(
+        self,
+        serial: str,
+        remote_port: int,
+        local_port: int,
+        timeout: float = 10.0,
+    ) -> dict:
+        """Ask agent-boot to run `adb reverse tcp:<remote_port> tcp:<local_port>`."""
+        conn = self.relay_for_serial(serial)
+        if conn is None:
+            return {
+                "ok": False,
+                "exit_code": -1,
+                "output": "",
+                "error": f"no relay for serial={serial!r}",
+            }
+        actual = self.resolve_serial(serial)
+        cmd = dumps({
+            "remote_port": int(remote_port),
+            "local_port": int(local_port),
+        })
+        return await conn.send_command(actual, cmd, timeout, cmd_type=CMD_REVERSE_TCP)
 
     async def run_command(
         self,

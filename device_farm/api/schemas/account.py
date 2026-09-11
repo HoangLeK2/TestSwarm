@@ -87,6 +87,12 @@ class AccountOut(BaseModel):
     total_usage_minutes: float
     usage_today_minutes: float
     usage_reset_date: Optional[date]
+    # What the phone last saw on this account's own profile. Kept separate from
+    # `display_name` on purpose: that field is what the operator typed, and a
+    # profile read must never overwrite it. Null until a scenario reads one.
+    observed_display_name: Optional[str] = None
+    friends_count: Optional[int] = None
+    friends_observed_at: Optional[datetime] = None
     # password_encrypted is intentionally excluded from all responses
 
 

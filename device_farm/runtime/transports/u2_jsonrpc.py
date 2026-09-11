@@ -146,7 +146,14 @@ class _RelaySession:
             path = f"{path}?{parsed.query}"
 
         future = asyncio.run_coroutine_threadsafe(
-            self._relay.u2_http(self._serial, method.upper(), path, body, content_type, t),
+            self._relay.u2_http(
+                self._serial,
+                method.upper(),
+                path,
+                body,
+                content_type,
+                t,
+            ),
             self._loop,
         )
         try:
@@ -2159,7 +2166,12 @@ class U2JsonRpcClient:
 
     # ── APK install ───────────────────────────────────────────────────────────
 
-    def install(self, apk_source: str, timeout: float = 90.0) -> None:
+    def install(
+        self,
+        apk_source: str,
+        timeout: float = 90.0,
+        verify_package: str | None = None,
+    ) -> None:
         """Install an APK via atx-agent's /install endpoint.
 
         apk_source: HTTP/HTTPS URL  → atx-agent downloads and installs it
@@ -2168,6 +2180,16 @@ class U2JsonRpcClient:
 
         Raises RuntimeError on failure.
         """
+        def package_installed() -> bool:
+            package = (verify_package or "").strip()
+            if not package or self._adb_shell is None:
+                return False
+            try:
+                out = str(self._adb_shell(f"pm path {package}") or "").strip()
+            except Exception:
+                return False
+            return out.startswith("package:")
+
         install_url = self._base.rstrip("/") + "/install"
         with self._http_lock:
             if apk_source.startswith(("http://", "https://")):
@@ -2226,6 +2248,8 @@ class U2JsonRpcClient:
                     message = task_result.get("message") or task_result.get("error")
                     detail = str(message) if message else repr(task_result)
                     raise RuntimeError(f"install task {task_id} failed: {detail}")
+                if package_installed():
+                    return
                 time.sleep(1.0)
 
         if isinstance(result, dict):

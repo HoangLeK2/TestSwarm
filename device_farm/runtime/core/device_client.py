@@ -36,7 +36,7 @@ import uuid
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit, urlunsplit
 import re
 import xml.etree.ElementTree as ET
 from runtime.xml_utils import parse_xml, trim_hierarchy_xml as _trim_xml, XML_PARSE_ERRORS
@@ -4696,7 +4696,12 @@ class DeviceClient:
         else:
             self._log(f"swipe_ext: unknown direction {direction!r}", level=logging.WARNING)
 
-    def install(self, apk_source: str, timeout: float = 90.0) -> None:
+    def install(
+        self,
+        apk_source: str,
+        timeout: float = 90.0,
+        verify_package: str | None = None,
+    ) -> None:
         """Install APK via atx-agent /install endpoint (URL or local path).
 
         Requires atx-agent to be running on the device (port 7912).
@@ -4706,13 +4711,50 @@ class DeviceClient:
             u2 = self._u2
         if u2 is not None:
             try:
-                u2.install(apk_source, timeout=timeout)
-                self._log(f"install via atx-agent: {apk_source}")
+                u2.install(apk_source, timeout=timeout, verify_package=verify_package)
+                self._log(f"install via atx-agent: {self._install_source_for_log(apk_source)}")
                 return
             except Exception as exc:
                 self._log(f"install via atx-agent failed: {exc}", level=logging.WARNING)
                 raise
         raise RuntimeError("install: no suitable transport available")
+
+    @staticmethod
+    def _install_source_for_log(apk_source: str) -> str:
+        source = str(apk_source or "")
+        if not source.startswith(("http://", "https://")):
+            return source
+        try:
+            parts = urlsplit(source)
+            if not parts.query:
+                return source
+            return urlunsplit((parts.scheme, parts.netloc, parts.path, "<redacted-query>", parts.fragment))
+        except Exception:
+            return "<redacted-url>"
+
+    def ensure_reverse_tcp(
+        self,
+        *,
+        remote_port: int,
+        local_port: int,
+        timeout: float = 10.0,
+    ) -> None:
+        """Ensure phone-local tcp:<remote_port> is reversed to agent-local tcp:<local_port>."""
+        if self._loop is None:
+            raise RuntimeError("adb reverse unavailable: no relay event loop")
+        result = self._run_relay_coro(
+            lambda relay, serial: relay.reverse_tcp(
+                serial,
+                remote_port=int(remote_port),
+                local_port=int(local_port),
+                timeout=timeout,
+            ),
+            timeout=timeout,
+        )
+        if not result.get("ok"):
+            error = result.get("error") or result.get("output") or "unknown error"
+            raise RuntimeError(f"adb reverse tcp:{remote_port}->tcp:{local_port} failed: {error}")
+        self._log(f"adb reverse ready: tcp:{remote_port} -> tcp:{local_port}")
 
     # ── uiautomator2 passthrough ──────────────────────────────────────────────
 

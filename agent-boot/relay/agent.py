@@ -365,6 +365,7 @@ CMD_BOOTSTRAP       = 4  # push binaries + install APKs + start atx-agent + u2
 CMD_SCREENCAP       = 5  # adb exec-out screencap -p → base64 PNG
 CMD_PROBE_CAPS      = 6  # _probe_capabilities() → JSON dict in output
 CMD_RESTART_SCRCPY  = 7  # stop + resume scrcpy session for a device
+CMD_REVERSE_TCP     = 8  # adb reverse tcp:<remote> tcp:<local>
 
 
 # Templates are ~5-15 KB each; this bounds a long-lived agent's cache.
@@ -4184,6 +4185,21 @@ class RelayAgent:
                 output, rc = dumps(caps), 0
             elif cmd_type == CMD_RESTART_SCRCPY:
                 output, rc = self._restart_scrcpy_sync(serial, timeout)
+            elif cmd_type == CMD_REVERSE_TCP:
+                payload = loads(cmd or "{}")
+                remote_port = int(payload.get("remote_port", 0))
+                local_port = int(payload.get("local_port", 0))
+                if not (0 < remote_port <= 65535 and 0 < local_port <= 65535):
+                    raise ValueError(
+                        f"invalid reverse tcp ports: remote={remote_port} local={local_port}"
+                    )
+                output, rc = _run(
+                    "reverse",
+                    f"tcp:{remote_port}",
+                    f"tcp:{local_port}",
+                    serial=serial,
+                    timeout=timeout,
+                )
             else:
                 output, rc = _adb_shell(
                     serial,

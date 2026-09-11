@@ -15,11 +15,12 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Sequence
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from db.models.account_graph_metric import AccountGraphMetric
 from services.platform_readiness import DEFAULT_PLATFORM
@@ -121,6 +122,48 @@ async def latest_graph_metric(
             .limit(1)
         )
     ).scalar_one_or_none()
+
+
+async def latest_graph_metrics(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    account_ids: Sequence[str],
+    metric: str = "friends",
+) -> dict[str, AccountGraphMetric]:
+    """Newest observation per account, in one query.
+
+    The list endpoint asks this for a whole page at a time; calling
+    :func:`latest_graph_metric` per row would be one round trip per account.
+    Ranked with a window function rather than ``DISTINCT ON`` so the same
+    statement runs on the SQLite the tests use.
+    """
+    ids = [str(a) for a in account_ids if a]
+    if not ids:
+        return {}
+    ranked = (
+        select(
+            AccountGraphMetric,
+            func.row_number()
+            .over(
+                partition_by=AccountGraphMetric.account_id,
+                order_by=AccountGraphMetric.observed_at.desc(),
+            )
+            .label("rank"),
+        )
+        .where(
+            AccountGraphMetric.org_id == org_id,
+            AccountGraphMetric.account_id.in_(ids),
+            AccountGraphMetric.metric == str(metric or "friends").strip().casefold(),
+        )
+        .subquery()
+    )
+    rows = (
+        await db.execute(
+            select(aliased(AccountGraphMetric, ranked)).where(ranked.c.rank == 1)
+        )
+    ).scalars()
+    return {row.account_id: row for row in rows}
 
 
 async def graph_growth(

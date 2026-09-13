@@ -209,16 +209,22 @@ interface Props {
   wf: WorkflowInfo;
   campaignId: string;
   execution?: ExecutionOut;
+  defaultExpanded?: boolean;
 }
 
-export function WorkflowProgressCard({ wf, campaignId, execution }: Props) {
+export function WorkflowProgressCard({
+  wf,
+  campaignId,
+  execution,
+  defaultExpanded = false
+}: Props) {
   const t = useTranslations('campaignsFeature.list');
   const tCommon = useTranslations('common');
   const tGate = useTranslations('executionMessages');
   const confirm = useConfirm();
   const { canExecute } = useResourcePermissions('campaigns');
   const { getStepTypeName } = useCampaignFlowI18n();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const [dismissed, setDismissed] = useState(false);
   const [liveMirrorSerial, setLiveMirrorSerial] = useState<string | null>(() =>
     getCampaignMonitorLiveMirrorSerial()
@@ -261,6 +267,17 @@ export function WorkflowProgressCard({ wf, campaignId, execution }: Props) {
   useEffect(() => {
     return subscribeCampaignMonitorLiveMirror(setLiveMirrorSerial);
   }, []);
+
+  useEffect(() => {
+    if (defaultExpanded && isActive) {
+      setExpanded(true);
+    }
+  }, [defaultExpanded, isActive]);
+
+  useEffect(() => {
+    if (!expanded || !isActive) return;
+    claimCampaignMonitorLiveMirror(serial);
+  }, [expanded, isActive, serial]);
 
   useEffect(() => {
     if (expanded) return;

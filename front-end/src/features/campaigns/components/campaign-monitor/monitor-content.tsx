@@ -61,6 +61,14 @@ function filterWorkflows(
   });
 }
 
+function isActiveWorkflow(wf: WorkflowInfo): boolean {
+  return (
+    wf.status === 'RUNNING' ||
+    wf.status === 'PAUSED' ||
+    wf.status === 'paused_on_error'
+  );
+}
+
 function MonitorSidePanels({
   campaignId,
   pollAggressive
@@ -156,6 +164,10 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
     () => filterWorkflows(workflows, statusFilter, deviceFilter),
     [workflows, statusFilter, deviceFilter]
   );
+  const defaultExpandedWorkflowId = useMemo(
+    () => filteredWorkflows.find(isActiveWorkflow)?.workflow_id ?? null,
+    [filteredWorkflows]
+  );
 
   if (isCampaignLoading || (!continuous && isRunning && isLoading)) {
     return (
@@ -234,6 +246,7 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
                 wf={wf}
                 campaignId={campaignId}
                 execution={executionsById.get(executionId)}
+                defaultExpanded={wf.workflow_id === defaultExpandedWorkflowId}
               />
             );
           })

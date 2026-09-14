@@ -94,7 +94,11 @@ class AdbDeviceWatcher:
     async def run(self) -> None:
         """Loop forever; restarts the selected stream backend on failure."""
         servers = adb_server_specs_from_env()
-        if len(servers) > 1:
+        if servers:
+            # One configured server gets a keyed tracker too, not just several.
+            # The key is what makes _apply feed the route table, and without it
+            # a device hot-plugged after startup has no route — so u2 falls back
+            # to the `adbutils.adb` singleton and its ANDROID_ADB_SERVER_* env.
             await asyncio.gather(
                 *[
                     self._run_server(host, port)
@@ -102,10 +106,10 @@ class AdbDeviceWatcher:
                 ],
             )
             return
+        # No ADB server configured: local adb in the container, nothing to route.
         while True:
             try:
-                server = servers[0] if servers else None
-                await self._track_loop(server=server)
+                await self._track_loop(server=None)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

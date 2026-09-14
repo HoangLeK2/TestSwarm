@@ -1,7 +1,7 @@
 'use client';
 
 import { forwardRef, type MutableRefObject } from 'react';
-import { Circle, Play, Plus, Square } from 'lucide-react';
+import { Plus } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -19,9 +19,6 @@ type MirrorInputLockState = {
 };
 
 type ControlRecordMirrorPanelLabels = {
-  startRecording: string;
-  stopRecording: string;
-  tryRun: string;
   openPicker: string;
   selectDevice: string;
 };
@@ -56,9 +53,6 @@ type ControlRecordMirrorPanelProps = {
   multiFocusMode: boolean;
   selectedMultiFollowerDevices: Device[];
   onPromoteFollower: (serial: string) => void;
-  recording: boolean;
-  onToggleRecording: () => void;
-  onOpenPlayer: () => void;
   onOpenStepPicker: () => void;
   fillWidth?: boolean;
   labels: ControlRecordMirrorPanelLabels;
@@ -88,9 +82,6 @@ export const ControlRecordMirrorPanel = forwardRef<
     multiFocusMode,
     selectedMultiFollowerDevices,
     onPromoteFollower,
-    recording,
-    onToggleRecording,
-    onOpenPlayer,
     onOpenStepPicker,
     fillWidth = false,
     labels
@@ -105,7 +96,9 @@ export const ControlRecordMirrorPanel = forwardRef<
         multiFocusMode || fillWidth
           ? 'min-w-0 flex-1'
           : 'w-[clamp(360px,34vw,470px)] shrink-0 border-r border-border/60',
-        fillWidth && !multiFocusMode && 'h-full border-r-0'
+        // h-full is what bounds the follower grid's scroller — without it the
+        // stage grows past the viewport and the last row is clipped, unreachable.
+        fillWidth && 'h-full border-r-0'
       )}
     >
       {selectedDevice ? (
@@ -113,37 +106,10 @@ export const ControlRecordMirrorPanel = forwardRef<
           <MultiDeviceStage
             mode={multiFocusMode ? 'focus' : 'edit'}
             toolbar={
+              /* Record / try-run live in the workbench header — only the
+                 step-picker toggle is unique to this stage. */
               multiFocusMode ? (
-                <div className='flex shrink-0 items-center gap-2 border-b border-border/60 bg-background/90 px-3 py-1.5'>
-                  <Button
-                    size='sm'
-                    variant={recording ? 'destructive' : 'default'}
-                    className='h-7 gap-1.5 px-2.5 text-xs'
-                    onClick={onToggleRecording}
-                  >
-                    {recording ? (
-                      <Square className='size-3.5' />
-                    ) : (
-                      <Circle className='size-3.5 fill-current' />
-                    )}
-                    {recording ? labels.stopRecording : labels.startRecording}
-                  </Button>
-                  <Button
-                    size='sm'
-                    variant='outline'
-                    className='h-7 gap-1.5 px-2.5 text-xs'
-                    onClick={onOpenPlayer}
-                    disabled={
-                      (selectedDevice.state || '').replace(
-                        'DeviceState.',
-                        ''
-                      ) === 'BUSY'
-                    }
-                  >
-                    <Play className='size-3.5' />
-                    {labels.tryRun}
-                  </Button>
-                  <div className='flex-1' />
+                <div className='flex shrink-0 items-center justify-end border-b border-border/60 bg-background/90 px-3 py-1.5'>
                   <Button
                     size='sm'
                     variant='outline'

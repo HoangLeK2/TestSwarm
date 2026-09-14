@@ -420,6 +420,31 @@ class U2SessionPool:
             logger.error("u2-pool: uiautomator2 not installed — pool disabled")
             raise
 
+    def _connect_target(self, serial: str):
+        """What to hand `u2.connect` for `serial`.
+
+        An adbutils device pinned to the ADB server that owns this phone when
+        routing knows it — otherwise the bare serial, and u2 resolves it itself
+        through the `adbutils.adb` singleton, which is bound to one ADB server
+        for the whole process and so is wrong for every phone not on it.
+
+        Runs in the connect executor, never on the event loop: resolving a route
+        can spawn `adb devices` and wait on admission.
+        """
+        host = serial.rsplit(":", 1)[0] if ":" in serial else serial
+        from relay.adb import adb_device_for_u2
+
+        try:
+            device = adb_device_for_u2(serial)
+        except Exception as exc:
+            # Routing is an optimisation here; never let it block a connect.
+            logger.warning(
+                "u2-pool: adb route lookup failed serial=%s err=%s — using u2 default",
+                serial, exc,
+            )
+            return host
+        return device if device is not None else host
+
     def _direct_http_health_recent(self, seen_at: float) -> bool:
         return (
             DIRECT_HTTP_HEALTH_TTL_SECONDS > 0
@@ -445,10 +470,16 @@ class U2SessionPool:
 
     async def _connect(self, serial: str, *, keep_warm: bool = False) -> _Entry:
         fn = self._get_connect_fn()
-        host = serial.rsplit(":", 1)[0] if ":" in serial else serial
         try:
+            # _connect_target resolves the ADB route, which can spawn an `adb
+            # devices` and wait on admission. Both belong in the executor — on
+            # the loop thread they stall every other device in the process — and
+            # inside wait_for, so a wedged ADB server cannot outlive the budget.
             dev = await asyncio.wait_for(
-                self._loop.run_in_executor(self._resolve_executor(), fn, host),
+                self._loop.run_in_executor(
+                    self._resolve_executor(),
+                    lambda: fn(self._connect_target(serial)),
+                ),
                 timeout=CONNECT_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError as exc:
@@ -511,10 +542,13 @@ class U2SessionPool:
         self._bump("reconnect_fallbacks")
         self._close_blocking(entry)
         fn = self._get_connect_fn()
-        host = entry.serial.rsplit(":", 1)[0] if ":" in entry.serial else entry.serial
+        serial = entry.serial
         try:
+            # Route resolution stays in the executor — see _connect.
             entry.device = await asyncio.wait_for(
-                self._loop.run_in_executor(ex, fn, host),
+                self._loop.run_in_executor(
+                    ex, lambda: fn(self._connect_target(serial))
+                ),
                 timeout=CONNECT_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError as exc:

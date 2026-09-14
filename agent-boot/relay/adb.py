@@ -151,7 +151,14 @@ def _discover_route(serial: str) -> AdbEndpoint | None:
             return known.endpoint
         # Host-level admission (serial=None) keeps concurrent cold-start scans
         # from fanning out into one `adb devices` process per unknown serial.
-        with adb_admission(serial=None, lane=AdbLane.MAINTENANCE):
+        #
+        # DEFAULT, not MAINTENANCE: the heavy lane exists to ration USB
+        # bandwidth between pushes and installs, and it is squeezed to a single
+        # global slot whenever a STARTUP command is queued. `adb devices` asks
+        # the ADB server and never touches USB — measured at ~10ms against a
+        # real server — so charging it to that slot lets one in-flight APK push
+        # stall every route lookup in the process.
+        with adb_admission(serial=None, lane=AdbLane.DEFAULT):
             out, rc = _run_raw([*endpoint.flags, "devices"], timeout=5)
         if rc != 0:
             logger.debug(
@@ -308,6 +315,8 @@ _ATX_FORWARD_CREATE_RETRY_AFTER: dict[str, float] = {}
 _ATX_FORWARD_SERIAL_LOCKS: dict[str, threading.Lock] = {}
 _U2_RESTART_HEALTHY_UNTIL: dict[str, float] = {}
 _ADB_COMMAND_STATS: dict[str, int] = {}
+#: One adbutils client per ADB endpoint, shared by every u2 session on it.
+_ADBUTILS_CLIENTS: dict[tuple[str, int], object] = {}
 _ATX_FORWARD_RECONCILE_NEXT_AT = 0.0
 _ATX_FORWARD_FAILURES_BEFORE_RECREATE = max(
     1,
@@ -391,6 +400,41 @@ def adb_command_stats(*, reset: bool = False) -> dict[str, int]:
 def _adbutils_endpoint_for_serial(serial: Optional[str]) -> tuple[str, int] | None:
     endpoint = _endpoint_for_serial(serial) if serial else None
     return (endpoint.host, endpoint.port) if endpoint else None
+
+
+def adb_device_for_u2(serial: str) -> object | None:
+    """An ``adbutils.AdbDevice`` bound to the ADB server that owns ``serial``.
+
+    ``u2.connect(<str>)`` resolves the phone through ``adbutils.adb`` — a module
+    singleton built once from ``ANDROID_ADB_SERVER_HOST``/``ANDROID_ADB_SERVER_PORT``
+    (``adbutils/__init__.py``: ``adb = AdbClient()``). It ignores
+    ``ADB_SERVER_SOCKETS``, so with several ADB servers configured every u2
+    session lands on whichever single port that env pair names, while the rest of
+    agent-boot routes per serial. A phone on ``:5038`` then has a working
+    ``adb shell`` and a u2 session negotiated against ``:5037``.
+
+    ``u2.connect`` also accepts an ``AdbDevice`` and adopts it verbatim
+    (``uiautomator2.Device.__init__``), which is how we keep u2 on the same
+    endpoint as every other command for that phone.
+
+    Returns ``None`` when routing does not know the serial, so callers fall back
+    to u2's own resolution instead of guessing an endpoint.
+    """
+    serial = str(serial or "").strip()
+    if not serial:
+        return None
+    route = _ensure_route(serial) or route_table.get(serial)
+    if route is None:
+        return None
+    import adbutils
+
+    key = (route.endpoint.host, route.endpoint.port)
+    with _ADB_CACHE_LOCK:
+        client = _ADBUTILS_CLIENTS.get(key)
+        if client is None:
+            client = adbutils.AdbClient(host=key[0], port=key[1])
+            _ADBUTILS_CLIENTS[key] = client
+    return client.device(serial=serial)
 
 
 def _get_adb_scheduler() -> AdbScheduler:
@@ -737,6 +781,45 @@ def _parse_atx_forward_list(output: str) -> dict[str, tuple[str, int]]:
     return forwards
 
 
+def _list_atx_forwards_all_endpoints() -> dict[str, tuple[str, int]] | None:
+    """Every tcp:7912 forward, gathered from each configured ADB server.
+
+    A forward lives on the ADB server that owns the phone, and `adb forward
+    --list` only reports its own server's. Asking a single endpoint therefore
+    reports nothing for every phone on the other ones, and the caller reads that
+    absence as "forward is gone" and tears the cache entry down on each pass.
+
+    ``None`` means no endpoint answered — distinct from "answered, none found",
+    which must not invalidate anything.
+    """
+    endpoints = configured_adb_endpoints()
+    if len(endpoints) <= 1:
+        # One endpoint (or none): `_run` already targets it, and going through
+        # the scheduler keeps the command stats and admission accounting.
+        out, rc = _run("forward", "--list", timeout=5)
+        if rc != 0:
+            logger.debug("adb forward --list failed during atx reconcile: %s", out[:200])
+            return None
+        return _parse_atx_forward_list(out)
+
+    discovered: dict[str, tuple[str, int]] = {}
+    answered = False
+    for endpoint in endpoints:
+        with adb_admission(serial=None, lane=AdbLane.STARTUP):
+            out, rc = _run_raw([*endpoint.flags, "forward", "--list"], timeout=5)
+        if rc != 0:
+            logger.debug(
+                "adb forward --list failed adb_host=%s adb_port=%d error=%s",
+                endpoint.host,
+                endpoint.port,
+                (out or "").strip()[:120],
+            )
+            continue
+        answered = True
+        discovered.update(_parse_atx_forward_list(out))
+    return discovered if answered else None
+
+
 def reconcile_atx_forward_cache(serials: Optional[set[str]] = None) -> dict[str, tuple[str, int]]:
     """Refresh the process cache from `adb forward --list`.
 
@@ -744,11 +827,9 @@ def reconcile_atx_forward_cache(serials: Optional[set[str]] = None) -> dict[str,
     tcp:7912 forwards and avoid allocating duplicates after transient cache
     loss or hot reloads.
     """
-    out, rc = _run("forward", "--list", timeout=5)
-    if rc != 0:
-        logger.debug("adb forward --list failed during atx reconcile: %s", out[:200])
+    discovered = _list_atx_forwards_all_endpoints()
+    if discovered is None:
         return {}
-    discovered = _parse_atx_forward_list(out)
     wanted = {s for s in (serials or set()) if s}
     with _ADB_CACHE_LOCK:
         if wanted:

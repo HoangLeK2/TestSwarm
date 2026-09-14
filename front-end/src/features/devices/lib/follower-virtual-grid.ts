@@ -1,6 +1,6 @@
 export const FOLLOWER_GRID_GAP_PX = 8;
-export const FOLLOWER_GRID_MAX_COLUMNS = 4;
 
+/** Columns are bounded by the available width only — the grid fills the stage. */
 export function getFollowerGridColumnCount(
   containerWidth: number,
   itemCount: number,
@@ -16,11 +16,7 @@ export function getFollowerGridColumnCount(
     )
   );
   const boundedItemCount = Math.max(1, Math.floor(itemCount));
-  return Math.min(
-    FOLLOWER_GRID_MAX_COLUMNS,
-    availableColumns,
-    boundedItemCount
-  );
+  return Math.min(availableColumns, boundedItemCount);
 }
 
 export function getFollowerGridRowCount(

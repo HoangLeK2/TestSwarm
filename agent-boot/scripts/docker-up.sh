@@ -65,7 +65,10 @@ adb_server_is_global() {
 
 start_global_adb_server() {
   echo "== Starting host ADB server (global 0.0.0.0:${ADB_PORT}, flag -a) =="
-  adb kill-server 2>/dev/null || true
+  # -P: kill-server without it targets 5037 regardless of $ADB_PORT, so
+  # bringing up a second server (e.g. 5038) would kill the first one, which
+  # other workers are still using.
+  adb -P "$ADB_PORT" kill-server 2>/dev/null || true
   nohup adb -a -P "$ADB_PORT" nodaemon server >/tmp/agent-boot-adb-server.log 2>&1 &
   sleep 1
   if ! adb_port_listening "$ADB_PORT"; then

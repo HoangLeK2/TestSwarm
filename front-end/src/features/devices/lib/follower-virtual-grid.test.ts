@@ -7,10 +7,12 @@ import {
   getFollowerGridRowCount
 } from './follower-virtual-grid';
 
-test('fits follower columns to the available width with a four-column cap', () => {
+test('fits follower columns to the available width', () => {
   assert.equal(getFollowerGridColumnCount(119, 19, 120), 1);
   assert.equal(getFollowerGridColumnCount(248, 19, 120), 2);
-  assert.equal(getFollowerGridColumnCount(760, 19, 120), 4);
+  assert.equal(getFollowerGridColumnCount(760, 19, 120), 6);
+  // Wide stage — no artificial column cap, the grid uses the whole width.
+  assert.equal(getFollowerGridColumnCount(1196, 20, 124), 9);
 });
 
 test('never creates more follower columns than devices', () => {

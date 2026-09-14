@@ -350,3 +350,158 @@ def _force_result(monkeypatch, world, output: str, returncode: int) -> None:
             return _Result()
 
     monkeypatch.setattr(adb_mod, "_get_adb_scheduler", lambda: _Scheduler())
+
+
+# ── duplicate ownership ──────────────────────────────────────────────────────
+
+
+def test_single_endpoint_move_is_not_reported_as_a_conflict():
+    table = AdbRouteTable()
+    table.set("A", E5037)
+    table.set("A", E5038)
+    assert table.stats().get("conflicts", 0) == 0
+    assert table.get("A").endpoint == E5038
+
+
+def test_serial_claimed_by_both_servers_is_recorded_as_a_conflict(caplog):
+    table = AdbRouteTable()
+    table.set("A", E5037)
+    # Two trackers taking turns: the route flips back inside the window.
+    table.set("A", E5038)
+    with caplog.at_level("WARNING", logger="relay.adb.routes"):
+        table.set("A", E5037)
+    assert table.stats()["conflicts"] == 1
+    assert "device route conflict serial=A" in caplog.text
+
+
+def test_conflict_counter_resets_with_the_table():
+    table = AdbRouteTable()
+    table.set("A", E5037)
+    table.set("A", E5038)
+    table.set("A", E5037)
+    assert table.stats()["conflicts"] == 1
+    table.clear()
+    table.set("A", E5037)
+    table.set("A", E5038)
+    assert table.stats().get("conflicts", 0) == 0
+
+
+# ── atx forward reconcile across endpoints ───────────────────────────────────
+
+
+def test_forward_list_is_gathered_from_every_endpoint(two_servers, monkeypatch):
+    """A forward lives on the server that owns the phone.
+
+    Asking only the first endpoint reports nothing for phones on the second, and
+    the caller reads that absence as "forward is gone".
+    """
+    forwards = {
+        5037: "A tcp:9001 tcp:7912\n",
+        5038: "B tcp:9002 tcp:7912\n",
+    }
+
+    def run_raw(args, timeout=5):
+        argv = list(args)
+        port = int(argv[argv.index("-P") + 1])
+        two_servers.scans.append(port)
+        return forwards[port], 0
+
+    monkeypatch.setattr(adb_mod, "_run_raw", run_raw)
+    discovered = adb_mod._list_atx_forwards_all_endpoints()
+    assert discovered == {
+        "A": ("127.0.0.1", 9001),
+        "B": ("127.0.0.1", 9002),
+    }
+
+
+def test_forward_list_survives_one_dead_endpoint(two_servers, monkeypatch):
+    def run_raw(args, timeout=5):
+        argv = list(args)
+        port = int(argv[argv.index("-P") + 1])
+        if port == 5037:
+            return "cannot connect to daemon", 1
+        return "B tcp:9002 tcp:7912\n", 0
+
+    monkeypatch.setattr(adb_mod, "_run_raw", run_raw)
+    assert adb_mod._list_atx_forwards_all_endpoints() == {"B": ("127.0.0.1", 9002)}
+
+
+def test_forward_list_reports_no_answer_distinctly_from_no_forwards(
+    two_servers, monkeypatch
+):
+    """`None` must not be read as "every forward disappeared"."""
+    monkeypatch.setattr(
+        adb_mod, "_run_raw", lambda args, timeout=5: ("cannot connect", 1)
+    )
+    assert adb_mod._list_atx_forwards_all_endpoints() is None
+
+    monkeypatch.setattr(adb_mod, "_run_raw", lambda args, timeout=5: ("", 0))
+    assert adb_mod._list_atx_forwards_all_endpoints() == {}
+
+
+def test_reconcile_keeps_cache_when_no_endpoint_answers(two_servers, monkeypatch):
+    adb_mod._ATX_FORWARD_CACHE["A"] = ("127.0.0.1", 9001)
+    monkeypatch.setattr(
+        adb_mod, "_run_raw", lambda args, timeout=5: ("cannot connect", 1)
+    )
+    try:
+        assert adb_mod.reconcile_atx_forward_cache({"A"}) == {}
+        assert adb_mod._ATX_FORWARD_CACHE["A"] == ("127.0.0.1", 9001)
+    finally:
+        adb_mod._ATX_FORWARD_CACHE.pop("A", None)
+
+
+def test_reconcile_finds_a_forward_that_lives_on_the_second_server(
+    two_servers, monkeypatch
+):
+    """The behaviour fix, at the public API.
+
+    Before: `forward --list` was asked of the first endpoint only, so a phone on
+    the second one looked like it had lost its forward on every pass.
+    """
+    adb_mod.route_table.set("B", E5038)
+
+    def run_raw(args, timeout=5):
+        argv = list(args)
+        port = int(argv[argv.index("-P") + 1])
+        if port == 5038:
+            return "B tcp:9002 tcp:7912\n", 0
+        return "", 0
+
+    monkeypatch.setattr(adb_mod, "_run_raw", run_raw)
+    monkeypatch.setattr(
+        adb_mod,
+        "_run",
+        lambda *a, **k: pytest.fail("must not fall back to a single endpoint"),
+    )
+    try:
+        assert adb_mod.reconcile_atx_forward_cache({"B"}) == {"B": ("127.0.0.1", 9002)}
+        assert adb_mod._ATX_FORWARD_CACHE["B"] == ("127.0.0.1", 9002)
+    finally:
+        adb_mod._ATX_FORWARD_CACHE.pop("B", None)
+
+
+def test_route_discovery_does_not_consume_the_usb_budget(two_servers, monkeypatch):
+    """`adb devices` asks the ADB server; it never touches USB.
+
+    The heavy lane rations USB bandwidth between pushes and installs, and is
+    squeezed to one global slot whenever a STARTUP command is queued. Charging a
+    ~10ms host query to that slot lets one in-flight APK push stall every route
+    lookup in the process.
+    """
+    import contextlib
+
+    lanes: list[adb_mod.AdbLane] = []
+
+    @contextlib.contextmanager
+    def recording_admission(*, serial, lane):
+        lanes.append(lane)
+        yield
+
+    monkeypatch.setattr(adb_mod, "adb_admission", recording_admission)
+    two_servers.devices[5038] = ["B"]
+
+    assert adb_mod._discover_route("B") == E5038
+    assert lanes, "discovery took no admission at all"
+    heavy = [lane for lane in lanes if lane.heavy]
+    assert not heavy, f"discovery took the USB budget: {heavy}"

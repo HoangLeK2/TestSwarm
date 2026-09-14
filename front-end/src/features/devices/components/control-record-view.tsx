@@ -3529,15 +3529,9 @@ export function ControlRecordView({
             multiFocusMode={multiFocusMode}
             selectedMultiFollowerDevices={selectedMultiFollowerDevices}
             onPromoteFollower={promoteMultiFollower}
-            recording={record.recording}
-            onToggleRecording={() => void record.toggleRecording()}
-            onOpenPlayer={() => setPlayerMode(true)}
             onOpenStepPicker={() => setStepPickerOpen(true)}
             fillWidth
             labels={{
-              startRecording: t('startRecording'),
-              stopRecording: t('stopRecording'),
-              tryRun: t('workbench.tryRunOnDevice'),
               openPicker: t('multiControl.openPicker'),
               selectDevice: t('workbench.selectDeviceFromHeader')
             }}

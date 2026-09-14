@@ -72,16 +72,49 @@ func DeviceSerials(ctx context.Context, adbPath string) []string {
 	return serials
 }
 
+var (
+	discoverMu        sync.Mutex
+	lastDiscoveryAt   time.Time
+	discoveryCooldown = 2 * time.Second
+)
+
 func ArgsForSerial(ctx context.Context, adbPath string, serial string) []string {
 	if serial == "" {
 		return defaultArgs()
 	}
-	if value, ok := serialRoutes.Load(serial); ok {
-		if server, ok := value.(Server); ok && server.Host != "" && server.Port != "" {
-			return server.Args()
+	if args, ok := routeArgs(serial); ok {
+		return args
+	}
+	// Cache miss. serialRoutes is only filled by DeviceSerials, so a phone that
+	// this process has not scanned since it appeared — or one that moved to
+	// another ADB server — would otherwise get defaultArgs(), i.e. the first
+	// configured server. scrcpy would then be started against a server that does
+	// not own the device while the control path talks to the right one. Scan
+	// once (rate-limited, single-flight) before falling back.
+	discoverMu.Lock()
+	if time.Since(lastDiscoveryAt) >= discoveryCooldown {
+		lastDiscoveryAt = time.Now()
+		discoverMu.Unlock()
+		DeviceSerials(ctx, adbPath)
+		if args, ok := routeArgs(serial); ok {
+			return args
 		}
+	} else {
+		discoverMu.Unlock()
 	}
 	return defaultArgs()
+}
+
+func routeArgs(serial string) ([]string, bool) {
+	value, ok := serialRoutes.Load(serial)
+	if !ok {
+		return nil, false
+	}
+	server, ok := value.(Server)
+	if !ok || server.Host == "" || server.Port == "" {
+		return nil, false
+	}
+	return server.Args(), true
 }
 
 func (s Server) Args() []string {

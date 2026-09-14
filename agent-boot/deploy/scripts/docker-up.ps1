@@ -64,7 +64,9 @@ function Test-AdbServerGlobal {
 function Start-GlobalAdbServer {
     param([int]$Port)
     Write-Host "== Starting host ADB server (global 0.0.0.0:$Port, flag -a) =="
-    adb kill-server 2>$null
+    # -P: kill-server without it targets 5037 regardless of $Port, so bringing
+    # up a second server would kill the first one that other workers still use.
+    adb -P $Port kill-server 2>$null
     $log = Join-Path $env:TEMP 'agent-boot-adb-server.log'
     Start-Process -FilePath 'adb' -ArgumentList @('-a', '-P', "$Port", 'nodaemon', 'server') `
         -RedirectStandardOutput $log -RedirectStandardError $log -WindowStyle Hidden

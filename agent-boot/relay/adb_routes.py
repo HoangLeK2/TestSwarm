@@ -58,11 +58,16 @@ DiscoverFn = Callable[[str], AdbEndpoint | None]
 class AdbRouteTable:
     """Concurrency-safe ``serial → AdbEndpoint`` map with single-flight discovery."""
 
+    #: Two endpoint changes closer together than this mean both servers are
+    #: claiming the device, not that it moved twice.
+    CONFLICT_WINDOW_S = 10.0
+
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._routes: dict[str, DeviceRoute] = {}
         self._discovery_locks: dict[str, threading.Lock] = {}
         self._stats: dict[str, int] = {}
+        self._last_endpoint_change: dict[str, float] = {}
 
     # ── reads ────────────────────────────────────────────────────────────────
 
@@ -127,6 +132,7 @@ class AdbRouteTable:
                     previous.endpoint.host,
                     endpoint.host,
                 )
+                self._note_endpoint_change(serial, previous.endpoint, endpoint)
             return route
 
     def update_state(self, serial: str, state: str) -> None:
@@ -251,6 +257,38 @@ class AdbRouteTable:
 
     # ── internals ────────────────────────────────────────────────────────────
 
+    def _note_endpoint_change(
+        self,
+        serial: str,
+        old: AdbEndpoint,
+        new: AdbEndpoint,
+    ) -> None:
+        """Flag a serial that two ADB servers are both claiming.
+
+        A device that genuinely moves changes endpoint once: the old server loses
+        it, the new one gains it, and it stays. Two servers sharing one USB
+        device instead flip the route back and forth as their trackers take
+        turns reporting, and every command follows whichever reported last. That
+        is a real ownership conflict and an operator has to resolve it — the
+        route table cannot tell which server should own the device.
+
+        Caller holds ``self._lock``.
+        """
+        now = time.monotonic()
+        previous_change = self._last_endpoint_change.get(serial)
+        self._last_endpoint_change[serial] = now
+        if previous_change is None or now - previous_change >= self.CONFLICT_WINDOW_S:
+            return
+        self._bump("conflicts")
+        logger.warning(
+            "device route conflict serial=%s endpoints=%s,%s since_last_change_s=%.2f "
+            "— both ADB servers claim this device; commands follow the newest report",
+            serial,
+            old,
+            new,
+            now - previous_change,
+        )
+
     def _bump(self, key: str) -> None:
         self._stats[key] = self._stats.get(key, 0) + 1
 
@@ -259,6 +297,7 @@ class AdbRouteTable:
             self._routes.clear()
             self._discovery_locks.clear()
             self._stats.clear()
+            self._last_endpoint_change.clear()
 
 
 #: Process-wide table. agent-boot talks to one set of ADB servers per process.

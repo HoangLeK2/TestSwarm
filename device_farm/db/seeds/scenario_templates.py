@@ -1112,6 +1112,26 @@ _FB_LOGIN_PROFILE_NATIVE: Dict[str, Any] = {
         },
         "auth_code_field": {
             "candidates": [
+                {"by": "description", "value": "Mã"},
+                {"by": "text", "value": "Mã"},
+                {"by": "description", "value": "Code"},
+                {"by": "text", "value": "Code"},
+                {
+                    "description_contains": "Mã",
+                    "class_name": "android.widget.EditText",
+                    "region": "form",
+                },
+                {
+                    "description_contains": "Code",
+                    "class_name": "android.widget.EditText",
+                    "region": "form",
+                },
+                {
+                    "text_near": ["Đi đến ứng dụng xác thực", "Enter code", "Mã", "Code"],
+                    "target_class": "android.widget.EditText",
+                    "region": "form",
+                    "allow_coordinate_fallback": True,
+                },
                 {"by": "description", "value": "Mã,"},
                 {"by": "description", "value": "Code,"},
                 {"by": "description", "value": "Authentication code,"},
@@ -1147,8 +1167,6 @@ _FB_LOGIN_PROFILE_NATIVE: Dict[str, Any] = {
                 "when_text_any": [
                     "Chọn một cách để xác nhận đó là bạn",
                     "Choose a way to confirm",
-                    "Ứng dụng xác thực",
-                    "Authentication app",
                 ],
                 "tap_text_any": ["Ứng dụng xác thực", "Authentication app"],
                 "timeout_s": 6,
@@ -1159,8 +1177,6 @@ _FB_LOGIN_PROFILE_NATIVE: Dict[str, Any] = {
                 "when_text_any": [
                     "Chọn một cách để xác nhận đó là bạn",
                     "Choose a way to confirm",
-                    "Ứng dụng xác thực",
-                    "Authentication app",
                 ],
                 "tap_text_any": ["Tiếp tục", "Continue", "Next"],
                 "timeout_s": 4,

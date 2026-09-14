@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from db.models.account import Account
 from db.models.device_platform_session import DevicePlatformSession
-from db.models.enums import DevicePlatformSessionState
+from db.models.enums import AccountState, DevicePlatformSessionState
+from services.account_state import (
+    AccountStateError,
+    AccountStateService,
+    normalize_state,
+)
+
+log = logging.getLogger(__name__)
 
 FACEBOOK_PLATFORM = "facebook"
 FACEBOOK_APP_PACKAGE = "com.facebook.katana"
@@ -52,6 +61,45 @@ class InvalidDevicePlatformSessionTransition(DevicePlatformSessionError):
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+async def _mark_account_active_for_session(
+    db: AsyncSession,
+    *,
+    account_id: str,
+    reason: str,
+) -> None:
+    result = await db.execute(
+        select(Account).where(Account.id == account_id).limit(1)
+    )
+    account = result.scalar_one_or_none()
+    if account is None:
+        return
+
+    try:
+        current = normalize_state(account.state or account.status)
+    except ValueError as exc:
+        log.warning("account %s session active sync skipped: %s", account_id, exc)
+        return
+    if current == AccountState.ACTIVE:
+        return
+
+    try:
+        await AccountStateService().transition(
+            db,
+            account_id,
+            to=AccountState.ACTIVE,
+            reason=reason,
+            actor="system",
+            skip_row_lock=True,
+        )
+    except AccountStateError as exc:
+        log.warning(
+            "account %s session active sync failed from %s: %s",
+            account_id,
+            current.value,
+            exc,
+        )
 
 
 def sanitize_session_evidence(value: Any, *, depth: int = 0) -> Any:
@@ -220,6 +268,11 @@ async def mark_active(
     row.display_name_observed = display_name_observed
     row.evidence = sanitize_session_evidence(evidence or {})
     _bump(row)
+    await _mark_account_active_for_session(
+        db,
+        account_id=account_id,
+        reason=reason,
+    )
     await db.flush()
     return row
 

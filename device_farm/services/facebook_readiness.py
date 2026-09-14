@@ -58,6 +58,13 @@ _CHECKPOINT_MARKERS = (
             r"(?=.*(?:kháng nghị|khong nghi|đăng xuất))"
         ),
     ),
+    (
+        "account_locked",
+        (
+            r"account (?:locked|disabled)|"
+            r"tài khoản[^.]{0,80}(?:bị khóa|bị khoá|vô hiệu hóa|vo hieu hoa)"
+        ),
+    ),
 )
 
 _LOGGED_OUT_MARKERS = (

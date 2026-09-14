@@ -152,6 +152,72 @@ MEDIA_ADAPTER_CONTROL_GRPC_TLS=true
 `:8556` của chính máy khách — địa chỉ cloud không với tới được — và tranh chấp
 với publisher trên cùng tên stream.
 
+### 4b. WHIP thay cho RTSP push (tuỳ chọn, khắc phục đứng hình)
+
+RTSP **không có back-channel**: receiver mất gói cũng không có cách nào báo
+ngược. Mất một P-frame là hỏng hình cho tới khi có IDR từ nguồn khác — đó là
+nguyên nhân gốc của stream đứng phải F5. Publish qua WHIP thì go2rtc negotiate
+`nack`, pion retransmit gói mất **mà không đụng tới MediaCodec**.
+
+Transport chọn theo scheme của URL publish, không có cờ thứ hai.
+
+**Trên server** — không được mở thẳng `1984`, đó là API admin (`PUT
+/api/streams` ghi config) và ingest WHIP vô tình dùng chung port. Giữ nguyên
+`ufw deny 1984`, dựng thêm một hostname reverse proxy 443 → `127.0.0.1:1984`,
+chỉ cho `POST /api/webrtc`:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name whip-device-farm.tommadethis.app;
+    # ... ssl_certificate ...
+
+    # Chỉ ingest. Mọi path khác — nhất là /api/streams, /api/config — rơi xuống
+    # location / bên dưới và bị chặn.
+    location = /api/webrtc {
+        limit_except POST { deny all; }
+        auth_basic           "whip";
+        auth_basic_user_file /etc/nginx/whip.htpasswd;
+        proxy_pass http://127.0.0.1:1984/api/webrtc$is_args$args;
+        # Signalling là một POST body SDP nhỏ, không phải media.
+        proxy_read_timeout 15s;
+    }
+
+    location / { return 403; }
+}
+```
+
+Cloudflare proxy bật được ở hostname này (khác hẳn `rtsp://...:8554`):
+signalling chỉ là HTTPS POST, media vẫn đi UDP thẳng tới `8555`.
+
+**Trên máy khách** — đổi đúng một dòng, restart container:
+
+```bash
+MEDIA_ADAPTER_GO2RTC_RTSP_PUBLISH_TEMPLATE=https://farm:<WHIP_PASS>@whip-device-farm.tommadethis.app/api/webrtc?dst={stream_raw}
+```
+
+Basic auth lấy từ userinfo, Go `net/http` tự gắn header. Backend không đổi.
+
+**Kiểm tra**:
+
+```bash
+docker compose logs media-adapter | grep "publishing over WHIP"
+curl -s http://127.0.0.1:8878/v1/rtsp/publisher/status | jq '.per_serial'
+# rtp_written tăng, write_errors không tăng.
+# idr_requests tăng ~20/phút = go2rtc đang bắn PLI trên ticker 2s; khi đó gate
+# PLI lại (nack đã sửa mất gói rồi) thay vì để nó reset MediaCodec mỗi 3 giây.
+
+# Proxy phải chặn đúng — dòng này PHẢI trả 403, không phải 200:
+curl -u farm:<WHIP_PASS> -X PUT "https://whip-device-farm.tommadethis.app/api/streams?name=x"
+```
+
+**Rollback**: trả template về `rtsp://...:8554/{stream_raw}`, restart. Không có
+migration, không có state.
+
+**Cái giá**: RTSP publish chỉ cần một kết nối TCP outbound nên sống qua mọi NAT.
+WHIP cần UDP tới media port của go2rtc cộng STUN — mạng khách chặn UDP là mất
+stream hoàn toàn. Thử một máy trước khi mở cho cả fleet.
+
 ### 5. Kiểm tra sau khi lên
 
 ```bash

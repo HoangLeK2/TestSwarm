@@ -558,14 +558,23 @@ test('foldEventsToStepLog folds a retried step the same way whichever order the 
     }) as any;
 
   const activity = (attempt: number, phase: string, at: string) =>
-    stepEvent(`activity-${phase}-${attempt}`, `temporal.activity.${phase}`, at, {
-      temporal_activity: true,
-      activity_id: `exec-1.wait-1.attempt-${attempt}`,
-      step_activity_id: `wait-1.attempt-${attempt}`,
-      activity_attempt: attempt
-    });
+    stepEvent(
+      `activity-${phase}-${attempt}`,
+      `temporal.activity.${phase}`,
+      at,
+      {
+        temporal_activity: true,
+        activity_id: `exec-1.wait-1.attempt-${attempt}`,
+        step_activity_id: `wait-1.attempt-${attempt}`,
+        activity_attempt: attempt
+      }
+    );
 
-  const started = stepEvent('started', 'step.started', '2026-09-05T01:00:00.000Z');
+  const started = stepEvent(
+    'started',
+    'step.started',
+    '2026-09-05T01:00:00.000Z'
+  );
   const completed = stepEvent(
     'completed',
     'step.completed',

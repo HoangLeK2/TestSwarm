@@ -59,6 +59,7 @@ _POPUP_DISMISS_PATTERNS: Sequence[Tuple[str, str]] = (
     ("text", "Continue"), ("text", "Tiếp tục"),
     ("text", "Đóng"),
     ("content-desc", "Close"), ("content-desc", "Dismiss"), ("content-desc", "Đóng"),
+    ("content-desc", "Bỏ qua"), ("content-desc", "Skip"),
 )
 
 _VOLATILE_ATTRS = re.compile(

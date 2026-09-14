@@ -237,18 +237,7 @@ func (p *Publisher) requestIDR(lane *serialLane) {
 		return
 	}
 	serial := lane.serial
-	now := time.Now()
-	p.mu.Lock()
-	if p.lastIDR == nil {
-		p.lastIDR = make(map[string]time.Time)
-	}
-	last, seen := p.lastIDR[serial]
-	allow := !seen || now.Sub(last) >= p.cfg.IDRMinInterval
-	if allow {
-		p.lastIDR[serial] = now
-	}
-	p.mu.Unlock()
-	if !allow {
+	if !p.allowIDR(serial) {
 		return
 	}
 	go func() {
@@ -256,6 +245,51 @@ func (p *Publisher) requestIDR(lane *serialLane) {
 			lane.counters.idrRequests.Add(1)
 		}
 	}()
+}
+
+// allowIDR consumes one slot of the per-device IDR budget, or reports that the
+// budget is spent. Every caller that can be driven from outside this process
+// must go through it — see requestIDR for why an ungated rate kills encoders.
+func (p *Publisher) allowIDR(serial string) bool {
+	now := time.Now()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.lastIDR == nil {
+		p.lastIDR = make(map[string]time.Time)
+	}
+	if last, seen := p.lastIDR[serial]; seen && now.Sub(last) < p.cfg.IDRMinInterval {
+		return false
+	}
+	p.lastIDR[serial] = now
+	return true
+}
+
+// RequestKeyframeGated asks a device for an IDR through the shared rate gate,
+// and reports whether the request was actually sent.
+//
+// This is the entry point for keyframe requests that originate outside the
+// adapter — today, a browser whose decoder has stalled. Manager.RequestKeyframe
+// writes RESET_VIDEO to the device with no gate at all, which is fine for the
+// adapter's own viewer-attach burst (four shots, session-scoped) but not for
+// anything a remote client can drive: a looping client would reconfigure
+// MediaCodec continuously, which is where Exynos encoders abort.
+//
+// Synchronous, unlike requestIDR: the caller is an RPC handler that already has
+// its own timeout, and the browser wants to know whether to escalate.
+func (p *Publisher) RequestKeyframeGated(serial string) bool {
+	if serial == "" || !p.allowIDR(serial) {
+		return false
+	}
+	sent := p.requestKeyframe(serial)
+	if sent {
+		p.mu.RLock()
+		lane := p.lanes[serial]
+		p.mu.RUnlock()
+		if lane != nil {
+			lane.counters.idrRequests.Add(1)
+		}
+	}
+	return sent
 }
 
 // laneDrop routes a drop reported from outside the lane — the remote publish

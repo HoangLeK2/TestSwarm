@@ -75,7 +75,8 @@ export function filterDeviceFarmActiveGridDevices(devices: Device[]): Device[] {
       );
     }
     return (
-      isVisibleDeviceFarmActiveDevice(device) && hasLiveTransportEvidence(device)
+      isVisibleDeviceFarmActiveDevice(device) &&
+      hasLiveTransportEvidence(device)
     );
   });
 }

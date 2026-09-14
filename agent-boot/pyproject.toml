@@ -14,8 +14,7 @@ dependencies = [
     "protobuf>=5.26.0",
     # Pin the client against the bundled/validated u2 server APK contract.
     "uiautomator2==3.5.0",
-    # stability: retry + circuit-breaker for scrcpy / u2 / adb recovery loops
-    "tenacity>=9.0.0",
+    # stability: circuit-breaker for scrcpy / u2 / adb recovery loops
     "aiobreaker>=1.2.0",
     # No database driver here on purpose: agent-boot runs on customer machines,
     # so a reachable DSN would be a credential leak. Content is shipped to

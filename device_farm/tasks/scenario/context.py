@@ -13,6 +13,45 @@ if TYPE_CHECKING:
     from common.variable_resolver import VariableContext
 
 
+def _first_text(*values: Any) -> Optional[str]:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return None
+
+
+def _resolve_identity(
+    scenario: Dict[str, Any], ctx: Dict[str, Any]
+) -> Dict[str, Optional[str]]:
+    """Pull account identity out of the layers a scenario can carry it in.
+
+    Same precedence as services.account_actions.resolve_action_identity, minus
+    the step layer (a step is not visible yet at construction time).
+    """
+    campaign_vars = scenario.get("_campaign_vars") or {}
+    scenario_vars = scenario.get("variables") or {}
+    runtime_vars = ctx.get("vars") or {}
+
+    def pick(key: str) -> Optional[str]:
+        return _first_text(
+            campaign_vars.get(key), scenario_vars.get(key), runtime_vars.get(key)
+        )
+
+    return {
+        "account_id": _first_text(scenario.get("account_id"), pick("__ACCOUNT_ID__")),
+        "account_label": _first_text(
+            pick("__ACCOUNT_DISPLAY_NAME__"), pick("__ACCOUNT_USERNAME__")
+        ),
+        "account_platform": _first_text(
+            scenario.get("platform"), pick("__ACCOUNT_PLATFORM__")
+        ),
+        "campaign_id": _first_text(
+            scenario.get("_campaign_id"), scenario.get("campaign_id")
+        ),
+    }
+
+
 @dataclass
 class ScenarioContext:
     """All shared state needed by step handlers during scenario execution."""
@@ -49,11 +88,23 @@ class ScenarioContext:
     trace_id: str
     trace_source: str
     execution_id: Optional[str] = None
+    # Account identity. Resolved once here so every log line, every step row and
+    # every ledger write name the same account — before this, the only layer
+    # that knew who was acting was social_actions.py, and the log stream an
+    # operator reads had nothing but a device serial.
+    account_id: Optional[str] = None
+    account_label: Optional[str] = None
+    account_platform: Optional[str] = None
+    campaign_id: Optional[str] = None
     start_step: int = 0  # executor skips steps < start_step on resume
     # Phase 2 — anti-detection step jitter (ms). 0 disables.
     jitter_min_ms: int = 0
     jitter_max_ms: int = 0
     # Accumulated state
+    # Domain-level actions waiting to be written to account_actions. Buffered so
+    # the ledger costs one database session per scenario instead of two per
+    # action on the step hot path.
+    pending_ledger_entries: List[Dict[str, Any]] = field(default_factory=list)
     step_results: List[Dict[str, Any]] = field(default_factory=list)
     last_popup_t: float = 0.0
 
@@ -88,6 +139,32 @@ class ScenarioContext:
         )
         ctx["_trace_id"] = trace_id
         ctx["_trace_source"] = trace_source
+
+        identity = _resolve_identity(scenario, ctx)
+        # Seed the runtime trace so build_step_trace_context() finds the account
+        # on the direct-executor path too. Only the Temporal activity used to
+        # supply a base context, so a manually run scenario wrote execution_steps
+        # rows whose trace had no account_id at all.
+        from services.execution.trace_context import TRACE_CONTEXT_KEY
+
+        seeded = {
+            key: value
+            for key, value in {
+                "account_id": identity["account_id"],
+                "account_label": identity["account_label"],
+                "account_platform": identity["account_platform"],
+                "campaign_id": identity["campaign_id"],
+                "execution_id": scenario.get("execution_id") or scenario.get("run_id"),
+                "device_serial": serial,
+            }.items()
+            if value
+        }
+        if seeded:
+            existing = ctx.get(TRACE_CONTEXT_KEY)
+            merged = dict(seeded)
+            if isinstance(existing, dict):
+                merged.update(existing)  # an inherited trace is more specific
+            ctx[TRACE_CONTEXT_KEY] = merged
 
         if _var_ctx is None:
             _var_ctx = VC(
@@ -202,6 +279,10 @@ class ScenarioContext:
             trace_id=trace_id,
             trace_source=trace_source,
             execution_id=_exec_id,
+            account_id=identity["account_id"],
+            account_label=identity["account_label"],
+            account_platform=identity["account_platform"],
+            campaign_id=identity["campaign_id"],
             start_step=_start_step,
             jitter_min_ms=_jmin,
             jitter_max_ms=_jmax,

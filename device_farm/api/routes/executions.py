@@ -163,6 +163,7 @@ async def list_executions_endpoint(
     status_filter: Optional[str] = None,
     campaign_id: Optional[str] = None,
     scenario_id: Optional[str] = None,
+    account_id: Optional[str] = None,
     offset: int = 0,
     limit: int = 50,
 ):
@@ -174,6 +175,9 @@ async def list_executions_endpoint(
         status=status_filter,
         campaign_id=campaign_id,
         scenario_id=scenario_id,
+        # "Which runs did this account perform?" — the entry point for tracing a
+        # ban back to the step that caused it.
+        account_id=account_id,
         offset=offset,
         limit=limit,
     )

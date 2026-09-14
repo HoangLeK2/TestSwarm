@@ -770,7 +770,12 @@ def setup_logging(cfg: LoggingConfig) -> None:
     level = getattr(logging, cfg.level.upper(), logging.INFO)
     log_dir = Path(os.getenv("FARM_LOG_DIR", "logs"))
     log_dir.mkdir(parents=True, exist_ok=True)
-    scenario_log_path = Path(os.getenv("SCENARIO_LOG_FILE", str(log_dir / "scenario-trace.log")))
+    # Filename only. The default used to embed log_dir, which the line below
+    # then prefixed a second time — so with the default (relative) FARM_LOG_DIR
+    # the trace landed in logs/logs/scenario-trace.log and nobody looking in
+    # logs/ ever found it. An absolute FARM_LOG_DIR hid the bug, which is why it
+    # survived. A relative SCENARIO_LOG_FILE is still resolved against log_dir.
+    scenario_log_path = Path(os.getenv("SCENARIO_LOG_FILE", "scenario-trace.log"))
     if not scenario_log_path.is_absolute():
         scenario_log_path = log_dir / scenario_log_path
     scenario_log_path.parent.mkdir(parents=True, exist_ok=True)

@@ -4944,14 +4944,7 @@ export function StepDetailPanel({
                     step={step}
                     campaignScenarios={campaignScenarios}
                     availableVariables={availableVariables}
-                    onPatch={(p) => {
-                      const merged = { ...step } as Record<string, unknown>;
-                      for (const [k, v] of Object.entries(p)) {
-                        if (v === undefined) delete merged[k];
-                        else merged[k] = v;
-                      }
-                      onChange(merged as FlowStep);
-                    }}
+                    onPatch={(p) => update(p as Partial<FlowStep>)}
                   />
                 </div>
               )}

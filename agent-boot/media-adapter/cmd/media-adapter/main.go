@@ -53,6 +53,10 @@ func main() {
 		go2rtcClient,
 		logger,
 	)
+	// Browser-driven keyframes go through the publisher's rate gate, never
+	// through scrcpyManager.RequestKeyframe: that one writes RESET_VIDEO with no
+	// limit, and a looping client would reconfigure MediaCodec continuously.
+	controlClient.SetGatedKeyframeRequester(publisher.RequestKeyframeGated)
 	go controlClient.Run(ctx)
 
 	httpServer := httpapi.NewServerWithWebRTC(

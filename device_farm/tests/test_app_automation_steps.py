@@ -62,6 +62,14 @@ _XML_WITH_FACEBOOK_AUTH_CODE = """
 </hierarchy>
 """
 
+_XML_WITH_FACEBOOK_AUTH_CODE_DIRECT = """
+<hierarchy>
+  <node text="Đi đến ứng dụng xác thực" class="android.widget.TextView" bounds="[56,405][1204,527]" />
+  <node text="" content-desc="Mã" class="android.widget.EditText" bounds="[112,1560][1022,1632]" />
+  <node text="Tiếp tục" class="android.widget.Button" bounds="[531,1933][730,2007]" />
+</hierarchy>
+"""
+
 _XML_FACEBOOK_LOGIN_EN = """
 <hierarchy>
   <node content-desc="Mobile number or email," class="android.widget.EditText" bounds="[48,343][438,373]" />
@@ -428,6 +436,28 @@ def test_builtin_facebook_login_supports_english_form_and_totp_path():
     assert any("Try another way" in clicked for clicked in sc.device.u2.clicked)
     assert any("Authentication app" in clicked for clicked in sc.device.u2.clicked)
     assert result["post_submit_locator_trace"]["auth_code"]["matched"] is True
+
+
+def test_builtin_facebook_login_inputs_totp_when_facebook_skips_method_picker():
+    sc = _sc([
+        _XML_FACEBOOK_LOGIN_EN,
+        _XML_WITH_FACEBOOK_AUTH_CODE_DIRECT,
+    ])
+    sc.scenario = {"app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE)}
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.01}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is True
+    assert sc.device.u2.sent == ["account-user", "account-pw", "123456"]
+    assert result["post_submit_action_trace"] == []
+    assert result["post_submit_locator_trace"]["auth_code"]["matched"] is True
+    assert any("Continue" in clicked or "Tiếp tục" in clicked for clicked in sc.device.u2.clicked)
 
 
 def test_fill_form_inputs_values_and_submits():

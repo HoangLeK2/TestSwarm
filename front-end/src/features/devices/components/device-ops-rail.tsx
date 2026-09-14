@@ -289,7 +289,11 @@ export function DeviceOpsRailSection({
       }
       setRunning(true);
       try {
-        await config.onRunStep({ ...draft, url, timeout: draft.timeout ?? 600 });
+        await config.onRunStep({
+          ...draft,
+          url,
+          timeout: draft.timeout ?? 600
+        });
         toast.success(tRun('installApkSubmitted'));
         close();
       } catch (e) {
@@ -549,7 +553,10 @@ export function DeviceOpsRailSection({
                         {loadingFacebookApk || loadingFacebookRelease ? (
                           <Loader2 className='size-4 animate-spin' />
                         ) : (
-                          <IconBrandFacebookFilled className='size-5' aria-hidden />
+                          <IconBrandFacebookFilled
+                            className='size-5'
+                            aria-hidden
+                          />
                         )}
                       </span>
                       <span className='min-w-0'>

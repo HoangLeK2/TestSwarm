@@ -6,12 +6,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const load = (f) => JSON.parse(fs.readFileSync(new URL(f, import.meta.url), 'utf8'));
+const load = (f) =>
+  JSON.parse(fs.readFileSync(new URL(f, import.meta.url), 'utf8'));
 const en = load('../messages/en.json');
 const vi = load('../messages/vi.json');
 
 const has = (obj, key) =>
-  key.split('.').reduce((a, p) => (a && typeof a === 'object' ? a[p] : undefined), obj) !==
+  key
+    .split('.')
+    .reduce((a, p) => (a && typeof a === 'object' ? a[p] : undefined), obj) !==
   undefined;
 
 const walk = (dir) =>
@@ -20,7 +23,10 @@ const walk = (dir) =>
     return e.isDirectory() ? walk(p) : /\.tsx?$/.test(e.name) ? [p] : [];
   });
 
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+const root = path.resolve(
+  path.dirname(new URL(import.meta.url).pathname),
+  '..'
+);
 const bad = [];
 
 for (const file of walk(path.join(root, 'src'))) {
@@ -37,7 +43,9 @@ for (const file of walk(path.join(root, 'src'))) {
     if (inEn && inVi) continue;
     const line = src.slice(0, m.index).split('\n').length;
     const missing = [!inEn && 'en', !inVi && 'vi'].filter(Boolean).join('+');
-    bad.push(`${path.relative(root, file)}:${line}  t('${key}')  missing in ${missing}`);
+    bad.push(
+      `${path.relative(root, file)}:${line}  t('${key}')  missing in ${missing}`
+    );
   }
 }
 

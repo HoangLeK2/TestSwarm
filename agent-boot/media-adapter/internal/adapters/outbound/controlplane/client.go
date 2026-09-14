@@ -48,6 +48,11 @@ type Client struct {
 	streamRefs map[string]int
 	stopTimers map[string]*time.Timer
 	stopGrace  time.Duration
+	// gatedKeyframe is the only keyframe path a remote client may drive: it runs
+	// through the publisher's shared IDR rate gate. Deliberately separate from
+	// c.manager.RequestKeyframe, which is ungated and stays that way for the
+	// adapter's own viewer-attach burst.
+	gatedKeyframe func(serial string) bool
 }
 
 type mediaSession struct {
@@ -99,6 +104,15 @@ func New(cfg Config, manager *scrcpy.Manager, webrtc *go2rtc.Client, logger *slo
 		stopTimers: make(map[string]*time.Timer),
 		stopGrace:  time.Duration(envInt("MEDIA_ADAPTER_WEBRTC_STOP_GRACE_MS", 5000)) * time.Millisecond,
 	}
+}
+
+// SetGatedKeyframeRequester wires the rate-limited keyframe path used by the
+// keyframe command. Unset, the command answers "already covered" rather than
+// falling back to the ungated requester.
+func (c *Client) SetGatedKeyframeRequester(request func(serial string) bool) {
+	c.mu.Lock()
+	c.gatedKeyframe = request
+	c.mu.Unlock()
 }
 
 func (c *Client) Run(ctx context.Context) {
@@ -278,6 +292,8 @@ func (c *Client) handleCommand(ctx context.Context, cmd *relaypb.MediaAdapterCom
 		return c.heartbeatSession(payload.HeartbeatSession)
 	case *relaypb.MediaAdapterCommand_CloseSession:
 		return c.closeSession(payload.CloseSession)
+	case *relaypb.MediaAdapterCommand_Keyframe:
+		return c.keyframeSession(payload.Keyframe)
 	default:
 		return nil
 	}
@@ -439,6 +455,28 @@ func (c *Client) heartbeatSession(cmd *relaypb.MediaAdapterHeartbeatSessionCmd) 
 	c.mu.Unlock()
 	if !ok {
 		return c.result(cmd.GetRequestId(), false, "WebRTC session not found", 250, mediaSession{}, "", "")
+	}
+	return c.result(cmd.GetRequestId(), true, "", 0, session, "", "")
+}
+
+// keyframeSession serves a viewer whose decoder has stalled: bytes are arriving
+// but nothing decodes, which means the H264 reference chain is broken and only
+// an IDR can repair it. Far cheaper than the alternative — rebuilding the media
+// session costs about a second and flashes the picture black.
+//
+// Being swallowed by the rate gate is reported as success on purpose. It means
+// this device was sent an IDR moments ago, so the caller should wait for that
+// one rather than escalate to a rebuild.
+func (c *Client) keyframeSession(cmd *relaypb.MediaAdapterKeyframeCmd) *relaypb.MediaAdapterMsg {
+	c.mu.Lock()
+	session, ok := c.sessions[cmd.GetSessionId()]
+	request := c.gatedKeyframe
+	c.mu.Unlock()
+	if !ok {
+		return c.result(cmd.GetRequestId(), false, "WebRTC session not found", 250, mediaSession{}, "", "")
+	}
+	if request != nil && !request(session.Serial) && c.logger != nil {
+		c.logger.Debug("gated keyframe request not sent", "serial", session.Serial)
 	}
 	return c.result(cmd.GetRequestId(), true, "", 0, session, "", "")
 }

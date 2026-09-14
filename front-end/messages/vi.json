@@ -933,7 +933,8 @@
       "statusVerifying": "Xác thực",
       "statusBanned": "Đã cấm",
       "statusRetired": "Ngưng dùng",
-      "restingUntil": "Tạm nghỉ đến {time}"
+      "restingUntil": "Tạm nghỉ đến {time}",
+      "stepTrace": "Dấu vết step"
     },
     "stateDialog": {
       "trigger": "Đổi trạng thái",
@@ -1216,6 +1217,25 @@
         "cooldown_cleared": "Hết thời gian chờ",
         "session_death": "Phiên kết thúc",
         "banned": "Bị cấm"
+      },
+      "stepTrace": {
+        "trigger": "Dấu vết step",
+        "title": "Dấu vết step — {username}",
+        "description": "Toàn bộ step account này đã chạy, run mới nhất lên đầu. Dùng để truy ngược từ lúc bị ban về step gây ra.",
+        "loadingRuns": "Đang tải danh sách run...",
+        "emptyRuns": "Account này chưa chạy gì",
+        "runsError": "Không tải được danh sách run của account",
+        "selectRun": "Chọn một run để xem các step",
+        "loadingSteps": "Đang tải step...",
+        "emptySteps": "Run này không ghi được step nào",
+        "stepsError": "Không tải được step của run này",
+        "stepCount": "{count} step",
+        "failedCount": "{count} lỗi",
+        "runsHeading": "Các run",
+        "stepsHeading": "Các step",
+        "noCampaign": "Chạy tay",
+        "topLevelOnly": "chỉ còn step cấp cao (event đã hết hạn lưu)",
+        "truncated": "đang hiện các event gần nhất"
       }
     }
   },
@@ -5716,6 +5736,19 @@
         "account_action_content_interaction": "Tương tác bài viết",
         "account_action_connection_request": "Gửi kết bạn",
         "account_action_community_membership": "Tương tác nhóm",
+        "account_action_app_open": "Mở ứng dụng",
+        "account_action_session_login": "Đăng nhập",
+        "account_action_post_open": "Mở bài viết",
+        "account_action_post_like": "Thích bài viết",
+        "account_action_post_unlike": "Bỏ thích",
+        "account_action_post_share": "Chia sẻ bài viết",
+        "account_action_comment_submit": "Gửi bình luận",
+        "account_action_profile_open": "Mở trang cá nhân",
+        "account_action_profile_follow": "Theo dõi",
+        "account_action_profile_unfollow": "Bỏ theo dõi",
+        "account_action_filter_apply": "Áp dụng bộ lọc",
+        "account_action_search_submit": "Tìm kiếm",
+        "account_action_community_join": "Tham gia nhóm",
         "member_invited": "Mời thành viên",
         "member_role_changed": "Đổi vai trò thành viên",
         "password_changed": "Đổi mật khẩu",

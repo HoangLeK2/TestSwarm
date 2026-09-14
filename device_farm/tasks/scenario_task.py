@@ -336,6 +336,7 @@ _POPUP_DISMISS_PATTERNS: Sequence[Tuple[str, str]] = (
     ("text", "Continue"), ("text", "Tiếp tục"),
     # Close buttons by content-desc (accessibility label)
     ("content-desc", "Close"), ("content-desc", "Dismiss"), ("content-desc", "Đóng"),
+    ("content-desc", "Bỏ qua"), ("content-desc", "Skip"),
 )
 
 

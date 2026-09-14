@@ -1,6 +1,7 @@
 """CRUD for execution_events outbox/archive (DF-T-04-013)."""
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -36,6 +37,9 @@ async def insert_execution_event(
     schema_version: str = "1",
     occurred_at: Optional[datetime] = None,
     event_id: Optional[str] = None,
+    account_id: Optional[str] = None,
+    device_serial: Optional[str] = None,
+    step_path: Optional[str] = None,
 ) -> ExecutionEvent:
     now = occurred_at or datetime.now(timezone.utc)
     row = ExecutionEvent(
@@ -46,6 +50,9 @@ async def insert_execution_event(
         campaign_id=campaign_id,
         execution_id=execution_id,
         step_id=step_id,
+        account_id=account_id,
+        device_serial=device_serial,
+        step_path=step_path,
         payload=payload or {},
         occurred_at=now,
         published_at=None,
@@ -239,13 +246,25 @@ async def purge_events_older_than(
     db: AsyncSession,
     *,
     cutoff: datetime,
+    keep_types: Sequence[str] = (),
+    keep_type_prefixes: Sequence[str] = (),
 ) -> int:
+    """Delete published events past the cutoff, sparing the named types.
+
+    ``keep_*`` exists so failures and incidents can outlive the successes they
+    are buried in: they are what a ban investigation reads, and they are a small
+    fraction of the table.
+    """
     from sqlalchemy import delete
 
-    result = await db.execute(
-        delete(ExecutionEvent).where(
-            ExecutionEvent.created_at < cutoff,
-            ExecutionEvent.published_at.is_not(None),
-        )
-    )
+    conditions = [
+        ExecutionEvent.created_at < cutoff,
+        ExecutionEvent.published_at.is_not(None),
+    ]
+    if keep_types:
+        conditions.append(ExecutionEvent.event_type.not_in(tuple(keep_types)))
+    for prefix in keep_type_prefixes:
+        conditions.append(~ExecutionEvent.event_type.startswith(prefix))
+
+    result = await db.execute(delete(ExecutionEvent).where(*conditions))
     return int(result.rowcount or 0)

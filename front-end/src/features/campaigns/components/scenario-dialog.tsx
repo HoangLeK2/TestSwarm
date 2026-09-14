@@ -1429,8 +1429,8 @@ export function ScenarioDialog({
         (campaign.variables ?? {}) as Record<string, unknown>
       ) as Record<string, any>;
       currentRequirements =
-        (((campaign.scenario as any)?.requirements ?? {}) as ScenarioRequirements) ??
-        {};
+        (((campaign.scenario as any)?.requirements ??
+          {}) as ScenarioRequirements) ?? {};
       setAccountGroupId('');
     }
 

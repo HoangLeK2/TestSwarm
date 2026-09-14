@@ -316,6 +316,28 @@ class MediaAdapterControlServicer:
         )
         return await conn.send_command(cmd, request_id, timeout)
 
+    async def request_keyframe(self, session_id: str, timeout: float = 1.5) -> dict:
+        """Ask the adapter for one IDR on this session's device.
+
+        Short timeout on purpose: an adapter built before this command exists
+        drops it on the floor and never answers, so the wait is the whole cost of
+        the compatibility gap. The caller treats any failure as "escalate", not
+        as an error.
+        """
+        from .grpc_gen import relay_pb2
+
+        conn = self.conn_for_session(session_id)
+        if not conn:
+            return {"ok": False, "error": "media adapter session not found", "retry_after_ms": 500}
+        request_id = str(uuid.uuid4())
+        cmd = relay_pb2.MediaAdapterCommand(
+            keyframe=relay_pb2.MediaAdapterKeyframeCmd(
+                request_id=request_id,
+                session_id=session_id,
+            )
+        )
+        return await conn.send_command(cmd, request_id, timeout)
+
     async def close_session(self, session_id: str, timeout: float = 2.0) -> dict:
         from .grpc_gen import relay_pb2
 

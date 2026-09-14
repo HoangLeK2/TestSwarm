@@ -45,6 +45,11 @@ const KEYS = {
   actions: (id: string, cursor?: string) =>
     ['accounts', id, 'actions', cursor] as const,
   actionSummary: (id: string) => ['accounts', id, 'action-summary'] as const,
+  runs: (id: string) => ['accounts', id, 'runs'] as const,
+  runSteps: (executionId: string) =>
+    ['executions', executionId, 'steps'] as const,
+  runTaskLog: (executionId: string) =>
+    ['executions', executionId, 'task-log'] as const,
   candidateSettings: ['accounts', 'candidate-settings'] as const,
   importFormats: ['accounts', 'import-formats'] as const
 };
@@ -103,6 +108,45 @@ export function useAccountActions(
         cursor: opts?.cursor
       }),
     enabled: !!accountId && (opts?.enabled ?? true)
+  });
+}
+
+/** Runs this account performed, newest first. Hop one of a ban trace. */
+export function useAccountRuns(
+  accountId: string,
+  opts?: { enabled?: boolean; limit?: number }
+) {
+  return useQuery({
+    queryKey: KEYS.runs(accountId),
+    queryFn: () => accountsApi.listRuns(accountId, opts?.limit ?? 50),
+    enabled: !!accountId && (opts?.enabled ?? true)
+  });
+}
+
+/** Every persisted step of one run. Hop two: what the account actually did. */
+export function useAccountRunSteps(
+  executionId: string | null,
+  opts?: { enabled?: boolean }
+) {
+  return useQuery({
+    queryKey: KEYS.runSteps(executionId ?? ''),
+    queryFn: () => accountsApi.listRunSteps(executionId as string),
+    // Finished runs never change; only a live one is worth refetching.
+    staleTime: 60_000,
+    enabled: !!executionId && (opts?.enabled ?? true)
+  });
+}
+
+/** The full trace of one run — every depth. See accountsApi.getRunTaskLog. */
+export function useAccountRunTaskLog(
+  executionId: string | null,
+  opts?: { enabled?: boolean }
+) {
+  return useQuery({
+    queryKey: KEYS.runTaskLog(executionId ?? ''),
+    queryFn: () => accountsApi.getRunTaskLog(executionId as string),
+    staleTime: 60_000,
+    enabled: !!executionId && (opts?.enabled ?? true)
   });
 }
 

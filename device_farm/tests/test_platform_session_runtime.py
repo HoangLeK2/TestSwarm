@@ -11,7 +11,7 @@ from db.database import Base
 from common.variable_resolver import VariableContext
 from db.models.account import Account
 from db.models.device import Device
-from db.models.enums import DevicePlatformSessionState
+from db.models.enums import AccountState, DevicePlatformSessionState
 from services.campaign.account_resolver import ResolvedDeviceAccount
 from services.campaign.dispatcher import _apply_platform_session_guard_to_accounts
 from services.device_platform_session import get_platform_session, mark_active
@@ -49,6 +49,16 @@ def _readiness(status: PlatformReadinessStatus) -> PlatformReadinessResult:
         reason=f"test_{status.value}",
         attempted_at=datetime.now(timezone.utc),
         app_package="com.facebook.katana",
+    )
+
+
+def _checkpoint_readiness(*markers: str) -> PlatformReadinessResult:
+    return PlatformReadinessResult(
+        status=PlatformReadinessStatus.CHECKPOINT,
+        reason="checkpoint_visible",
+        attempted_at=datetime.now(timezone.utc),
+        app_package="com.facebook.katana",
+        matched_markers=markers,
     )
 
 
@@ -202,6 +212,121 @@ async def test_confirm_marks_expected_account_active(session_factory):
     assert session.state == DevicePlatformSessionState.ACTIVE.value
     assert session.account_id == "account-1"
     assert session.establishment_method == "scenario_login"
+
+
+@pytest.mark.asyncio
+async def test_confirmed_login_activates_account_state(session_factory):
+    provenance = {
+        "org_id": "org-1",
+        "device_id": "device-1",
+        "account_id": "account-1",
+        "login_required": True,
+    }
+    async with session_factory() as db:
+        with use_tenant_scope("org-1"):
+            db.add(
+                Account(
+                    id="account-1",
+                    org_id="org-1",
+                    platform="facebook",
+                    username="61577079665632",
+                    status=AccountState.UNASSIGNED.value,
+                    state=AccountState.UNASSIGNED.value,
+                    state_reason="chưa gán",
+                )
+            )
+            await db.flush()
+
+            decision = await apply_platform_session_gate(
+                db,
+                org_id="org-1",
+                device_id="device-1",
+                account_id="account-1",
+                phase="confirm",
+                readiness=_readiness(PlatformReadinessStatus.READY),
+                login_provenance=provenance,
+            )
+            account = await db.get(Account, "account-1")
+
+    assert decision["allowed"] is True
+    assert decision["ready"] is True
+    assert account is not None
+    assert account.state == AccountState.ACTIVE.value
+    assert account.status == AccountState.ACTIVE.value
+    assert account.state_reason == "scenario_login_confirmed"
+
+
+@pytest.mark.asyncio
+async def test_login_checkpoint_marks_account_verifying(session_factory):
+    async with session_factory() as db:
+        with use_tenant_scope("org-1"):
+            db.add(
+                Account(
+                    id="account-1",
+                    org_id="org-1",
+                    platform="facebook",
+                    username="checkpoint-user",
+                    status=AccountState.ACTIVE.value,
+                    state=AccountState.ACTIVE.value,
+                )
+            )
+            await db.flush()
+
+            decision = await apply_platform_session_gate(
+                db,
+                org_id="org-1",
+                device_id="device-1",
+                account_id="account-1",
+                phase="confirm",
+                readiness=_checkpoint_readiness("selfie_video_verification"),
+            )
+            account = await db.get(Account, "account-1")
+            session = await get_platform_session(
+                db, org_id="org-1", device_id="device-1"
+            )
+
+    assert decision["allowed"] is False
+    assert decision["ready"] is False
+    assert session is not None
+    assert session.state == DevicePlatformSessionState.CHECKPOINT.value
+    assert account is not None
+    assert account.state == AccountState.SUSPENDED.value
+    assert account.status == AccountState.SUSPENDED.value
+    assert account.state_reason == "facebook_checkpoint_verification"
+
+
+@pytest.mark.asyncio
+async def test_login_locked_checkpoint_marks_account_banned(session_factory):
+    async with session_factory() as db:
+        with use_tenant_scope("org-1"):
+            db.add(
+                Account(
+                    id="account-1",
+                    org_id="org-1",
+                    platform="facebook",
+                    username="locked-user",
+                    status=AccountState.ACTIVE.value,
+                    state=AccountState.ACTIVE.value,
+                )
+            )
+            await db.flush()
+
+            decision = await apply_platform_session_gate(
+                db,
+                org_id="org-1",
+                device_id="device-1",
+                account_id="account-1",
+                phase="confirm",
+                readiness=_checkpoint_readiness("account_locked"),
+            )
+            account = await db.get(Account, "account-1")
+
+    assert decision["allowed"] is False
+    assert decision["ready"] is False
+    assert account is not None
+    assert account.state == AccountState.BANNED.value
+    assert account.status == AccountState.BANNED.value
+    assert account.state_reason == "facebook_account_locked"
 
 
 @pytest.mark.asyncio

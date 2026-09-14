@@ -43,14 +43,3 @@ class PlatformAppDownloadOut(BaseModel):
 
 class PlatformAppPublishOut(BaseModel):
     release: PlatformAppReleaseOut
-
-
-class PlatformAppInstallRequest(BaseModel):
-    serial: str
-    timeout_seconds: int = 600
-
-
-class PlatformAppInstallOut(BaseModel):
-    ok: bool
-    serial: str
-    release: PlatformAppReleaseOut

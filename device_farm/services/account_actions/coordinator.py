@@ -306,7 +306,10 @@ async def _finalize_action(
         "outcome": result.get("outcome"),
         "action_performed": action_performed,
     }
-    for key in ("state", "action_bounds", "matched_label"):
+    # "summary" is the operator-facing sentence for this action. It was being
+    # dropped here, so the row reached the activity feed with a status and a
+    # target id but nothing that says what the account actually did.
+    for key in ("state", "action_bounds", "matched_label", "summary"):
         if result.get(key) is not None:
             details[key] = result.get(key)
     if error_message:
@@ -382,6 +385,11 @@ async def _record_applied_actions(
     out: list[dict[str, Any]] = []
     for offset, entry in enumerate(entries):
         target = entry.get("target") or {}
+        # Per-entry overrides. The batch-level identity carries one step_id, so
+        # without these a caller flushing several different steps in one session
+        # would file all of them under the first step's id and action type.
+        entry_identity = entry.get("identity") or identity
+        entry_action_type = str(entry.get("action_type") or action_type)
         # A savepoint per entry. Sharing one session is the whole point here, but
         # sharing one transaction would mean a single bad row rolls back the
         # entire batch — the per-target sessions this replaced kept the ones that
@@ -392,18 +400,18 @@ async def _record_applied_actions(
                     out.append(
                         await _observe_action(
                             db,
-                            identity=identity,
-                            action_type=action_type,
+                            identity=entry_identity,
+                            action_type=entry_action_type,
                             platform=platform,
                             target=target,
-                            outcome="applied",
+                            outcome=str(entry.get("outcome") or "applied"),
                         )
                     )
                     continue
                 claim = await _prepare_action(
                     db,
-                    identity=identity,
-                    action_type=action_type,
+                    identity=entry_identity,
+                    action_type=entry_action_type,
                     platform=platform,
                     target=target,
                     action_id=reserved_action_id if offset == 0 else None,
@@ -415,9 +423,12 @@ async def _record_applied_actions(
                     await _finalize_action(
                         db,
                         claim=claim,
-                        succeeded=True,
+                        # A step that ran and failed still belongs in the ledger
+                        # — an account timeline that only shows successes is a
+                        # highlight reel, not an audit trail.
+                        succeeded=bool(entry.get("succeeded", True)),
                         terminal=True,
-                        reason=reason,
+                        reason=str(entry.get("reason") or reason),
                         result=entry.get("result") or {},
                     )
                 )

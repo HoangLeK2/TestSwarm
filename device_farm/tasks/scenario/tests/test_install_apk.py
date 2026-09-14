@@ -26,7 +26,29 @@ def test_install_apk_success():
     )
     assert result["ok"] is True
     device.install.assert_called_once_with(
-        "https://cdn.example.com/app.apk", timeout=120.0
+        "https://cdn.example.com/app.apk", timeout=120.0, verify_package=None
+    )
+
+
+def test_install_apk_forwards_verify_package():
+    device = MagicMock()
+    sc = _ctx(device)
+    result = {"ok": True}
+    handle_install_apk(
+        sc,
+        {
+            "type": "install_apk",
+            "url": "https://cdn.example.com/fb.apk",
+            "verify_package": "com.facebook.katana",
+        },
+        0,
+        result,
+    )
+    assert result["ok"] is True
+    device.install.assert_called_once_with(
+        "https://cdn.example.com/fb.apk",
+        timeout=90.0,
+        verify_package="com.facebook.katana",
     )
 
 

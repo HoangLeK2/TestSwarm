@@ -267,6 +267,11 @@ def _account_action_out(row: AccountAction, account: Account) -> ActivityLogOut:
         "execution_id": row.execution_id,
         "step_id": row.step_id,
         "device_id": row.device_id,
+        # The operator-facing sentence built when the step ran ("Opened the
+        # comment section on ..."). Without it the feed can only render the
+        # action type, so a row says "Account action" and the reader has to
+        # infer the rest from a target id.
+        "summary": result.get("summary"),
         # Audit evidence recorded at finalize time. No post URL: targets come
         # from the Android view hierarchy, which has no permalink — the post is
         # identified by target_id plus the snippet in target_label.

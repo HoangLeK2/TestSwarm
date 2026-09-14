@@ -218,7 +218,9 @@ export function ScenarioRequirementsSettingsDialog({
                     <SelectItem value='facebook'>
                       {t('platformFacebook')}
                     </SelectItem>
-                    <SelectItem value='tiktok'>{t('platformTiktok')}</SelectItem>
+                    <SelectItem value='tiktok'>
+                      {t('platformTiktok')}
+                    </SelectItem>
                     <SelectItem value='zalo'>{t('platformZalo')}</SelectItem>
                   </SelectContent>
                 </Select>
@@ -229,9 +231,7 @@ export function ScenarioRequirementsSettingsDialog({
                 </Label>
                 <Select
                   value={accountSource}
-                  onValueChange={(value) =>
-                    update({ account_source: value })
-                  }
+                  onValueChange={(value) => update({ account_source: value })}
                 >
                   <SelectTrigger className='h-9'>
                     <SelectValue />

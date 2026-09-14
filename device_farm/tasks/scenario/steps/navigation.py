@@ -313,8 +313,9 @@ def handle_install_apk(sc: ScenarioContext, step: Dict[str, Any], idx: int, resu
     except (TypeError, ValueError):
         timeout = 90.0
     timeout = min(600.0, max(10.0, timeout))
+    verify_package = str(step.get("verify_package") or "").strip() or None
     try:
-        sc.device.install(source, timeout=timeout)
+        sc.device.install(source, timeout=timeout, verify_package=verify_package)
         log.info("[%s] install_apk ok: %s", sc.serial, source)
         result["message"] = f"install_apk: ok ({source})"
     except Exception as exc:

@@ -14,15 +14,21 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+const root = path.resolve(
+  path.dirname(new URL(import.meta.url).pathname),
+  '..'
+);
 const NAMESPACE = 'campaignsFeature.stepEditor';
 
-const load = (f) => JSON.parse(fs.readFileSync(path.join(root, 'messages', f), 'utf8'));
+const load = (f) =>
+  JSON.parse(fs.readFileSync(path.join(root, 'messages', f), 'utf8'));
 const en = load('en.json');
 const vi = load('vi.json');
 
 const has = (obj, key) =>
-  key.split('.').reduce((a, p) => (a && typeof a === 'object' ? a[p] : undefined), obj) !==
+  key
+    .split('.')
+    .reduce((a, p) => (a && typeof a === 'object' ? a[p] : undefined), obj) !==
   undefined;
 
 const schemaPath = path.join(root, 'generate/scenario-schema.json');
@@ -49,15 +55,21 @@ for (const stepSchema of Object.values(schema.steps_schema ?? {})) {
 const bad = [];
 for (const key of [...keys].sort()) {
   const full = `${NAMESPACE}.${key}`;
-  const missing = [!has(en, full) && 'en', !has(vi, full) && 'vi'].filter(Boolean);
+  const missing = [!has(en, full) && 'en', !has(vi, full) && 'vi'].filter(
+    Boolean
+  );
   if (missing.length) bad.push(`  ${key}  missing in ${missing.join('+')}`);
 }
 
 if (bad.length) {
   console.error(`${bad.length} schema label key(s) with no translation:`);
   bad.forEach((b) => console.error(b));
-  console.error(`\nAdd them under "${NAMESPACE}" in messages/en.json and messages/vi.json,`);
-  console.error('or drop label_key from the field so it falls back to a humanised name.');
+  console.error(
+    `\nAdd them under "${NAMESPACE}" in messages/en.json and messages/vi.json,`
+  );
+  console.error(
+    'or drop label_key from the field so it falls back to a humanised name.'
+  );
   process.exit(1);
 }
 console.log(`schema field i18n OK (${keys.size} key(s))`);

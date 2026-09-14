@@ -106,6 +106,7 @@ async def list_executions(
     user_id: Optional[str] = None,
     campaign_id: Optional[str] = None,
     scenario_id: Optional[str] = None,
+    account_id: Optional[str] = None,
     run_type: Optional[str] = None,
     kind: Optional[str] = None,
     status: Optional[str] = None,
@@ -120,6 +121,16 @@ async def list_executions(
             q = q.where(Execution.org_id == org_id)
         if user_id is not None:
             q = q.where(Execution.user_id == user_id)
+    elif account_id is not None:
+        # Scope on executions.org_id, not through Campaign. The join below is
+        # the usual tenancy path, but it silently drops every run without a
+        # campaign — manual runs and schedule runs — and those are exactly the
+        # ones an investigation must not miss. This branch also matches
+        # idx_executions_org_account_created (migration 130).
+        if org_id:
+            q = q.where(Execution.org_id == org_id)
+        if user_id is not None:
+            q = q.where(Execution.user_id == user_id)
     elif org_id:
         q = q.join(Campaign, Execution.campaign_id == Campaign.id).where(
             Campaign.org_id == org_id
@@ -130,6 +141,8 @@ async def list_executions(
         q = q.where(Execution.campaign_id == campaign_id)
     if scenario_id is not None:
         q = q.where(Execution.scenario_id == scenario_id)
+    if account_id is not None:
+        q = q.where(Execution.account_id == account_id)
     if run_type is not None:
         q = q.where(Execution.run_type == run_type)
     if kind is not None and kind != "preview":

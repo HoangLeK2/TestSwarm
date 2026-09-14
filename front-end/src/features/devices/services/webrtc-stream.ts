@@ -1,4 +1,12 @@
 import { farmApi } from '@/lib/farm-api';
+import {
+  DEFAULT_STALL_THRESHOLDS,
+  readMediaSample,
+  startMediaProgressWatcher,
+  type MediaProgressWatcherHandle,
+  type MediaSample,
+  type StallReason
+} from './webrtc-stall';
 
 const configuredIceGatherTimeout = Number(
   process.env.NEXT_PUBLIC_WEBRTC_ICE_GATHER_TIMEOUT_MS ?? 180
@@ -60,6 +68,8 @@ type StartWebRtcStreamOptions = {
   bitrate?: number;
   onFrame?: () => void;
   onSize?: (width: number, height: number) => void;
+  onStall?: (reason: StallReason) => void;
+  onProgress?: (sample: MediaSample) => void;
 };
 
 type VideoElementWithFrameCallback = HTMLVideoElement & {
@@ -72,6 +82,25 @@ type VideoElementWithFrameCallback = HTMLVideoElement & {
 export type WebRtcStreamController = {
   sessionId: string;
   peerConnection: RTCPeerConnection;
+  /**
+   * Re-point the stall watchdog at whoever currently owns this connection.
+   *
+   * A controller outlives the hook instance that created it (see the warm
+   * controller cache in use-webrtc-video.ts), so the handler captured at
+   * creation time can belong to an unmounted component. Without this a reused
+   * connection would freeze with nobody listening — the exact state that used
+   * to need a page refresh.
+   */
+  setStallHandler: (handler: ((reason: StallReason) => void) | null) => void;
+  /**
+   * Re-arm the watchdog after a repair that kept this connection.
+   *
+   * The watchdog stops itself when it reports a stall, so the keyframe rung of
+   * the ladder — which does not replace the connection — has to say when to
+   * start watching again, otherwise a keyframe that did not help would go
+   * unnoticed and the ladder would never escalate.
+   */
+  resumeWatcher: () => void;
   close: () => Promise<void>;
 };
 
@@ -107,6 +136,18 @@ async function keepWebRtcSessionAlive(
   await postJson(`/media/webrtc/sessions/${sessionId}/heartbeat`, {
     ttl_seconds: WEBRTC_SESSION_TTL_SECONDS
   });
+}
+
+/**
+ * Ask the device for one IDR without disturbing this connection.
+ *
+ * Rate-limited on the adapter side (Publisher.RequestKeyframeGated), so calling
+ * it too often is harmless but also useless. Throws on any failure — including
+ * the timeout an adapter built before this endpoint existed will produce — and
+ * the caller escalates to a session rebuild.
+ */
+export async function requestWebRtcKeyframe(sessionId: string): Promise<void> {
+  await postJson(`/media/webrtc/sessions/${sessionId}/keyframe`, {});
 }
 
 /**
@@ -254,7 +295,9 @@ export async function startWebRtcStream({
   maxWidth,
   bitrate,
   onFrame,
-  onSize
+  onSize,
+  onStall,
+  onProgress
 }: StartWebRtcStreamOptions): Promise<WebRtcStreamController> {
   const payload: Record<string, unknown> = {
     org_id: 'local-org',
@@ -289,6 +332,12 @@ export async function startWebRtcStream({
 
   const pc = new RTCPeerConnection({ iceServers: parseIceServers() });
   pc.addTransceiver('video', { direction: 'recvonly' });
+
+  let stallHandler: ((reason: StallReason) => void) | null = onStall ?? null;
+  const setStallHandler = (handler: ((reason: StallReason) => void) | null) => {
+    stallHandler = handler;
+  };
+  let watcher: MediaProgressWatcherHandle | null = null;
 
   let firstFrameSeen = false;
   let frameCallbackHandle: number | null = null;
@@ -350,7 +399,18 @@ export async function startWebRtcStream({
       signal
     );
     await pc.setRemoteDescription(answer);
+    // Only arm the watchdog once media is supposed to be flowing. Before this
+    // point a flat counter means "still negotiating", which the 425 retry
+    // ladder above already owns.
+    watcher = startMediaProgressWatcher({
+      sample: () => readMediaSample(pc),
+      thresholds: DEFAULT_STALL_THRESHOLDS,
+      onProgress,
+      onStall: (reason) => stallHandler?.(reason)
+    });
   } catch (error) {
+    watcher?.stop();
+    watcher = null;
     cancelFrameCallback();
     video.removeEventListener('loadeddata', markFrame);
     video.removeEventListener('canplay', requestFirstVideoFrame);
@@ -363,6 +423,9 @@ export async function startWebRtcStream({
   }
 
   const close = async () => {
+    watcher?.stop();
+    watcher = null;
+    stallHandler = null;
     cancelFrameCallback();
     video.removeEventListener('loadeddata', markFrame);
     video.removeEventListener('canplay', requestFirstVideoFrame);
@@ -377,5 +440,11 @@ export async function startWebRtcStream({
     close().catch(() => {});
   });
 
-  return { sessionId: session.id, peerConnection: pc, close };
+  return {
+    sessionId: session.id,
+    peerConnection: pc,
+    setStallHandler,
+    resumeWatcher: () => watcher?.resume(),
+    close
+  };
 }

@@ -39,6 +39,8 @@ _ACTION_KEYS = (
     "account_action_id",
     "account_action_ids",
     "action",
+    "semantic_action",
+    "activity_summary",
     "action_type",
     "action_performed",
     "outcome",

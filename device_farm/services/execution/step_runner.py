@@ -33,6 +33,34 @@ _U2_TRANSIENT_BACKOFF_MS = 2500
 _U2_TRANSIENT_BACKOFF_CAP_MS = 10_000
 
 
+def _retry_identity(
+    sc: "ScenarioContext", step: Dict[str, Any], step_result: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Identity + action id on retry lines.
+
+    Without the action id a run reads ``FAILED / FAILED / SUCCEEDED`` with no
+    way to tell it was one action retried, rather than three separate ones.
+    The id is stashed on the step once seen: ``prepare_action`` keys on a stable
+    ``action_key``, so every attempt of one step claims the same ledger row, but
+    only the attempt that reached the claim carries it in its own result.
+    """
+    ledger = step_result.get("account_action_ledger")
+    if isinstance(ledger, dict) and ledger.get("action_id"):
+        step["_account_action_id"] = str(ledger["action_id"])
+    elif step.get("_account_action_id"):
+        ledger = {"action_id": step["_account_action_id"]}
+    return {
+        "account_id": getattr(sc, "account_id", None) or "-",
+        "account_label": getattr(sc, "account_label", None) or "-",
+        "platform": getattr(sc, "account_platform", None) or "-",
+        "campaign_id": getattr(sc, "campaign_id", None) or "-",
+        "execution_id": getattr(sc, "execution_id", None) or "-",
+        "account_action_id": (
+            ledger.get("action_id") if isinstance(ledger, dict) else None
+        ),
+    }
+
+
 def _cancel_event(sc: "ScenarioContext") -> Any:
     ev = getattr(sc, "cancel_event", None)
     if ev is not None and callable(getattr(ev, "is_set", None)):
@@ -373,6 +401,7 @@ def execute_step_with_retry(
                         serial=sc.serial,
                         step_index=idx + 1,
                         step_type=t,
+                        **_retry_identity(sc, step, merged),
                     )
                     step_result = _carry_capture_evidence(
                         {"index": idx, "type": t, "ok": True}, merged
@@ -414,6 +443,8 @@ def execute_step_with_retry(
                 reason_code=merged.get("reason_code"),
                 backoff_ms=wait_ms,
                 stale_frame=stale_raised,
+                error=str(merged.get("message") or "") or None,
+                **_retry_identity(sc, step, merged),
             )
             wait_s = wait_ms / 1000.0
             cancel_event = _cancel_event(sc)

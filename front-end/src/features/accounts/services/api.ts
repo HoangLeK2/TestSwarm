@@ -84,6 +84,59 @@ export type AccountActionSummaryOut = {
   current_activity: string | null;
 };
 
+/** One run performed by an account. Subset of ExecutionOut we actually render. */
+export type AccountRunOut = {
+  id: string;
+  run_type: string;
+  status: string;
+  campaign_id: string | null;
+  scenario_id: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export type AccountRunListOut = {
+  total: number;
+  items: AccountRunOut[];
+};
+
+/** Mirrors api/schemas/execution.py::ExecutionStepOut. */
+export type AccountRunStepOut = {
+  id: string;
+  execution_id: string;
+  step_index: number;
+  step_id: string | null;
+  step_type: string | null;
+  status: string;
+  started_at: string | null;
+  ended_at: string | null;
+  duration_ms: number | null;
+  error_json: Record<string, unknown>;
+  effective_config_json: Record<string, unknown>;
+  artifacts_json: unknown[];
+  attempts_json: unknown[];
+  marked_ignored: boolean;
+  message: string | null;
+};
+
+/** One row of execution_events as the task-log endpoint returns it. */
+export type AccountRunEventOut = {
+  event_id: string;
+  event_type: string;
+  occurred_at: string | null;
+  step_id: string | null;
+  payload: Record<string, unknown>;
+};
+
+export type AccountRunTaskLogOut = {
+  execution_id: string;
+  status: string | null;
+  steps: AccountRunStepOut[];
+  events: AccountRunEventOut[];
+  has_more_events: boolean;
+};
+
 export type DevicePlatformSessionOut = {
   id: string;
   org_id: string;
@@ -345,6 +398,31 @@ export const accountsApi = {
   getActionSummary: (accountId: string) =>
     farmApi
       .get<AccountActionSummaryOut>(`/accounts/${accountId}/action-summary`)
+      .then((r) => r.data),
+  /** Runs this account performed, newest first — hop one of a ban trace. */
+  listRuns: (accountId: string, limit = 50) =>
+    farmApi
+      .get<AccountRunListOut>('/executions', {
+        params: { account_id: accountId, limit }
+      })
+      .then((r) => r.data),
+  /** Top-level steps only — the projection. Fallback when events are purged. */
+  listRunSteps: (executionId: string) =>
+    farmApi
+      .get<AccountRunStepOut[]>(`/executions/${executionId}/steps`)
+      .then((r) => r.data),
+  /**
+   * The full trace: every step at every depth, from execution_events.
+   *
+   * execution_steps only ever records depth 0 (persist_step_checkpoint runs at
+   * depth 0, and its key is a flat (execution_id, step_index)), so a run whose
+   * work happens inside run_scenario shows one row there and hundreds here.
+   */
+  getRunTaskLog: (executionId: string, eventLimit = 500) =>
+    farmApi
+      .get<AccountRunTaskLogOut>(`/executions/${executionId}/task-log`, {
+        params: { event_limit: eventLimit }
+      })
       .then((r) => r.data),
   getFacebookCandidateSettings: () =>
     farmApi

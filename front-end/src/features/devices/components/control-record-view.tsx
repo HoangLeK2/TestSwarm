@@ -3064,11 +3064,19 @@ export function ControlRecordView({
       defaultPackage: packageFromCurrentApp(d.current_app),
       onRunStep: runDeviceOpStep,
       onRunShell: (cmd) => runAgentShell(d.serial, cmd),
+      // Chạy qua preview-stream như mọi device op khác: REST đồng bộ giữ request
+      // mở suốt lúc tải + cài (tới 600s) và bị Cloudflare cắt ở ~100s -> 502.
+      // download_url là presigned R2 nên máy tải thẳng, không qua origin.
       onInstallStandardFacebookApk: async () => {
-        const { data } = await farmApi.post(
-          '/platform-apps/facebook/current/install',
-          { serial: d.serial, timeout_seconds: 600 }
+        const { data } = await farmApi.get(
+          '/platform-apps/facebook/current/download-url'
         );
+        await runDeviceOpStep({
+          type: 'install_apk',
+          url: data.download_url,
+          timeout: 600,
+          verify_package: 'com.facebook.katana'
+        });
         return data;
       }
     };

@@ -282,6 +282,14 @@ def _step_id(step: dict[str, Any], idx: int) -> str:
     return str(step.get("id") or step.get("_id") or step.get("step_id") or idx)
 
 
+def _branch_weight(branch: dict[str, Any]) -> int:
+    """random_pick branch weight, tolerant of null/blank/float from stored JSON."""
+    try:
+        return max(1, int(float(branch.get("weight") or 1)))
+    except (TypeError, ValueError):
+        return 1
+
+
 def _error_policy(step: dict, cfg: dict) -> str:
     """Return error handling policy: 'pause' | 'continue' | 'stop'.
 
@@ -1148,7 +1156,10 @@ class ScenarioStepsWorkflow:
                 # records, not state — the real outcome still rides the normal
                 # path (_cancelled_result, execution_steps).
                 raise
-            logging.getLogger(__name__).warning(
+            # workflow.logger, not logging.getLogger: this runs inside workflow
+            # code, and a plain logger re-emits the line on every replay — the
+            # same failure appearing three times looks like three failures.
+            workflow.logger.warning(
                 "emit_execution_events_batch failed for execution %s (%s events): %s",
                 inp.execution_id,
                 len(batch),
@@ -1203,7 +1214,7 @@ class ScenarioStepsWorkflow:
         except Exception as exc:
             if _is_temporal_cancelled_error(exc):
                 raise
-            logging.getLogger(__name__).warning(
+            workflow.logger.warning(
                 "emit_control_flow_event failed for execution %s step %s: %s",
                 inp.execution_id,
                 _step_id(step, step_index),
@@ -1271,7 +1282,7 @@ class ScenarioStepsWorkflow:
         except Exception as exc:
             if _is_temporal_cancelled_error(exc):
                 raise
-            logging.getLogger(__name__).warning(
+            workflow.logger.warning(
                 "emit_temporal_activity_event failed for execution %s activity %s: %s",
                 inp.execution_id,
                 activity_id,
@@ -3590,7 +3601,7 @@ class ScenarioStepsWorkflow:
         if not branches:
             return False, "random_pick: no branches", runtime_context, False, {"reason_code": BRANCH_FAILED}
 
-        weights = [max(1, int(b.get("weight", 1))) for b in branches]
+        weights = [_branch_weight(b) for b in branches]
         wf_random = _get_wf_random()
         chosen_idx = wf_random.choices(range(len(branches)), weights=weights, k=1)[0]
         chosen = branches[chosen_idx]

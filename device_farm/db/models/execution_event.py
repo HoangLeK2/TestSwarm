@@ -30,6 +30,18 @@ class ExecutionEvent(Base):
             "id",
             postgresql_where=text("published_at IS NULL"),
         ),
+        # "What did this account do, in order" — the first question asked after
+        # an account is banned. The identity used to live only inside the JSON
+        # payload, so no index could serve it and the question had no answer.
+        # See migration 131.
+        Index(
+            "idx_execution_events_org_account_time",
+            "org_id",
+            "account_id",
+            "occurred_at",
+        ),
+        # Locates one step inside the scenario tree, loop iteration included.
+        Index("idx_execution_events_exec_path", "execution_id", "step_path"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -49,6 +61,13 @@ class ExecutionEvent(Base):
         nullable=False,
     )
     step_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    # Promoted out of payload.trace so they can be indexed and filtered on.
+    # Nullable: events that predate migration 131 keep NULL, and lifecycle
+    # events that belong to no account legitimately have none.
+    account_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    device_serial: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    # Full position in the scenario tree, e.g. "0/login.else/zON2.then/RVeOb".
+    step_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -71,6 +90,9 @@ class ExecutionEvent(Base):
             "campaign_id": self.campaign_id,
             "execution_id": self.execution_id,
             "step_id": self.step_id,
+            "account_id": self.account_id,
+            "device_serial": self.device_serial,
+            "step_path": self.step_path,
             "payload": self.payload or {},
             "tags": _tags_for_type(self.event_type),
         }

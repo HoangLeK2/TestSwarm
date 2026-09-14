@@ -176,6 +176,7 @@ message MediaAdapterCommand {
     MediaAdapterAnswerSessionCmd    answer_session    = 3;
     MediaAdapterHeartbeatSessionCmd heartbeat_session = 4;
     MediaAdapterCloseSessionCmd     close_session     = 5;
+    MediaAdapterKeyframeCmd         keyframe          = 6;
   }
 }
 
@@ -211,6 +212,18 @@ message MediaAdapterHeartbeatSessionCmd {
 }
 
 message MediaAdapterCloseSessionCmd {
+  string request_id = 1;
+  string session_id = 2;
+}
+
+// Ask the device behind a session for one IDR, without tearing the session down.
+//
+// The cheap rung of the viewer's stall ladder: a browser that is receiving bytes
+// but decoding nothing has a broken reference chain, and an IDR fixes exactly
+// that in ~100ms with no black flash, where rebuilding the session costs ~1s.
+// Rate-limited on the adapter side by the shared IDR gate — RESET_VIDEO
+// reconfigures MediaCodec, which is where Exynos encoders abort.
+message MediaAdapterKeyframeCmd {
   string request_id = 1;
   string session_id = 2;
 }

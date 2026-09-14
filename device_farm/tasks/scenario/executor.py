@@ -26,6 +26,153 @@ trace_log = importlib.import_module("structlog").get_logger("scenario_trace")
 _MAX_NESTING_DEPTH = 10
 
 
+def _identity(sc: "ScenarioContext") -> Dict[str, Any]:
+    """Identity bound to every trace line. Without it the log stream an
+    operator greps has a device serial and nothing else."""
+    return {
+        "account_id": sc.account_id or "-",
+        "account_label": sc.account_label or "-",
+        "platform": sc.account_platform or "-",
+        "campaign_id": sc.campaign_id or "-",
+        "execution_id": sc.execution_id or "-",
+    }
+
+
+def _ledger_mode() -> str:
+    from services.account_actions import ledger_mode
+
+    return ledger_mode()
+
+
+def _buffer_ledger_entry(
+    sc: "ScenarioContext",
+    step: Dict[str, Any],
+    step_result: Dict[str, Any],
+    *,
+    action: str,
+    sentence: str,
+) -> None:
+    """Queue one domain action for the end-of-scenario ledger flush.
+
+    Skipped when a step handler already wrote its own row (social_actions does),
+    when the action is a plain UI operation, and when there is no execution to
+    hang the row off — the ledger requires an execution id and a stable step id.
+    """
+    from services.execution.action_semantics import LEDGER_ACTIONS, ledger_target
+
+    if action not in LEDGER_ACTIONS or not sc.execution_id or not sc.account_id:
+        return
+    if _ledger_mode() not in {"observe", "enabled"}:
+        return
+    if step_result.get("account_action_ledger") or step_result.get("account_action_ledgers"):
+        return  # the handler owns this row
+    step_id = step.get("id") or step.get("_id")
+    if not step_id:
+        return  # without a stable step id every retry would create a new row
+    target = ledger_target(action, step, step_result)
+    if target is None:
+        return
+    ok = bool(step_result.get("ok", True))
+    sc.pending_ledger_entries.append({
+        "identity": {
+            "account_id": sc.account_id,
+            "execution_id": sc.execution_id,
+            "step_id": str(step_id),
+            "device_serial": sc.serial,
+        },
+        "action_type": action,
+        "target": target,
+        "succeeded": ok,
+        "outcome": "applied" if ok else "failed",
+        "reason": str(step_result.get("reason_code") or ("step_ok" if ok else "step_failed")),
+        "result": {
+            "outcome": "applied" if ok else "failed",
+            "action_performed": ok,
+            "summary": sentence,
+            "message": step_result.get("message"),
+        },
+    })
+
+
+def _flush_ledger_entries(sc: "ScenarioContext") -> None:
+    """Write the buffered actions in one database session. Never fatal.
+
+    The actions already happened on the phone; a failed audit write must not
+    fail the scenario or make a campaign repeat them.
+    """
+    entries = sc.pending_ledger_entries
+    if not entries:
+        return
+    sc.pending_ledger_entries = []
+    try:
+        from services.account_actions import record_applied_actions
+
+        record_applied_actions(
+            identity=entries[0]["identity"],
+            action_type=entries[0]["action_type"],
+            platform=str(sc.account_platform or "unknown"),
+            entries=entries,
+            reason="scenario_step",
+            observe=_ledger_mode() == "observe",
+        )
+    except Exception as exc:
+        log.warning(
+            "[%s] account action flush failed for %d entries (non-fatal): %s",
+            sc.serial, len(entries), exc,
+        )
+
+
+def _log_account_activity(
+    sc: "ScenarioContext",
+    step: Dict[str, Any],
+    step_result: Dict[str, Any],
+    *,
+    step_index: int,
+    duration_ms: float,
+    attempts: int,
+) -> None:
+    """One sentence per step, readable without the source or a hierarchy dump.
+
+    Emitted for every step that has a semantic meaning — including plain UI
+    operations, so the timeline does not jump from "opened the app" to "sent a
+    comment" with the taps in between missing. The ledger (account_actions) is
+    deliberately narrower; this is the text trail.
+    """
+    from services.execution.action_semantics import describe
+
+    described = describe(step, step_result)
+    if described is None:
+        return
+    action, sentence = described
+    _buffer_ledger_entry(sc, step, step_result, action=action, sentence=sentence)
+    # Not "action": social_actions already uses that key for its own verb
+    # ("like", "request"). Kept separate so both survive into the step trace.
+    step_result.setdefault("semantic_action", action)
+    step_result.setdefault("activity_summary", sentence)
+    ok = bool(step_result.get("ok", True))
+    cancelled = bool(step_result.get("cancelled"))
+    status = "cancelled" if cancelled else ("succeeded" if ok else "failed")
+    summary = sentence if ok else f"FAILED — {sentence}"
+    trace_log.info(
+        "account_activity",
+        summary=f"[{sc.account_platform or '-'}][{sc.account_label or sc.account_id or '-'}] {summary}",
+        action=action,
+        status=status,
+        attempt=attempts,
+        duration_ms=round(duration_ms, 1),
+        error=(str(step_result.get("message") or "") or None) if not ok else None,
+        reason_code=step_result.get("reason_code"),
+        account_action_id=(step_result.get("account_action_ledger") or {}).get("action_id")
+        if isinstance(step_result.get("account_action_ledger"), dict)
+        else None,
+        step_index=step_index,
+        step_type=step.get("type"),
+        serial=sc.serial,
+        trace_id=sc.trace_id,
+        **_identity(sc),
+    )
+
+
 def _resolve_step_for_execution(
     sc: "ScenarioContext",
     raw_step: Dict[str, Any],
@@ -253,7 +400,12 @@ class ScenarioExecutor:
         sc = self.sc
         scenario_started_at = time.monotonic()
         total_steps = len(sc.steps)
-        trace_log.info(
+        # Temporal runs one step per activity through a 1-step mini-scenario
+        # (temporal/activities.py:_build_activity_mini_scenario), so at info
+        # level these two lines were pure noise: one scenario_start and one
+        # scenario_end per tap, both reporting total_steps=1.
+        envelope_log = trace_log.debug if total_steps <= 1 and sc.depth == 0 else trace_log.info
+        envelope_log(
             "scenario_start",
             trace_id=sc.trace_id,
             serial=sc.serial,
@@ -262,6 +414,7 @@ class ScenarioExecutor:
             total_steps=total_steps,
             capture_enabled=bool(sc.capture_enabled),
             visual_anchor_enabled=bool(sc.visual_anchor_enabled),
+            **_identity(sc),
         )
 
         # Check nesting depth
@@ -314,6 +467,7 @@ class ScenarioExecutor:
             trace_log.info(
                 "scenario_resume", trace_id=sc.trace_id, serial=sc.serial,
                 start_step=sc.start_step, total_steps=total_steps,
+                **_identity(sc),
             )
             # Mark skipped steps so step_results length stays consistent with step indices.
             for skip_idx in range(sc.start_step):
@@ -326,6 +480,10 @@ class ScenarioExecutor:
             if sc.cancel_event is not None and sc.cancel_event.is_set():
                 log.info(f"[{sc.serial}] scenario CANCELLED at step#{idx + 1}")
                 sc.step_results.append({"index": idx, "type": "cancelled", "ok": False, "message": "Cancelled by user"})
+                # The steps before the cancel really did run on the phone; a
+                # cancel must not erase them from the account's history.
+                if sc.depth == 0:
+                    _flush_ledger_entries(sc)
                 return {
                     "serial": sc.serial,
                     "success": False,
@@ -368,6 +526,7 @@ class ScenarioExecutor:
                 total_steps=total_steps,
                 step_type=t,
                 step_id=step.get("id") or step.get("_id") or "-",
+                **_identity(sc),
             )
 
             step_result: Dict[str, Any] = {"index": idx, "type": t, "ok": True}
@@ -401,6 +560,15 @@ class ScenarioExecutor:
                 ok=bool(step_result.get("ok", True)),
                 duration_ms=round(step_dur_ms, 1),
                 message=str(step_result.get("message") or "-"),
+                attempts=attempts_used,
+                **_identity(sc),
+            )
+            _log_account_activity(
+                sc,
+                step,
+                step_result,
+                step_index=idx + 1,
+                duration_ms=step_dur_ms,
                 attempts=attempts_used,
             )
 
@@ -474,6 +642,7 @@ class ScenarioExecutor:
         if sc.depth == 0:
             from services.execution.capture_service import flush_pending_captures
 
+            _flush_ledger_entries(sc)
             flush_pending_captures()
             if sc.execution_id and sc.step_results:
                 from services.execution.step_store import schedule_sync_step_artifacts
@@ -481,7 +650,7 @@ class ScenarioExecutor:
                 schedule_sync_step_artifacts(sc)
         total_dur_ms = (time.monotonic() - scenario_started_at) * 1000.0
         failed_step = next((r for r in sc.step_results if not r.get("ok", True)), None)
-        trace_log.info(
+        envelope_log(
             "scenario_end",
             trace_id=sc.trace_id,
             serial=sc.serial,
@@ -492,6 +661,7 @@ class ScenarioExecutor:
             duration_ms=round(total_dur_ms, 1),
             failed_step=(failed_step.get("index") + 1) if failed_step else None,
             failed_message=str(result.get("failed_message") or ""),
+            **_identity(sc),
         )
         return result
 
@@ -563,4 +733,10 @@ def run_nested_scenario(
         _call_stack=frozenset(child_call_stack),
         cancel_event=sc.cancel_event,
     )
-    return ScenarioExecutor(child).run()
+    try:
+        return ScenarioExecutor(child).run()
+    finally:
+        # The child never flushes (depth > 0); hand its actions to the parent so
+        # they ride the single top-level write instead of being dropped.
+        sc.pending_ledger_entries.extend(child.pending_ledger_entries)
+        child.pending_ledger_entries = []

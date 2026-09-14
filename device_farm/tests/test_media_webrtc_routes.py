@@ -196,6 +196,73 @@ async def test_session_heartbeat_posts_to_media_adapter(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_keyframe_asks_the_adapter_without_touching_the_session(monkeypatch):
+    # The cheap rung of the viewer's stall ladder: one IDR, connection intact.
+    calls: list[str] = []
+
+    class _Servicer:
+        async def request_keyframe(self, session_id: str):
+            calls.append(session_id)
+            return {"ok": True}
+
+    monkeypatch.setenv("MEDIA_ADAPTER_CONTROL_PLANE", "grpc")
+    monkeypatch.setattr(
+        "runtime.transports.media_adapter_control_servicer.get_media_adapter_servicer",
+        lambda: _Servicer(),
+    )
+    app = FastAPI()
+    app.include_router(build_media_webrtc_router(_Manager(), _config(), db_enabled=False))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/media/webrtc/sessions/session-1/keyframe")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert calls == ["session-1"]
+
+
+@pytest.mark.anyio
+async def test_keyframe_on_an_unknown_session_is_not_retried_forever(monkeypatch):
+    # The browser escalates to a session rebuild on any failure, so a 404 here is
+    # the signal that the cheap rung is spent — not something to hammer.
+    class _Servicer:
+        async def request_keyframe(self, session_id: str):
+            return {"ok": False, "error": "media adapter session not found"}
+
+    monkeypatch.setenv("MEDIA_ADAPTER_CONTROL_PLANE", "grpc")
+    monkeypatch.setattr(
+        "runtime.transports.media_adapter_control_servicer.get_media_adapter_servicer",
+        lambda: _Servicer(),
+    )
+    app = FastAPI()
+    app.include_router(build_media_webrtc_router(_Manager(), _config(), db_enabled=False))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/media/webrtc/sessions/nope/keyframe")
+
+    assert response.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_keyframe_is_not_proxied_to_the_http_adapter(monkeypatch):
+    # The direct-HTTP adapter has no such endpoint; answering 501 immediately
+    # beats spending a round trip to learn that.
+    class _Client:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("keyframe must not reach the HTTP adapter")
+
+    monkeypatch.setenv("MEDIA_ADAPTER_CONTROL_PLANE", "http")
+    monkeypatch.setattr("api.routes.media_webrtc.httpx.AsyncClient", _Client)
+    app = FastAPI()
+    app.include_router(build_media_webrtc_router(_Manager(), _config(), db_enabled=False))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/media/webrtc/sessions/session-1/keyframe")
+
+    assert response.status_code == 501
+
+
+@pytest.mark.anyio
 async def test_session_answer_returns_retryable_status_when_adapter_is_not_ready(monkeypatch):
     monkeypatch.setenv("MEDIA_ADAPTER_CONTROL_PLANE", "http")
 

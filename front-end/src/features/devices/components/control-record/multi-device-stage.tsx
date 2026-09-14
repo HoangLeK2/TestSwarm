@@ -118,6 +118,7 @@ export function MultiDeviceStage({
                 <div
                   ref={rowVirtualizer.containerRef}
                   className='relative w-full'
+                  style={{ height: rowVirtualizer.getTotalSize() }}
                 >
                   {rowVirtualizer.getVirtualItems().map((virtualRow) => {
                     const { start, end } = getFollowerGridRowBounds(
@@ -133,6 +134,7 @@ export function MultiDeviceStage({
                         className='absolute left-0 top-0 grid justify-start gap-2'
                         style={{
                           gridTemplateColumns: `repeat(${columnCount}, max-content)`,
+                          transform: `translateY(${virtualRow.start}px)`,
                           contain: 'layout paint'
                         }}
                       >

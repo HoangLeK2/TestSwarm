@@ -104,6 +104,19 @@ def test_readiness_detects_vietnamese_suspended_account_as_checkpoint():
     assert "account_suspended_verification" in result.matched_markers
 
 
+def test_readiness_detects_vietnamese_locked_account_as_checkpoint():
+    xml = _hierarchy(
+        '<node package="com.facebook.katana" text="Tài khoản của bạn đã bị khóa" />',
+        '<node package="com.facebook.katana" text="Hãy làm theo các bước để mở khóa tài khoản." />',
+    )
+
+    result = resolve_facebook_readiness(xml)
+
+    assert result.status == PlatformReadinessStatus.CHECKPOINT
+    assert result.reason == "checkpoint_visible"
+    assert "account_locked" in result.matched_markers
+
+
 def test_readiness_does_not_treat_suspension_discussion_post_as_checkpoint():
     xml = _hierarchy(
         '<node package="com.facebook.katana" resource-id="com.facebook.katana:id/feed_tab" '

@@ -77,6 +77,7 @@ async def enqueue_execution_event(
         log.debug("enqueue_execution_event: skip %s — no org_id", event_type)
         return None
 
+    identity = _event_identity(payload, execution)
     row = await insert_execution_event(
         db,
         event_type=event_type,
@@ -87,8 +88,50 @@ async def enqueue_execution_event(
         payload=payload or {},
         schema_version=SCHEMA_VERSION,
         occurred_at=occurred_at,
+        **identity,
     )
     return row
+
+
+def _first_text(*values: Any) -> str | None:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return None
+
+
+def _event_identity(
+    payload: Optional[dict[str, Any]], execution: Execution
+) -> dict[str, str | None]:
+    """Lift account/device/path out of the payload into indexable columns.
+
+    Every step event already carries these under ``trace`` (built by
+    build_step_trace_context); lifecycle events carry none, so the execution row
+    is the fallback — an ``execution.started`` still belongs to an account.
+    """
+    data = payload if isinstance(payload, dict) else {}
+    trace = data.get("trace") if isinstance(data.get("trace"), dict) else {}
+    evidence = data.get("evidence") if isinstance(data.get("evidence"), dict) else {}
+    device_config = getattr(execution, "device_config", None) or {}
+    if not isinstance(device_config, dict):
+        device_config = {}
+    return {
+        "account_id": _first_text(
+            trace.get("account_id"),
+            evidence.get("account_id"),
+            getattr(execution, "account_id", None),
+        ),
+        "device_serial": _first_text(
+            trace.get("device_serial"),
+            evidence.get("device_serial"),
+            device_config.get("device_serial"),
+            device_config.get("serial"),
+        ),
+        # No execution-level fallback: a path identifies one step, and inventing
+        # one for a lifecycle event would make the tree index lie.
+        "step_path": _first_text(trace.get("step_path"), evidence.get("step_path")),
+    }
 
 
 async def publish_envelope_to_bus(envelope: dict[str, Any]) -> None:

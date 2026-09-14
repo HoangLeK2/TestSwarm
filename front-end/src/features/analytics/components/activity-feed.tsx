@@ -391,7 +391,11 @@ function getActivityTitle(
       firstText(details.account_label, details.account_username) ??
       item.entity_id ??
       t('unknownAccount');
-    const actionLabel = getActionLabel(item.action, t);
+    // The summary is the sentence built when the step ran, and it names the
+    // target ("Opened post Hom nay troi dep"). The action label is the generic
+    // fallback for rows written before summaries existed.
+    const actionLabel =
+      firstText(details.summary) ?? getActionLabel(item.action, t);
     return item.action.startsWith('account.action.')
       ? t('titles.accountAction', {
           account: accountLabel,

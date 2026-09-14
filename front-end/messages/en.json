@@ -932,7 +932,8 @@
       "statusVerifying": "Verifying",
       "statusBanned": "Banned",
       "statusRetired": "Retired",
-      "restingUntil": "Resting until {time}"
+      "restingUntil": "Resting until {time}",
+      "stepTrace": "Step trace"
     },
     "stateDialog": {
       "trigger": "Change state",
@@ -1215,6 +1216,25 @@
         "cooldown_cleared": "Cooldown cleared",
         "session_death": "Session ended",
         "banned": "Banned"
+      },
+      "stepTrace": {
+        "trigger": "Step trace",
+        "title": "Step trace — {username}",
+        "description": "Every step this account ran, newest run first. Use it to trace a ban back to the step that caused it.",
+        "loadingRuns": "Loading runs...",
+        "emptyRuns": "This account has not run anything yet",
+        "runsError": "Could not load this account's runs",
+        "selectRun": "Pick a run to see its steps",
+        "loadingSteps": "Loading steps...",
+        "emptySteps": "No steps were recorded for this run",
+        "stepsError": "Could not load the steps for this run",
+        "stepCount": "{count} steps",
+        "failedCount": "{count} failed",
+        "runsHeading": "Runs",
+        "stepsHeading": "Steps",
+        "noCampaign": "Manual run",
+        "topLevelOnly": "top-level steps only (event history expired)",
+        "truncated": "showing the most recent events"
       }
     }
   },
@@ -6184,6 +6204,19 @@
         "account_action_content_interaction": "Post interaction",
         "account_action_connection_request": "Friend request",
         "account_action_community_membership": "Group interaction",
+        "account_action_app_open": "Opened app",
+        "account_action_session_login": "Signed in",
+        "account_action_post_open": "Opened post",
+        "account_action_post_like": "Liked post",
+        "account_action_post_unlike": "Removed like",
+        "account_action_post_share": "Shared post",
+        "account_action_comment_submit": "Posted comment",
+        "account_action_profile_open": "Opened profile",
+        "account_action_profile_follow": "Followed",
+        "account_action_profile_unfollow": "Unfollowed",
+        "account_action_filter_apply": "Applied filter",
+        "account_action_search_submit": "Searched",
+        "account_action_community_join": "Joined group",
         "member_invited": "Member invited",
         "member_role_changed": "Member role changed",
         "password_changed": "Password changed",

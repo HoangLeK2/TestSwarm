@@ -394,6 +394,41 @@ func TestKeyframeRequestRateLimited(t *testing.T) {
 	}
 }
 
+// The browser can drive RequestKeyframeGated on every stall it sees, so it must
+// share the same gate as every internal caller. Ungated, a viewer stuck in a
+// stall loop would reconfigure MediaCodec continuously — the exact thing
+// TestKeyframeRequestRateLimited exists to prevent, reachable from the internet.
+func TestGatedKeyframeSharesTheRateLimit(t *testing.T) {
+	publisher, recorder := newTestPublisher(Config{
+		QueueMax: 2, StalePacketAge: time.Second, InputFPS: 15, IDRMinInterval: time.Hour,
+	})
+	addTestLane(publisher, "SERIAL-1")
+
+	if !publisher.RequestKeyframeGated("SERIAL-1") {
+		t.Fatal("first gated request was not sent")
+	}
+	for i := 0; i < 10; i++ {
+		if publisher.RequestKeyframeGated("SERIAL-1") {
+			t.Fatalf("request %d passed the gate", i+2)
+		}
+	}
+	if got := recorder.count(); got != 1 {
+		t.Fatalf("keyframe requests=%d, want exactly 1 — the gate is open to viewers", got)
+	}
+	if got := publisher.Stats().PerSerial["SERIAL-1"].IDRRequests; got != 1 {
+		t.Fatalf("per-serial idr requests=%d, want 1", got)
+	}
+	// A different device has its own budget: one phone's stall must not silence
+	// another phone's repair.
+	addTestLane(publisher, "SERIAL-2")
+	if !publisher.RequestKeyframeGated("SERIAL-2") {
+		t.Fatal("a second device was blocked by the first device's gate")
+	}
+	if publisher.RequestKeyframeGated("") {
+		t.Fatal("an empty serial passed the gate")
+	}
+}
+
 func TestStaleDropRequestsKeyframe(t *testing.T) {
 	publisher, recorder := newTestPublisher(Config{
 		QueueMax: 4, StalePacketAge: 10 * time.Millisecond, InputFPS: 15,

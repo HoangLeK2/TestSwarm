@@ -22,7 +22,7 @@ class _FakeU2:
         self._device = device
 
     def find_element(self, by, value, timeout=0):
-        return "eid" if value == self._device.current_label() else None
+        return "eid" if (by, value) == self._device.current_selector() else None
 
     def element_click(self, eid):
         self._device.popups.pop(0)
@@ -33,18 +33,33 @@ class _FakeDevice:
 
     serial = "fake"
 
-    def __init__(self, popups: list[str]) -> None:
+    def __init__(self, popups: list[str | tuple[str, str]]) -> None:
         self.popups = list(popups)
         self._cached: str | None = None
         self.invalidations = 0
         self.u2 = _FakeU2(self)
 
     def current_label(self) -> str | None:
-        return self.popups[0] if self.popups else None
+        current = self.popups[0] if self.popups else None
+        if isinstance(current, tuple):
+            return current[1]
+        return current
+
+    def current_selector(self) -> tuple[str, str] | None:
+        current = self.popups[0] if self.popups else None
+        if isinstance(current, tuple):
+            return current
+        if isinstance(current, str):
+            return ("text", current)
+        return None
 
     def _render(self) -> str:
-        label = self.current_label() or ""
-        return f'<hierarchy><node text="{label}" /></hierarchy>'
+        selector = self.current_selector()
+        if selector is None:
+            return "<hierarchy></hierarchy>"
+        by, value = selector
+        attr = "content-desc" if by == "content-desc" else "text"
+        return f'<hierarchy><node {attr}="{value}" /></hierarchy>'
 
     def hierarchy_xml(self, force_refresh: bool = False) -> str:
         if force_refresh or self._cached is None:
@@ -77,6 +92,13 @@ def test_dismiss_drains_a_queue_of_popups() -> None:
     assert _auto_dismiss_popup(device) is True
     assert device.popups == []
     assert _auto_dismiss_popup(device) is False
+
+
+def test_dismisses_facebook_skip_when_it_is_accessibility_label_only() -> None:
+    device = _FakeDevice([("content-desc", "Bỏ qua")])
+
+    assert _auto_dismiss_popup(device) is True
+    assert device.popups == []
 
 
 def test_click_invalidates_the_cache_for_later_readers() -> None:

@@ -54,4 +54,36 @@ sed -i '' 's/^import relay_pb2/from . import relay_pb2/' "$AB_OUT/relay_pb2_grpc
 sed -i 's/^import relay_pb2/from . import relay_pb2/' "$AB_OUT/relay_pb2_grpc.py"
 
 echo "  agent-boot:  $AB_OUT"
+
+# ── media-adapter (Go) ────────────────────────────────────────────────────────
+# Separate toolchain: grpc_tools.protoc has no Go plugin, so this needs protoc
+# plus protoc-gen-go/protoc-gen-go-grpc on PATH. It used to be a manual step and
+# the Go stubs silently drifted from the proto; skipped with a loud warning
+# rather than failing, so the Python half still regenerates without the toolchain.
+GO_OUT="$ROOT_DIR/agent-boot/media-adapter/internal/grpcapi/relaypb"
+# `go install` drops the plugins in GOPATH/bin, which is on nobody's PATH by
+# default, and protoc only finds them by name on PATH. Without this the branch
+# silently skips on a machine that has everything installed.
+if command -v go &>/dev/null; then
+  PATH="$(go env GOBIN):$(go env GOPATH)/bin:$PATH"
+fi
+if command -v protoc &>/dev/null && command -v protoc-gen-go &>/dev/null \
+  && command -v protoc-gen-go-grpc &>/dev/null; then
+  # go_package is an absolute module path, so --go_opt=module strips it back to
+  # a bare relay.pb.go in $GO_OUT instead of recreating the tree underneath.
+  protoc \
+    --proto_path="$PROTO_DIR" \
+    --go_out="$GO_OUT" \
+    --go_opt=module=devicefarm/media-adapter/internal/grpcapi/relaypb \
+    --go-grpc_out="$GO_OUT" \
+    --go-grpc_opt=module=devicefarm/media-adapter/internal/grpcapi/relaypb \
+    "$PROTO_DIR/relay.proto"
+  echo "  media-adapter (Go): $GO_OUT"
+else
+  echo "  media-adapter (Go): SKIPPED — Go stubs are now stale. Install:" >&2
+  echo "    brew install protobuf" >&2
+  echo "    go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11" >&2
+  echo "    go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest" >&2
+fi
+
 echo "Proto generation done."

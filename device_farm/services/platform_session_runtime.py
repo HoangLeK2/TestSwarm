@@ -10,9 +10,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.crud.account import lookup_account_org_id
+from db.models.account import Account
 from db.models.device import Device
-from db.models.enums import DevicePlatformSessionState
+from db.models.enums import AccountState, DevicePlatformSessionState
 from db.models.execution import Execution, ExecutionDevice
+from services.account_state import (
+    AccountStateError,
+    AccountStateService,
+    normalize_state,
+)
 from services.device_platform_session import (
     get_platform_session,
     mark_active,
@@ -21,6 +27,13 @@ from services.device_platform_session import (
 )
 from services.platform_readiness import PlatformReadinessResult, PlatformReadinessStatus
 from tenancy.context import tenant_context
+
+_LOCKED_CHECKPOINT_MARKERS = frozenset(
+    {
+        "account_suspended_verification",
+        "account_locked",
+    }
+)
 
 # Guard reasons are ``f"{platform}_session_{state}"`` (services/platform_session_guard.py),
 # so match the suffix instead of a per-platform literal.
@@ -280,6 +293,60 @@ def _decision(
     }
 
 
+def _account_state_for_checkpoint(
+    readiness: PlatformReadinessResult,
+) -> tuple[AccountState, str]:
+    markers = set(readiness.matched_markers or ())
+    if markers & _LOCKED_CHECKPOINT_MARKERS:
+        return AccountState.BANNED, "facebook_account_locked"
+    return AccountState.SUSPENDED, "facebook_checkpoint_verification"
+
+
+async def _mark_account_state_for_checkpoint(
+    db: AsyncSession,
+    *,
+    account_id: str,
+    readiness: PlatformReadinessResult,
+) -> None:
+    target, reason = _account_state_for_checkpoint(readiness)
+    result = await db.execute(
+        select(Account).where(Account.id == account_id).limit(1)
+    )
+    account = result.scalar_one_or_none()
+    if account is None:
+        return
+    try:
+        current = normalize_state(account.state or account.status)
+    except ValueError:
+        return
+    if current == target:
+        return
+    if current in {AccountState.BANNED, AccountState.RETIRED}:
+        return
+
+    svc = AccountStateService()
+    try:
+        if current == AccountState.UNASSIGNED and target == AccountState.SUSPENDED:
+            await svc.transition(
+                db,
+                account_id,
+                to=AccountState.ACTIVE,
+                reason="checkpoint_account_linked",
+                actor="system",
+                skip_row_lock=True,
+            )
+        await svc.transition(
+            db,
+            account_id,
+            to=target,
+            reason=reason,
+            actor="system",
+            skip_row_lock=True,
+        )
+    except AccountStateError:
+        return
+
+
 async def apply_platform_session_gate(
     db: AsyncSession,
     *,
@@ -447,6 +514,12 @@ async def apply_platform_session_gate(
             reason=readiness.reason,
             evidence=evidence,
         )
+        if next_state == DevicePlatformSessionState.CHECKPOINT:
+            await _mark_account_state_for_checkpoint(
+                db,
+                account_id=account_id,
+                readiness=readiness,
+            )
     reason = (
         "facebook_login_provenance_missing"
         if phase == "confirm" and readiness.status == PlatformReadinessStatus.READY

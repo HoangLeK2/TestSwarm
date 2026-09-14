@@ -83,15 +83,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "supports_shell"
-      ],
+      "requires": ["supports_shell"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "launch_app"
     },
     {
@@ -101,11 +95,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "high",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "stop_app"
     },
     {
@@ -113,15 +103,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "supports_shell"
-      ],
+      "requires": ["supports_shell"],
       "risk": "high",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "clear_app"
     },
     {
@@ -131,11 +115,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "wait_app"
     },
     {
@@ -143,15 +123,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "supports_file_ops"
-      ],
+      "requires": ["supports_file_ops"],
       "risk": "medium",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "push_file"
     },
     {
@@ -159,15 +133,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "supports_file_ops"
-      ],
+      "requires": ["supports_file_ops"],
       "risk": "medium",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "pull_file"
     },
     {
@@ -177,11 +145,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "open_url"
     },
     {
@@ -189,16 +153,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "supports_install_apk"
-      ],
+      "requires": ["supports_install_apk"],
       "risk": "high",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor",
-        "frontend"
-      ],
+      "surfaces": ["schema", "api_schema", "executor", "frontend"],
       "type": "install_apk"
     },
     {
@@ -208,11 +165,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "wait"
     },
     {
@@ -222,11 +175,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "tap_position"
     },
     {
@@ -236,35 +185,17 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "tap_ratio"
     },
     {
       "description": "Tap vào vị trí khớp ảnh mẫu trên màn hình. template_key: khoá ảnh trong object storage (cắt từ màn hình lúc thiết kế). threshold: ngưỡng khớp 0–1 (mặc định 0.8; khớp thật thường 0.96–1.00). scale: tỷ lệ thu nhỏ khi tìm (mặc định 0.25 — nhanh hơn ~70 lần mà không giảm độ chính xác). template_screen_w/h: kích thước màn lúc cắt, để hiệu chỉnh khi máy khác độ phân giải. Khớp chạy trên agent-boot; mỗi lần thử tốn 1 ảnh chụp + ~11ms so khớp.",
       "group": "action",
-      "inspector_hints": [
-        "show_template_match"
-      ],
-      "recorder_evidence": [
-        "template_key",
-        "match_score",
-        "match_bounds"
-      ],
-      "requires": [
-        "has_image_match",
-        "has_opencv"
-      ],
+      "inspector_hints": ["show_template_match"],
+      "recorder_evidence": ["template_key", "match_score", "match_bounds"],
+      "requires": ["has_image_match", "has_opencv"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor",
-        "agent_image_match"
-      ],
+      "surfaces": ["schema", "api_schema", "executor", "agent_image_match"],
       "type": "tap_image"
     },
     {
@@ -274,11 +205,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "swipe_ratio"
     },
     {
@@ -291,74 +218,39 @@
         "screen_hash",
         "image_anchor"
       ],
-      "requires": [
-        "has_u2"
-      ],
+      "requires": ["has_u2"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "tap"
     },
     {
       "description": "Tap theo uiautomator2 selector. selector: {by, value, conditions?, instance?, chain?} (canonical) hoặc legacy by/value. conditions: AND fields (className, resourceId, clickable, …). chain: child | sibling | relative | child_by_text | child_by_description. fallback / fallback_rx/ry: tọa độ ratio khi không tìm thấy element.",
       "group": "action",
       "inspector_hints": [],
-      "recorder_evidence": [
-        "selector",
-        "fallback_ratio"
-      ],
-      "requires": [
-        "has_u2"
-      ],
+      "recorder_evidence": ["selector", "fallback_ratio"],
+      "requires": ["has_u2"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "tap_selector"
     },
     {
       "description": "Dump UI XML fresh, find first node by attr contains/equals, then tap center from bounds. Useful for Facebook result rows whose u2 selector surface is unstable.",
       "group": "action",
-      "inspector_hints": [
-        "show_hierarchy_match"
-      ],
-      "recorder_evidence": [
-        "hierarchy_xml",
-        "matched_bounds"
-      ],
-      "requires": [
-        "has_u2"
-      ],
+      "inspector_hints": ["show_hierarchy_match"],
+      "recorder_evidence": ["hierarchy_xml", "matched_bounds"],
+      "requires": ["has_u2"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "tap_xml_match"
     },
     {
       "description": "⚡ PREFERRED thay cho 'wait N giây'. Poll liên tục cho đến khi element xuất hiện (mặc định timeout=10s). Dùng sau launch_app, open_url, hay bất kỳ bước nào khiến màn hình thay đổi. by: text | resource-id | xpath.",
       "group": "action",
       "inspector_hints": [],
-      "recorder_evidence": [
-        "selector",
-        "timeout"
-      ],
-      "requires": [
-        "has_u2"
-      ],
+      "recorder_evidence": ["selector", "timeout"],
+      "requires": ["has_u2"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "wait_element"
     },
     {
@@ -366,15 +258,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "has_u2"
-      ],
+      "requires": ["has_u2"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "assert_element"
     },
     {
@@ -382,15 +268,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "has_u2"
-      ],
+      "requires": ["has_u2"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "input_selector"
     },
     {
@@ -398,15 +278,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "has_u2"
-      ],
+      "requires": ["has_u2"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "long_tap_selector"
     },
     {
@@ -414,15 +288,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "has_u2"
-      ],
+      "requires": ["has_u2"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "scroll_to"
     },
     {
@@ -432,11 +300,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "input_text"
     },
     {
@@ -444,15 +308,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "has_u2"
-      ],
+      "requires": ["has_u2"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "login_if_needed"
     },
     {
@@ -462,11 +320,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "platform_session_gate"
     },
     {
@@ -474,34 +328,19 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "has_u2"
-      ],
+      "requires": ["has_u2"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "fill_form"
     },
     {
       "description": "Assert current app state using package/text checks and optional semantic locator.",
       "group": "action",
       "inspector_hints": [],
-      "recorder_evidence": [
-        "hierarchy_xml",
-        "screenshot"
-      ],
-      "requires": [
-        "has_u2"
-      ],
+      "recorder_evidence": ["hierarchy_xml", "screenshot"],
+      "requires": ["has_u2"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "assert_app_state"
     },
     {
@@ -511,11 +350,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "key"
     },
     {
@@ -523,15 +358,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "supports_shell"
-      ],
+      "requires": ["supports_shell"],
       "risk": "high",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "adb_shell"
     },
     {
@@ -541,11 +370,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "scroll_down"
     },
     {
@@ -553,38 +378,19 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "supports_screenshot"
-      ],
+      "requires": ["supports_screenshot"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "wait_stable"
     },
     {
       "description": "Visual Anchoring: so sánh SSIM giữa ảnh chụp lúc record và màn hình hiện tại. template_key: object-storage key của ảnh mẫu đã cắt/upload; screenshot: legacy base64 JPEG. ssim_threshold (0-1, default 0.75). timeout: chờ tối đa N giây cho màn hình khớp (default 8s). poll: tần suất kiểm tra (default 0.5s). Fail nếu SSIM dưới threshold.",
       "group": "action",
-      "inspector_hints": [
-        "show_template_match"
-      ],
-      "recorder_evidence": [
-        "template_key",
-        "match_score",
-        "screen_hash"
-      ],
-      "requires": [
-        "has_image_match",
-        "has_opencv"
-      ],
+      "inspector_hints": ["show_template_match"],
+      "recorder_evidence": ["template_key", "match_score", "screen_hash"],
+      "requires": ["has_image_match", "has_opencv"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "verify_screen"
     },
     {
@@ -592,15 +398,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "has_u2"
-      ],
+      "requires": ["has_u2"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "dismiss_popup"
     },
     {
@@ -610,11 +410,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "set_variable"
     },
     {
@@ -624,11 +420,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "repeat"
     },
     {
@@ -638,11 +430,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "repeat_until"
     },
     {
@@ -650,15 +438,9 @@
       "group": "control",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "has_u2"
-      ],
+      "requires": ["has_u2"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "if_element"
     },
     {
@@ -668,11 +450,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "if_variable"
     },
     {
@@ -680,15 +458,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "has_u2"
-      ],
+      "requires": ["has_u2"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "social_open_comments"
     },
     {
@@ -696,15 +468,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "has_u2"
-      ],
+      "requires": ["has_u2"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "social_find_comment_button"
     },
     {
@@ -714,11 +480,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "social_tap_comment_target"
     },
     {
@@ -728,11 +490,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "social_apply_comment_filter"
     },
     {
@@ -740,15 +498,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "has_u2"
-      ],
+      "requires": ["has_u2"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "social_select_target"
     },
     {
@@ -756,15 +508,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "has_u2"
-      ],
+      "requires": ["has_u2"],
       "risk": "medium",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "social_connect_visible_people"
     },
     {
@@ -772,15 +518,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "has_u2"
-      ],
+      "requires": ["has_u2"],
       "risk": "medium",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "social_scan_posts_interact"
     },
     {
@@ -788,15 +528,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "has_u2"
-      ],
+      "requires": ["has_u2"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "social_open_author_from_post_match"
     },
     {
@@ -804,15 +538,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "has_u2"
-      ],
+      "requires": ["has_u2"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "social_open_commenter_from_post_match"
     },
     {
@@ -820,15 +548,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "has_u2"
-      ],
+      "requires": ["has_u2"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "social_sync_connections"
     },
     {
@@ -838,11 +560,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "medium",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "content_interaction"
     },
     {
@@ -852,11 +570,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "medium",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "connection_request"
     },
     {
@@ -866,11 +580,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "lease_connection_candidate"
     },
     {
@@ -880,11 +590,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "lease_source_target"
     },
     {
@@ -894,11 +600,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "medium",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "community_membership"
     },
     {
@@ -908,11 +610,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "random_pick"
     },
     {
@@ -922,11 +620,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "run_scenario"
     },
     {
@@ -936,11 +630,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "use_source_pool"
     },
     {
@@ -950,11 +640,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "extract"
     },
     {
@@ -964,11 +650,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "loop"
     },
     {
@@ -978,11 +660,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "break_if"
     },
     {
@@ -992,34 +670,17 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "extract_text_hierarchy"
     },
     {
       "description": "Extract text from screenshot using Tesseract OCR. Works on WebView, Canvas, images — anything visible on screen. save_as: variable name. region: {x1, y1, x2, y2} as ratios 0-1 to crop before OCR. language: Tesseract lang code (e.g. 'eng', 'vie+eng'). psm: Page Segmentation Mode (3=auto, 6=block, 7=line, 11=sparse).",
       "group": "variable",
-      "inspector_hints": [
-        "show_ocr_overlay"
-      ],
-      "recorder_evidence": [
-        "ocr_boxes",
-        "screenshot_on_empty"
-      ],
-      "requires": [
-        "has_ocr",
-        "has_tesseract"
-      ],
+      "inspector_hints": ["show_ocr_overlay"],
+      "recorder_evidence": ["ocr_boxes", "screenshot_on_empty"],
+      "requires": ["has_ocr", "has_tesseract"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor",
-        "agent_ocr"
-      ],
+      "surfaces": ["schema", "api_schema", "executor", "agent_ocr"],
       "type": "extract_text_ocr"
     },
     {
@@ -1029,11 +690,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "extract_text_ai"
     },
     {
@@ -1043,11 +700,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "extract_screen_data"
     },
     {
@@ -1057,11 +710,7 @@
       "recorder_evidence": [],
       "requires": [],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "save_extraction"
     },
     {
@@ -1069,15 +718,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "supports_advanced_gestures"
-      ],
+      "requires": ["supports_advanced_gestures"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "double_tap"
     },
     {
@@ -1085,15 +728,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "supports_advanced_gestures"
-      ],
+      "requires": ["supports_advanced_gestures"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "pinch"
     },
     {
@@ -1101,15 +738,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "supports_advanced_gestures"
-      ],
+      "requires": ["supports_advanced_gestures"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "drag"
     },
     {
@@ -1117,15 +748,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "supports_screenshot"
-      ],
+      "requires": ["supports_screenshot"],
       "risk": "low",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "take_screenshot"
     },
     {
@@ -1133,15 +758,9 @@
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
-      "requires": [
-        "supports_clipboard"
-      ],
+      "requires": ["supports_clipboard"],
       "risk": "medium",
-      "surfaces": [
-        "schema",
-        "api_schema",
-        "executor"
-      ],
+      "surfaces": ["schema", "api_schema", "executor"],
       "type": "set_clipboard"
     }
   ],
@@ -1230,9 +849,7 @@
           "adb_fallback"
         ],
         "presets": [],
-        "required": [
-          "package"
-        ],
+        "required": ["package"],
         "required_any": [],
         "runtime_step_type": "launch_app",
         "schema_version": 1
@@ -1257,9 +874,7 @@
         "node_type": "stop_app",
         "optional": [],
         "presets": [],
-        "required": [
-          "package"
-        ],
+        "required": ["package"],
         "required_any": [],
         "runtime_step_type": "stop_app",
         "schema_version": 1
@@ -1284,9 +899,7 @@
         "node_type": "clear_app",
         "optional": [],
         "presets": [],
-        "required": [
-          "package"
-        ],
+        "required": ["package"],
         "required_any": [],
         "runtime_step_type": "clear_app",
         "schema_version": 1
@@ -1334,14 +947,9 @@
         ],
         "legacy": {},
         "node_type": "wait_app",
-        "optional": [
-          "timeout",
-          "front"
-        ],
+        "optional": ["timeout", "front"],
         "presets": [],
-        "required": [
-          "package"
-        ],
+        "required": ["package"],
         "required_any": [],
         "runtime_step_type": "wait_app",
         "schema_version": 1
@@ -1354,14 +962,9 @@
         "fields": [],
         "legacy": {},
         "node_type": "push_file",
-        "optional": [
-          "mode"
-        ],
+        "optional": ["mode"],
         "presets": [],
-        "required": [
-          "local_path",
-          "remote_path"
-        ],
+        "required": ["local_path", "remote_path"],
         "required_any": [],
         "runtime_step_type": "push_file",
         "schema_version": 1
@@ -1376,10 +979,7 @@
         "node_type": "pull_file",
         "optional": [],
         "presets": [],
-        "required": [
-          "local_path",
-          "remote_path"
-        ],
+        "required": ["local_path", "remote_path"],
         "required_any": [],
         "runtime_step_type": "pull_file",
         "schema_version": 1
@@ -1411,13 +1011,9 @@
         ],
         "legacy": {},
         "node_type": "open_url",
-        "optional": [
-          "package"
-        ],
+        "optional": ["package"],
         "presets": [],
-        "required": [
-          "url"
-        ],
+        "required": ["url"],
         "required_any": [],
         "runtime_step_type": "open_url",
         "schema_version": 1
@@ -1455,13 +1051,9 @@
         ],
         "legacy": {},
         "node_type": "install_apk",
-        "optional": [
-          "timeout"
-        ],
+        "optional": ["timeout"],
         "presets": [],
-        "required": [
-          "url"
-        ],
+        "required": ["url"],
         "required_any": [],
         "runtime_step_type": "install_apk",
         "schema_version": 1
@@ -1488,9 +1080,7 @@
         ],
         "legacy": {},
         "node_type": "wait",
-        "optional": [
-          "seconds"
-        ],
+        "optional": ["seconds"],
         "presets": [],
         "required": [],
         "required_any": [],
@@ -1535,9 +1125,7 @@
         "node_type": "tap_position",
         "optional": [],
         "presets": [],
-        "required": [
-          "pos"
-        ],
+        "required": ["pos"],
         "required_any": [],
         "runtime_step_type": "tap_position",
         "schema_version": 1
@@ -1552,10 +1140,7 @@
         "node_type": "tap_ratio",
         "optional": [],
         "presets": [],
-        "required": [
-          "x",
-          "y"
-        ],
+        "required": ["x", "y"],
         "required_any": [],
         "runtime_step_type": "tap_ratio",
         "schema_version": 1
@@ -1577,9 +1162,7 @@
           "poll"
         ],
         "presets": [],
-        "required": [
-          "template_key"
-        ],
+        "required": ["template_key"],
         "required_any": [],
         "runtime_step_type": "tap_image",
         "schema_version": 1
@@ -1592,16 +1175,9 @@
         "fields": [],
         "legacy": {},
         "node_type": "swipe_ratio",
-        "optional": [
-          "duration_ms"
-        ],
+        "optional": ["duration_ms"],
         "presets": [],
-        "required": [
-          "x1",
-          "y1",
-          "x2",
-          "y2"
-        ],
+        "required": ["x1", "y1", "x2", "y2"],
         "required_any": [],
         "runtime_step_type": "swipe_ratio",
         "schema_version": 1
@@ -1649,14 +1225,8 @@
         "presets": [],
         "required": [],
         "required_any": [
-          [
-            "selector",
-            "by"
-          ],
-          [
-            "selector",
-            "value"
-          ]
+          ["selector", "by"],
+          ["selector", "value"]
         ],
         "runtime_step_type": "tap_selector",
         "schema_version": 1
@@ -1681,13 +1251,7 @@
         ],
         "presets": [],
         "required": [],
-        "required_any": [
-          [
-            "contains",
-            "equals",
-            "value"
-          ]
-        ],
+        "required_any": [["contains", "equals", "value"]],
         "runtime_step_type": "tap_xml_match",
         "schema_version": 1
       },
@@ -1699,24 +1263,12 @@
         "fields": [],
         "legacy": {},
         "node_type": "wait_element",
-        "optional": [
-          "selector",
-          "by",
-          "value",
-          "timeout",
-          "poll"
-        ],
+        "optional": ["selector", "by", "value", "timeout", "poll"],
         "presets": [],
         "required": [],
         "required_any": [
-          [
-            "selector",
-            "by"
-          ],
-          [
-            "selector",
-            "value"
-          ]
+          ["selector", "by"],
+          ["selector", "value"]
         ],
         "runtime_step_type": "wait_element",
         "schema_version": 1
@@ -1729,24 +1281,12 @@
         "fields": [],
         "legacy": {},
         "node_type": "assert_element",
-        "optional": [
-          "selector",
-          "by",
-          "value",
-          "timeout",
-          "poll"
-        ],
+        "optional": ["selector", "by", "value", "timeout", "poll"],
         "presets": [],
         "required": [],
         "required_any": [
-          [
-            "selector",
-            "by"
-          ],
-          [
-            "selector",
-            "value"
-          ]
+          ["selector", "by"],
+          ["selector", "value"]
         ],
         "runtime_step_type": "assert_element",
         "schema_version": 1
@@ -1759,26 +1299,12 @@
         "fields": [],
         "legacy": {},
         "node_type": "input_selector",
-        "optional": [
-          "selector",
-          "by",
-          "value",
-          "clear_first",
-          "implicit_wait"
-        ],
+        "optional": ["selector", "by", "value", "clear_first", "implicit_wait"],
         "presets": [],
-        "required": [
-          "text"
-        ],
+        "required": ["text"],
         "required_any": [
-          [
-            "selector",
-            "by"
-          ],
-          [
-            "selector",
-            "value"
-          ]
+          ["selector", "by"],
+          ["selector", "value"]
         ],
         "runtime_step_type": "input_selector",
         "schema_version": 1
@@ -1791,24 +1317,12 @@
         "fields": [],
         "legacy": {},
         "node_type": "long_tap_selector",
-        "optional": [
-          "selector",
-          "by",
-          "value",
-          "duration_ms",
-          "implicit_wait"
-        ],
+        "optional": ["selector", "by", "value", "duration_ms", "implicit_wait"],
         "presets": [],
         "required": [],
         "required_any": [
-          [
-            "selector",
-            "by"
-          ],
-          [
-            "selector",
-            "value"
-          ]
+          ["selector", "by"],
+          ["selector", "value"]
         ],
         "runtime_step_type": "long_tap_selector",
         "schema_version": 1
@@ -1836,14 +1350,8 @@
         "presets": [],
         "required": [],
         "required_any": [
-          [
-            "selector",
-            "by"
-          ],
-          [
-            "selector",
-            "value"
-          ]
+          ["selector", "by"],
+          ["selector", "value"]
         ],
         "runtime_step_type": "scroll_to",
         "schema_version": 1
@@ -1856,14 +1364,9 @@
         "fields": [],
         "legacy": {},
         "node_type": "input_text",
-        "optional": [
-          "via",
-          "clear_first"
-        ],
+        "optional": ["via", "clear_first"],
         "presets": [],
-        "required": [
-          "text"
-        ],
+        "required": ["text"],
         "required_any": [],
         "runtime_step_type": "input_text",
         "schema_version": 1
@@ -1876,11 +1379,7 @@
         "fields": [],
         "legacy": {},
         "node_type": "login_if_needed",
-        "optional": [
-          "profile",
-          "clear_first",
-          "implicit_wait"
-        ],
+        "optional": ["profile", "clear_first", "implicit_wait"],
         "presets": [],
         "required": [],
         "required_any": [],
@@ -1895,11 +1394,7 @@
         "fields": [],
         "legacy": {},
         "node_type": "platform_session_gate",
-        "optional": [
-          "phase",
-          "timeout",
-          "poll_interval"
-        ],
+        "optional": ["phase", "timeout", "poll_interval"],
         "presets": [],
         "required": [],
         "required_any": [],
@@ -1969,9 +1464,7 @@
         "node_type": "key",
         "optional": [],
         "presets": [],
-        "required": [
-          "key"
-        ],
+        "required": ["key"],
         "required_any": [],
         "runtime_step_type": "key",
         "schema_version": 1
@@ -2041,16 +1534,9 @@
         ],
         "legacy": {},
         "node_type": "adb_shell",
-        "optional": [
-          "timeout",
-          "fail_on_error",
-          "save_as",
-          "max_output_chars"
-        ],
+        "optional": ["timeout", "fail_on_error", "save_as", "max_output_chars"],
         "presets": [],
-        "required": [
-          "command"
-        ],
+        "required": ["command"],
         "required_any": [],
         "runtime_step_type": "adb_shell",
         "schema_version": 1
@@ -2086,10 +1572,7 @@
         "fields": [],
         "legacy": {},
         "node_type": "wait_stable",
-        "optional": [
-          "timeout",
-          "stable_duration"
-        ],
+        "optional": ["timeout", "stable_duration"],
         "presets": [],
         "required": [],
         "required_any": [],
@@ -2116,12 +1599,7 @@
         ],
         "presets": [],
         "required": [],
-        "required_any": [
-          [
-            "template_key",
-            "screenshot"
-          ]
-        ],
+        "required_any": [["template_key", "screenshot"]],
         "runtime_step_type": "verify_screen",
         "schema_version": 1
       },
@@ -2133,9 +1611,7 @@
         "fields": [],
         "legacy": {},
         "node_type": "dismiss_popup",
-        "optional": [
-          "retries"
-        ],
+        "optional": ["retries"],
         "presets": [],
         "required": [],
         "required_any": [],
@@ -2150,16 +1626,9 @@
         "fields": [],
         "legacy": {},
         "node_type": "set_variable",
-        "optional": [
-          "value",
-          "from_list",
-          "from_list_index",
-          "increment"
-        ],
+        "optional": ["value", "from_list", "from_list_index", "increment"],
         "presets": [],
-        "required": [
-          "name"
-        ],
+        "required": ["name"],
         "required_any": [],
         "runtime_step_type": "set_variable",
         "schema_version": 1
@@ -2172,14 +1641,9 @@
         "fields": [],
         "legacy": {},
         "node_type": "repeat",
-        "optional": [
-          "delay_between"
-        ],
+        "optional": ["delay_between"],
         "presets": [],
-        "required": [
-          "count",
-          "steps"
-        ],
+        "required": ["count", "steps"],
         "required_any": [],
         "runtime_step_type": "repeat",
         "schema_version": 1
@@ -2192,14 +1656,9 @@
         "fields": [],
         "legacy": {},
         "node_type": "repeat_until",
-        "optional": [
-          "max_iterations"
-        ],
+        "optional": ["max_iterations"],
         "presets": [],
-        "required": [
-          "condition",
-          "steps"
-        ],
+        "required": ["condition", "steps"],
         "required_any": [],
         "runtime_step_type": "repeat_until",
         "schema_version": 1
@@ -2212,26 +1671,12 @@
         "fields": [],
         "legacy": {},
         "node_type": "if_element",
-        "optional": [
-          "selector",
-          "by",
-          "value",
-          "timeout",
-          "else"
-        ],
+        "optional": ["selector", "by", "value", "timeout", "else"],
         "presets": [],
-        "required": [
-          "then"
-        ],
+        "required": ["then"],
         "required_any": [
-          [
-            "selector",
-            "by"
-          ],
-          [
-            "selector",
-            "value"
-          ]
+          ["selector", "by"],
+          ["selector", "value"]
         ],
         "runtime_step_type": "if_element",
         "schema_version": 1
@@ -2252,10 +1697,7 @@
           "else"
         ],
         "presets": [],
-        "required": [
-          "name",
-          "then"
-        ],
+        "required": ["name", "then"],
         "required_any": [],
         "runtime_step_type": "if_variable",
         "schema_version": 1
@@ -2330,11 +1772,7 @@
         "fields": [],
         "legacy": {},
         "node_type": "social_tap_comment_target",
-        "optional": [
-          "platform",
-          "ignore_error",
-          "post_tap_wait_s"
-        ],
+        "optional": ["platform", "ignore_error", "post_tap_wait_s"],
         "presets": [],
         "required": [],
         "required_any": [],
@@ -2548,13 +1986,7 @@
         "fields": [],
         "legacy": {},
         "node_type": "social_sync_connections",
-        "optional": [
-          "platform",
-          "metric",
-          "timeout",
-          "persist",
-          "save_as"
-        ],
+        "optional": ["platform", "metric", "timeout", "persist", "save_as"],
         "presets": [],
         "required": [],
         "required_any": [],
@@ -2596,9 +2028,7 @@
           },
           {
             "advanced": false,
-            "depends_on": [
-              "platform"
-            ],
+            "depends_on": ["platform"],
             "description": "",
             "group": "content",
             "label": "Action",
@@ -2611,9 +2041,7 @@
           },
           {
             "advanced": false,
-            "depends_on": [
-              "action"
-            ],
+            "depends_on": ["action"],
             "description": "",
             "group": "content",
             "label": "Comment text",
@@ -2753,9 +2181,7 @@
         "fields": [],
         "legacy": {},
         "node_type": "lease_connection_candidate",
-        "optional": [
-          "platform"
-        ],
+        "optional": ["platform"],
         "presets": [],
         "required": [],
         "required_any": [],
@@ -2826,9 +2252,7 @@
         "node_type": "random_pick",
         "optional": [],
         "presets": [],
-        "required": [
-          "branches"
-        ],
+        "required": ["branches"],
         "required_any": [],
         "runtime_step_type": "random_pick",
         "schema_version": 1
@@ -2841,19 +2265,10 @@
         "fields": [],
         "legacy": {},
         "node_type": "run_scenario",
-        "optional": [
-          "scenario_id",
-          "scenario_name",
-          "variables"
-        ],
+        "optional": ["scenario_id", "scenario_name", "variables"],
         "presets": [],
         "required": [],
-        "required_any": [
-          [
-            "scenario_id",
-            "scenario_name"
-          ]
-        ],
+        "required_any": [["scenario_id", "scenario_name"]],
         "runtime_step_type": "run_scenario",
         "schema_version": 1
       },
@@ -2901,9 +2316,7 @@
           },
           {
             "advanced": false,
-            "depends_on": [
-              "platform"
-            ],
+            "depends_on": ["platform"],
             "description": "",
             "group": "target",
             "label": "What to extract",
@@ -2996,9 +2409,7 @@
             "runtime_step_type": "extract"
           }
         ],
-        "required": [
-          "entity"
-        ],
+        "required": ["entity"],
         "required_any": [],
         "runtime_step_type": "extract",
         "schema_version": 2
@@ -3067,9 +2478,7 @@
           "idle_delay_seconds"
         ],
         "presets": [],
-        "required": [
-          "steps"
-        ],
+        "required": ["steps"],
         "required_any": [],
         "runtime_step_type": "loop",
         "schema_version": 1
@@ -3084,9 +2493,7 @@
         "node_type": "break_if",
         "optional": [],
         "presets": [],
-        "required": [
-          "condition"
-        ],
+        "required": ["condition"],
         "required_any": [],
         "runtime_step_type": "break_if",
         "schema_version": 1
@@ -3099,15 +2506,9 @@
         "fields": [],
         "legacy": {},
         "node_type": "extract_text_hierarchy",
-        "optional": [
-          "filter_class",
-          "exclude_empty",
-          "format"
-        ],
+        "optional": ["filter_class", "exclude_empty", "format"],
         "presets": [],
-        "required": [
-          "save_as"
-        ],
+        "required": ["save_as"],
         "required_any": [],
         "runtime_step_type": "extract_text_hierarchy",
         "schema_version": 1
@@ -3129,9 +2530,7 @@
           "confidence_threshold"
         ],
         "presets": [],
-        "required": [
-          "save_as"
-        ],
+        "required": ["save_as"],
         "required_any": [],
         "runtime_step_type": "extract_text_ocr",
         "schema_version": 1
@@ -3144,17 +2543,9 @@
         "fields": [],
         "legacy": {},
         "node_type": "extract_text_ai",
-        "optional": [
-          "provider",
-          "format",
-          "model",
-          "region"
-        ],
+        "optional": ["provider", "format", "model", "region"],
         "presets": [],
-        "required": [
-          "save_as",
-          "prompt"
-        ],
+        "required": ["save_as", "prompt"],
         "required_any": [],
         "runtime_step_type": "extract_text_ai",
         "schema_version": 1
@@ -3167,15 +2558,9 @@
         "fields": [],
         "legacy": {},
         "node_type": "extract_screen_data",
-        "optional": [
-          "schema",
-          "strategy",
-          "language"
-        ],
+        "optional": ["schema", "strategy", "language"],
         "presets": [],
-        "required": [
-          "save_as"
-        ],
+        "required": ["save_as"],
         "required_any": [],
         "runtime_step_type": "extract_screen_data",
         "schema_version": 1
@@ -3201,9 +2586,7 @@
           "save_batch_size"
         ],
         "presets": [],
-        "required": [
-          "data_var"
-        ],
+        "required": ["data_var"],
         "required_any": [],
         "runtime_step_type": "save_extraction",
         "schema_version": 1
@@ -3216,13 +2599,7 @@
         "fields": [],
         "legacy": {},
         "node_type": "double_tap",
-        "optional": [
-          "x",
-          "y",
-          "rx",
-          "ry",
-          "wait_after"
-        ],
+        "optional": ["x", "y", "rx", "ry", "wait_after"],
         "presets": [],
         "required": [],
         "required_any": [],
@@ -3237,17 +2614,9 @@
         "fields": [],
         "legacy": {},
         "node_type": "pinch",
-        "optional": [
-          "cx",
-          "cy",
-          "rx",
-          "ry",
-          "duration_ms"
-        ],
+        "optional": ["cx", "cy", "rx", "ry", "duration_ms"],
         "presets": [],
-        "required": [
-          "scale"
-        ],
+        "required": ["scale"],
         "required_any": [],
         "runtime_step_type": "pinch",
         "schema_version": 1
@@ -3285,9 +2654,7 @@
         "fields": [],
         "legacy": {},
         "node_type": "take_screenshot",
-        "optional": [
-          "save_path"
-        ],
+        "optional": ["save_path"],
         "presets": [],
         "required": [],
         "required_any": [],
@@ -3304,9 +2671,7 @@
         "node_type": "set_clipboard",
         "optional": [],
         "presets": [],
-        "required": [
-          "text"
-        ],
+        "required": ["text"],
         "required_any": [],
         "runtime_step_type": "set_clipboard",
         "schema_version": 1
@@ -3344,11 +2709,7 @@
                 "group": "provider",
                 "label": "Comment ordering",
                 "name": "comment_filter",
-                "options": [
-                  "most_relevant",
-                  "newest",
-                  "all_comments"
-                ],
+                "options": ["most_relevant", "newest", "all_comments"],
                 "type": "select"
               }
             ],
@@ -3392,11 +2753,7 @@
             "execution_mode": "adapter_code",
             "facets": {
               "comment_surface": "overlay",
-              "content_actions": [
-                "like",
-                "comment",
-                "share"
-              ]
+              "content_actions": ["like", "comment", "share"]
             },
             "generic_recipes": [],
             "provider_fields": [],
@@ -3420,9 +2777,7 @@
             "facets": {
               "connection_kind": "friend_request"
             },
-            "generic_recipes": [
-              "database_lease"
-            ],
+            "generic_recipes": ["database_lease"],
             "provider_fields": [],
             "status": "active",
             "unsupported_reason": ""
@@ -3454,19 +2809,14 @@
         },
         "capability_schemas": {
           "platform.session.check": {
-            "facets": [
-              "session_surface",
-              "login_state_markers"
-            ],
+            "facets": ["session_surface", "login_state_markers"],
             "id": "platform.session.check",
             "input_schema_version": 1,
             "mutates_platform_state": false,
             "output_schema_version": 1,
             "requires_account": false,
             "safe_generic_recipes": [],
-            "step_types": [
-              "platform_session_gate"
-            ]
+            "step_types": ["platform_session_gate"]
           },
           "social.comments.open": {
             "facets": [
@@ -3488,71 +2838,47 @@
             ]
           },
           "social.community.membership": {
-            "facets": [
-              "community_surface",
-              "membership_state"
-            ],
+            "facets": ["community_surface", "membership_state"],
             "id": "social.community.membership",
             "input_schema_version": 1,
             "mutates_platform_state": true,
             "output_schema_version": 1,
             "requires_account": true,
             "safe_generic_recipes": [],
-            "step_types": [
-              "community_membership"
-            ]
+            "step_types": ["community_membership"]
           },
           "social.connection.request": {
-            "facets": [
-              "connection_kind",
-              "profile_surface"
-            ],
+            "facets": ["connection_kind", "profile_surface"],
             "id": "social.connection.request",
             "input_schema_version": 1,
             "mutates_platform_state": true,
             "output_schema_version": 1,
             "requires_account": true,
             "safe_generic_recipes": [],
-            "step_types": [
-              "connection_request"
-            ]
+            "step_types": ["connection_request"]
           },
           "social.connections.sync": {
-            "facets": [
-              "connection_kind",
-              "metric"
-            ],
+            "facets": ["connection_kind", "metric"],
             "id": "social.connections.sync",
             "input_schema_version": 1,
             "mutates_platform_state": false,
             "output_schema_version": 1,
             "requires_account": true,
             "safe_generic_recipes": [],
-            "step_types": [
-              "social_sync_connections"
-            ]
+            "step_types": ["social_sync_connections"]
           },
           "social.content.interact": {
-            "facets": [
-              "content_actions",
-              "comment_surface"
-            ],
+            "facets": ["content_actions", "comment_surface"],
             "id": "social.content.interact",
             "input_schema_version": 1,
             "mutates_platform_state": true,
             "output_schema_version": 1,
             "requires_account": true,
             "safe_generic_recipes": [],
-            "step_types": [
-              "content_interaction"
-            ]
+            "step_types": ["content_interaction"]
           },
           "social.content.scan": {
-            "facets": [
-              "content_surface",
-              "comment_surface",
-              "profile_surface"
-            ],
+            "facets": ["content_surface", "comment_surface", "profile_surface"],
             "id": "social.content.scan",
             "input_schema_version": 1,
             "mutates_platform_state": true,
@@ -3566,21 +2892,14 @@
             ]
           },
           "social.target.lease": {
-            "facets": [
-              "target_entity",
-              "connection_kind"
-            ],
+            "facets": ["target_entity", "connection_kind"],
             "id": "social.target.lease",
             "input_schema_version": 1,
             "mutates_platform_state": false,
             "output_schema_version": 1,
             "requires_account": true,
-            "safe_generic_recipes": [
-              "database_lease"
-            ],
-            "step_types": [
-              "lease_connection_candidate"
-            ]
+            "safe_generic_recipes": ["database_lease"],
+            "step_types": ["lease_connection_candidate"]
           },
           "social.target.select": {
             "facets": [
@@ -3595,24 +2914,17 @@
             "output_schema_version": 1,
             "requires_account": false,
             "safe_generic_recipes": [],
-            "step_types": [
-              "social_select_target"
-            ]
+            "step_types": ["social_select_target"]
           },
           "social.visible_people.connect": {
-            "facets": [
-              "connection_kind",
-              "common_context_markers"
-            ],
+            "facets": ["connection_kind", "common_context_markers"],
             "id": "social.visible_people.connect",
             "input_schema_version": 1,
             "mutates_platform_state": true,
             "output_schema_version": 1,
             "requires_account": true,
             "safe_generic_recipes": [],
-            "step_types": [
-              "social_connect_visible_people"
-            ]
+            "step_types": ["social_connect_visible_people"]
           }
         },
         "content_types": [
@@ -3635,12 +2947,7 @@
         ],
         "coverage": "L2 Active",
         "enabled_by_default": true,
-        "entities": [
-          "posts",
-          "comments",
-          "groups",
-          "pages"
-        ],
+        "entities": ["posts", "comments", "groups", "pages"],
         "name": "facebook",
         "step_types": [
           "platform_session_gate",
@@ -3684,10 +2991,7 @@
         ],
         "coverage": "Draft",
         "enabled_by_default": false,
-        "entities": [
-          "posts",
-          "comments"
-        ],
+        "entities": ["posts", "comments"],
         "name": "instagram",
         "step_types": [],
         "version": "0.1.0"
@@ -3715,10 +3019,7 @@
         ],
         "coverage": "Draft",
         "enabled_by_default": false,
-        "entities": [
-          "posts",
-          "comments"
-        ],
+        "entities": ["posts", "comments"],
         "name": "threads",
         "step_types": [],
         "version": "0.1.0"
@@ -3746,10 +3047,7 @@
         ],
         "coverage": "Draft",
         "enabled_by_default": false,
-        "entities": [
-          "posts",
-          "comments"
-        ],
+        "entities": ["posts", "comments"],
         "name": "tiktok",
         "step_types": [],
         "version": "0.1.0"
@@ -3863,15 +3161,8 @@
           "type": "number"
         }
       },
-      "optional": [
-        "timeout",
-        "fail_on_error",
-        "save_as",
-        "max_output_chars"
-      ],
-      "required": [
-        "command"
-      ]
+      "optional": ["timeout", "fail_on_error", "save_as", "max_output_chars"],
+      "required": ["command"]
     },
     "assert_app_state": {
       "description": "Assert current app state using package/text checks and optional semantic locator.",
@@ -3887,31 +3178,17 @@
     },
     "assert_element": {
       "description": "✓ Xác nhận element đang hiển thị. Fail scenario ngay nếu không thấy element. Dùng để kiểm tra đang đúng màn hình trước khi thao tác tiếp. timeout mặc định 5s.",
-      "optional": [
-        "selector",
-        "by",
-        "value",
-        "timeout",
-        "poll"
-      ],
+      "optional": ["selector", "by", "value", "timeout", "poll"],
       "required": [],
       "required_any": [
-        [
-          "selector",
-          "by"
-        ],
-        [
-          "selector",
-          "value"
-        ]
+        ["selector", "by"],
+        ["selector", "value"]
       ]
     },
     "break_if": {
       "description": "Dừng vòng lặp 'loop' bao ngoài khi condition thỏa mãn. condition keys: {'type': 'posts_count_gte', 'count': N} — dừng khi ctx['posts'] đạt N bài. {'element_exists': {'by': ..., 'value': ...}} — dừng khi element xuất hiện. {'variable_equals': {'name': ..., 'value': ...}} — dừng khi variable đạt giá trị. ⚠ Chỉ hoạt động bên trong step 'loop' (không phải 'repeat' hay 'repeat_until').",
       "optional": [],
-      "required": [
-        "condition"
-      ]
+      "required": ["condition"]
     },
     "clear_app": {
       "description": "Clear app data (pm clear). Removes login state.",
@@ -3922,9 +3199,7 @@
         }
       },
       "optional": [],
-      "required": [
-        "package"
-      ]
+      "required": ["package"]
     },
     "community_membership": {
       "description": "Join the community on the current screen and verify member or pending state.",
@@ -3992,20 +3267,12 @@
     },
     "dismiss_popup": {
       "description": "Tự động đóng popup/dialog đang hiển thị (permission request, update prompt, quảng cáo). retries: thử tối đa N lần (mặc định 3). Dùng sau launch_app hoặc bất kỳ lúc nào có khả năng xuất hiện dialog bất ngờ.",
-      "optional": [
-        "retries"
-      ],
+      "optional": ["retries"],
       "required": []
     },
     "double_tap": {
       "description": "Double-tap at coordinates. rx/ry (0.0-1.0 relative) or x/y (absolute pixels). wait_after (float, default 0.5s). Requires TouchAccessibilityService or uiautomator2.",
-      "optional": [
-        "x",
-        "y",
-        "rx",
-        "ry",
-        "wait_after"
-      ],
+      "optional": ["x", "y", "rx", "ry", "wait_after"],
       "required": []
     },
     "drag": {
@@ -4065,44 +3332,22 @@
         "comment_stop_if_no_new",
         "comment_no_new_threshold"
       ],
-      "required": [
-        "entity"
-      ]
+      "required": ["entity"]
     },
     "extract_screen_data": {
       "description": "Smart extraction: tries hierarchy → OCR → AI Vision (auto fallback). save_as: variable name. strategy: 'auto' (fallback chain), 'hierarchy', 'ocr', 'ai'. schema: expected output fields (used to validate extraction completeness).",
-      "optional": [
-        "schema",
-        "strategy",
-        "language"
-      ],
-      "required": [
-        "save_as"
-      ]
+      "optional": ["schema", "strategy", "language"],
+      "required": ["save_as"]
     },
     "extract_text_ai": {
       "description": "Extract structured data from screenshot using AI Vision (OpenAI/Gemini). save_as: variable name. prompt: extraction instruction for the AI. provider: 'openai' or 'gemini'. format: 'json' (parsed dict) or 'text' (raw string). Requires OPENAI_API_KEY or GEMINI_API_KEY env var.",
-      "optional": [
-        "provider",
-        "format",
-        "model",
-        "region"
-      ],
-      "required": [
-        "save_as",
-        "prompt"
-      ]
+      "optional": ["provider", "format", "model", "region"],
+      "required": ["save_as", "prompt"]
     },
     "extract_text_hierarchy": {
       "description": "Extract text from UI Hierarchy XML (free, fastest, native views only). save_as: variable name to store result. format: 'text' (plain) or 'json' (structured with bounds/class/resource_id). filter_class: list of Android widget classes to include (null = all).",
-      "optional": [
-        "filter_class",
-        "exclude_empty",
-        "format"
-      ],
-      "required": [
-        "save_as"
-      ]
+      "optional": ["filter_class", "exclude_empty", "format"],
+      "required": ["save_as"]
     },
     "extract_text_ocr": {
       "description": "Extract text from screenshot using Tesseract OCR. Works on WebView, Canvas, images — anything visible on screen. save_as: variable name. region: {x1, y1, x2, y2} as ratios 0-1 to crop before OCR. language: Tesseract lang code (e.g. 'eng', 'vie+eng'). psm: Page Segmentation Mode (3=auto, 6=block, 7=line, 11=sparse).",
@@ -4114,90 +3359,40 @@
         "scale_factor",
         "confidence_threshold"
       ],
-      "required": [
-        "save_as"
-      ]
+      "required": ["save_as"]
     },
     "fill_form": {
       "description": "Fill a named form recipe from an app automation profile.",
-      "optional": [
-        "profile",
-        "recipe",
-        "form",
-        "clear_first",
-        "implicit_wait"
-      ],
+      "optional": ["profile", "recipe", "form", "clear_first", "implicit_wait"],
       "required": []
     },
     "if_element": {
       "description": "Rẽ nhánh theo sự tồn tại của element. selector hoặc by/value; chain/conditions hỗ trợ như tap_selector.",
-      "optional": [
-        "selector",
-        "by",
-        "value",
-        "timeout",
-        "else"
-      ],
-      "required": [
-        "then"
-      ],
+      "optional": ["selector", "by", "value", "timeout", "else"],
+      "required": ["then"],
       "required_any": [
-        [
-          "selector",
-          "by"
-        ],
-        [
-          "selector",
-          "value"
-        ]
+        ["selector", "by"],
+        ["selector", "value"]
       ]
     },
     "if_variable": {
       "description": "Re nhánh theo giá trị của variable. name: tên variable (không cần ${...}). Điều kiện: equals | not_equals | contains | greater_than. Nếu không có điều kiện → branch theo truthy (var có giá trị). then: steps chạy khi đúng. else: steps chạy khi sai (optional).",
-      "optional": [
-        "equals",
-        "not_equals",
-        "contains",
-        "greater_than",
-        "else"
-      ],
-      "required": [
-        "name",
-        "then"
-      ]
+      "optional": ["equals", "not_equals", "contains", "greater_than", "else"],
+      "required": ["name", "then"]
     },
     "input_selector": {
       "description": "Tìm input field theo selector, xóa nội dung cũ (clear_first=true mặc định), rồi gõ text. implicit_wait: Tenacity retry-until-visible (default 10s/0.5s poll). by: resource-id (ưu tiên) | text | xpath.",
-      "optional": [
-        "selector",
-        "by",
-        "value",
-        "clear_first",
-        "implicit_wait"
-      ],
-      "required": [
-        "text"
-      ],
+      "optional": ["selector", "by", "value", "clear_first", "implicit_wait"],
+      "required": ["text"],
       "required_any": [
-        [
-          "selector",
-          "by"
-        ],
-        [
-          "selector",
-          "value"
-        ]
+        ["selector", "by"],
+        ["selector", "value"]
       ]
     },
     "input_text": {
       "description": "Gõ text vào element đang focused. via: u2. clear_first=true để xóa nội dung cũ trước khi gõ. Ưu tiên dùng input_selector khi có selector.",
-      "optional": [
-        "via",
-        "clear_first"
-      ],
-      "required": [
-        "text"
-      ]
+      "optional": ["via", "clear_first"],
+      "required": ["text"]
     },
     "install_apk": {
       "description": "Install APK on the device. url accepts http(s), absolute local path, or ${VARIABLE}. timeout defaults to 90s.",
@@ -4215,12 +3410,8 @@
           "type": "string"
         }
       },
-      "optional": [
-        "timeout"
-      ],
-      "required": [
-        "url"
-      ]
+      "optional": ["timeout"],
+      "required": ["url"]
     },
     "key": {
       "description": "Phím: enter, back, home, ...",
@@ -4231,9 +3422,7 @@
         }
       },
       "optional": [],
-      "required": [
-        "key"
-      ]
+      "required": ["key"]
     },
     "launch_app": {
       "description": "Open app by package. Optional activity/component, stop_before, use_monkey. wait_after (default 2s).",
@@ -4277,15 +3466,11 @@
         "package_fallbacks",
         "adb_fallback"
       ],
-      "required": [
-        "package"
-      ]
+      "required": ["package"]
     },
     "lease_connection_candidate": {
       "description": "Atomically lease the highest-ranked ready connection candidate for the bound account; request discovery when none is ready.",
-      "optional": [
-        "platform"
-      ],
+      "optional": ["platform"],
       "required": []
     },
     "lease_source_target": {
@@ -4303,32 +3488,16 @@
     },
     "login_if_needed": {
       "description": "Profile-driven login. Detects logged-in state first, fills login_recipe fields from account/scenario/variables/secret references, then submits. Optional login_recipe.post_submit_actions can navigate intermediate 2FA screens before post_submit_fields such as account.totp_code are entered.",
-      "optional": [
-        "profile",
-        "clear_first",
-        "implicit_wait"
-      ],
+      "optional": ["profile", "clear_first", "implicit_wait"],
       "required": []
     },
     "long_tap_selector": {
       "description": "Long press element tìm theo selector. duration_ms mặc định 800ms. implicit_wait: Tenacity retry-until-visible (default 10s/0.5s poll).",
-      "optional": [
-        "selector",
-        "by",
-        "value",
-        "duration_ms",
-        "implicit_wait"
-      ],
+      "optional": ["selector", "by", "value", "duration_ms", "implicit_wait"],
       "required": [],
       "required_any": [
-        [
-          "selector",
-          "by"
-        ],
-        [
-          "selector",
-          "value"
-        ]
+        ["selector", "by"],
+        ["selector", "value"]
       ]
     },
     "loop": {
@@ -4368,9 +3537,7 @@
         "stall_after",
         "idle_delay_seconds"
       ],
-      "required": [
-        "steps"
-      ]
+      "required": ["steps"]
     },
     "open_url": {
       "description": "Mở URL. package (optional): e.g. com.android.chrome để ép mở bằng app đó.",
@@ -4384,94 +3551,49 @@
           "type": "string"
         }
       },
-      "optional": [
-        "package"
-      ],
-      "required": [
-        "url"
-      ]
+      "optional": ["package"],
+      "required": ["url"]
     },
     "pinch": {
       "description": "Pinch/zoom gesture. scale>1 = zoom in (spread), scale<1 = zoom out (pinch). Center: cx/cy (absolute) or rx/ry (relative, default 0.5/0.5). duration_ms (default 400). Requires TouchAccessibilityService.",
-      "optional": [
-        "cx",
-        "cy",
-        "rx",
-        "ry",
-        "duration_ms"
-      ],
-      "required": [
-        "scale"
-      ]
+      "optional": ["cx", "cy", "rx", "ry", "duration_ms"],
+      "required": ["scale"]
     },
     "platform_session_gate": {
       "description": "Account-scoped platform session gate. preflight reuses only a matching trusted session or requests login; confirm establishes provenance after this run logged in.",
-      "optional": [
-        "phase",
-        "timeout",
-        "poll_interval"
-      ],
+      "optional": ["phase", "timeout", "poll_interval"],
       "required": []
     },
     "pull_file": {
       "description": "Pull device file to local path (requires agent-boot u2 session).",
       "optional": [],
-      "required": [
-        "local_path",
-        "remote_path"
-      ]
+      "required": ["local_path", "remote_path"]
     },
     "push_file": {
       "description": "Push local file to device path (requires agent-boot u2 session).",
-      "optional": [
-        "mode"
-      ],
-      "required": [
-        "local_path",
-        "remote_path"
-      ]
+      "optional": ["mode"],
+      "required": ["local_path", "remote_path"]
     },
     "random_pick": {
       "description": "Chọn ngẫu nhiên 1 nhánh để thực thi (weighted random). branches: list các nhánh, mỗi nhánh có steps (required) và weight (optional, mặc định 1). Weight cao hơn = xác suất được chọn cao hơn. Ví dụ: [{\"weight\": 3, \"steps\": [...]}, {\"weight\": 1, \"steps\": [...]}].",
       "optional": [],
-      "required": [
-        "branches"
-      ]
+      "required": ["branches"]
     },
     "repeat": {
       "description": "Lặp lại danh sách steps con N lần. count: số lần lặp (int). delay_between: thời gian chờ giữa các lần lặp (seconds, mặc định 0). ${__LOOP_INDEX__} được set tự động (0-based) trong mỗi lần lặp.",
-      "optional": [
-        "delay_between"
-      ],
-      "required": [
-        "count",
-        "steps"
-      ]
+      "optional": ["delay_between"],
+      "required": ["count", "steps"]
     },
     "repeat_until": {
       "description": "Lặp lại steps cho đến khi điều kiện thỏa mãn (dừng). max_iterations: giới hạn an toàn (mặc định 100). condition keys: element_exists | element_not_exists | variable_equals. Ví dụ: {\"element_exists\": {\"by\": \"text\", \"value\": \"End of feed\"}}.",
-      "optional": [
-        "max_iterations"
-      ],
-      "required": [
-        "condition",
-        "steps"
-      ]
+      "optional": ["max_iterations"],
+      "required": ["condition", "steps"]
     },
     "run_scenario": {
       "description": "Gọi một sub-scenario khác (flow composition). scenario_id: UUID của scenario trong cùng campaign. scenario_name: tên scenario (tìm trong campaign trước, rồi trong template library). variables: dict override variables cho sub-scenario (optional). Yêu cầu một trong hai: scenario_id hoặc scenario_name. Circular reference và max depth (10) được tự động bảo vệ.",
-      "optional": [
-        "scenario_id",
-        "scenario_name",
-        "variables"
-      ],
+      "optional": ["scenario_id", "scenario_name", "variables"],
       "required": [],
-      "required_any": [
-        [
-          "scenario_id",
-          "scenario_name"
-        ]
-      ]
+      "required_any": [["scenario_id", "scenario_name"]]
     },
     "save_extraction": {
       "description": "Save extracted data to content database with deduplication (DF-010). data_var: name of runtime variable containing the data (from extract_text_* or set_variable). collection: name of content collection (default: 'default'). dedupe_field: field in data to use for dedup hash (e.g. 'content'). parent_id_var (alias: save_parent_id_var): link children rows to parent hash from context. item_level: hierarchy level (0 post, 1 comment/reply). Data is saved to content_items table with SHA256 hash-based dedup.",
@@ -4487,9 +3609,7 @@
         "dedup_action",
         "save_batch_size"
       ],
-      "required": [
-        "data_var"
-      ]
+      "required": ["data_var"]
     },
     "scroll_down": {
       "description": "Vuốt xuống N lần (mặc định 1). start_x_ratio (0–1, mặc định 0.5): neo ngang — dùng ~0.15–0.25 để tránh vuốt xuyên ảnh full-width ở giữa feed Facebook. start_y_ratio/end_y_ratio/duration_ms/pause_seconds: tinh chỉnh gesture.",
@@ -4520,34 +3640,19 @@
       ],
       "required": [],
       "required_any": [
-        [
-          "selector",
-          "by"
-        ],
-        [
-          "selector",
-          "value"
-        ]
+        ["selector", "by"],
+        ["selector", "value"]
       ]
     },
     "set_clipboard": {
       "description": "Set device clipboard text. Uses STFService → uiautomator2 → ADB broadcast fallback. After this step, use input_text or key(paste) to paste clipboard content.",
       "optional": [],
-      "required": [
-        "text"
-      ]
+      "required": ["text"]
     },
     "set_variable": {
       "description": "Đặt hoặc cập nhật một runtime variable để dùng trong các step sau với ${NAME}. value: giá trị cụ thể (hỗ trợ ${VAR} interpolation). from_list: chọn 1 phần tử từ danh sách; mặc định chọn ngẫu nhiên. from_list_index: nếu có, chọn phần tử theo index sau khi resolve (ví dụ ${_loop_iter}). increment: tăng counter thêm N (bắt đầu từ 0 nếu chưa có). Chỉ dùng 1 trong 3 tùy chọn trên; 'value' là mặc định.",
-      "optional": [
-        "value",
-        "from_list",
-        "from_list_index",
-        "increment"
-      ],
-      "required": [
-        "name"
-      ]
+      "optional": ["value", "from_list", "from_list_index", "increment"],
+      "required": ["name"]
     },
     "social_apply_comment_filter": {
       "description": "Apply the comment sheet filter. comment_filter: most_relevant | newest | all_comments, or none to skip.",
@@ -4728,22 +3833,12 @@
     },
     "social_sync_connections": {
       "description": "Read how many connections the account has from the screen it is on, publish ACCOUNT_FRIEND_COUNT/ACCOUNT_STAGE for branching, and record the observation so growth is measurable.",
-      "optional": [
-        "platform",
-        "metric",
-        "timeout",
-        "persist",
-        "save_as"
-      ],
+      "optional": ["platform", "metric", "timeout", "persist", "save_as"],
       "required": []
     },
     "social_tap_comment_target": {
       "description": "Tap the cached comment target from social_find_comment_button, verify the comment sheet opened, and set parent context for following entity=comments extraction.",
-      "optional": [
-        "platform",
-        "ignore_error",
-        "post_tap_wait_s"
-      ],
+      "optional": ["platform", "ignore_error", "post_tap_wait_s"],
       "required": []
     },
     "stop_app": {
@@ -4755,27 +3850,16 @@
         }
       },
       "optional": [],
-      "required": [
-        "package"
-      ]
+      "required": ["package"]
     },
     "swipe_ratio": {
       "description": "Swipe giữa hai điểm tỷ lệ (0–1). duration_ms mặc định 300.",
-      "optional": [
-        "duration_ms"
-      ],
-      "required": [
-        "x1",
-        "y1",
-        "x2",
-        "y2"
-      ]
+      "optional": ["duration_ms"],
+      "required": ["x1", "y1", "x2", "y2"]
     },
     "take_screenshot": {
       "description": "Capture device screenshot. Result stored as base64 in step_result['screenshot']. Optional save_path: write JPEG to disk at that absolute path.",
-      "optional": [
-        "save_path"
-      ],
+      "optional": ["save_path"],
       "required": []
     },
     "tap": {
@@ -4799,9 +3883,7 @@
         "timeout",
         "poll"
       ],
-      "required": [
-        "template_key"
-      ]
+      "required": ["template_key"]
     },
     "tap_position": {
       "description": "Tap tại vị trí logic: top_center | middle_center | bottom_center | search_bar.",
@@ -4830,17 +3912,12 @@
         }
       },
       "optional": [],
-      "required": [
-        "pos"
-      ]
+      "required": ["pos"]
     },
     "tap_ratio": {
       "description": "Tap tại tỷ lệ màn hình (0–1). Fallback khi không có selector.",
       "optional": [],
-      "required": [
-        "x",
-        "y"
-      ]
+      "required": ["x", "y"]
     },
     "tap_selector": {
       "description": "Tap theo uiautomator2 selector. selector: {by, value, conditions?, instance?, chain?} (canonical) hoặc legacy by/value. conditions: AND fields (className, resourceId, clickable, …). chain: child | sibling | relative | child_by_text | child_by_description. fallback / fallback_rx/ry: tọa độ ratio khi không tìm thấy element.",
@@ -4857,14 +3934,8 @@
       ],
       "required": [],
       "required_any": [
-        [
-          "selector",
-          "by"
-        ],
-        [
-          "selector",
-          "value"
-        ]
+        ["selector", "by"],
+        ["selector", "value"]
       ]
     },
     "tap_xml_match": {
@@ -4880,13 +3951,7 @@
         "poll"
       ],
       "required": [],
-      "required_any": [
-        [
-          "contains",
-          "equals",
-          "value"
-        ]
-      ]
+      "required_any": [["contains", "equals", "value"]]
     },
     "use_source_pool": {
       "description": "Khai báo nguồn dữ liệu dùng cho campaign dispatch. Mặc định dùng external_entities facebook/group đã cào; mỗi device nhận một nguồn qua biến TARGET_* và alias theo output_prefix.",
@@ -4912,12 +3977,7 @@
         "timeout",
         "poll"
       ],
-      "required_any": [
-        [
-          "template_key",
-          "screenshot"
-        ]
-      ]
+      "required_any": [["template_key", "screenshot"]]
     },
     "wait": {
       "description": "Tạm dừng cố định (giây). Ưu tiên dùng wait_element thay thế.",
@@ -4929,9 +3989,7 @@
           "type": "number"
         }
       },
-      "optional": [
-        "seconds"
-      ],
+      "optional": ["seconds"],
       "required": []
     },
     "wait_app": {
@@ -4954,41 +4012,21 @@
           "type": "number"
         }
       },
-      "optional": [
-        "timeout",
-        "front"
-      ],
-      "required": [
-        "package"
-      ]
+      "optional": ["timeout", "front"],
+      "required": ["package"]
     },
     "wait_element": {
       "description": "⚡ PREFERRED thay cho 'wait N giây'. Poll liên tục cho đến khi element xuất hiện (mặc định timeout=10s). Dùng sau launch_app, open_url, hay bất kỳ bước nào khiến màn hình thay đổi. by: text | resource-id | xpath.",
-      "optional": [
-        "selector",
-        "by",
-        "value",
-        "timeout",
-        "poll"
-      ],
+      "optional": ["selector", "by", "value", "timeout", "poll"],
       "required": [],
       "required_any": [
-        [
-          "selector",
-          "by"
-        ],
-        [
-          "selector",
-          "value"
-        ]
+        ["selector", "by"],
+        ["selector", "value"]
       ]
     },
     "wait_stable": {
       "description": "Chờ UI ngừng thay đổi (animation/transition xong). timeout: tối đa N giây chờ (mặc định 5.0). stable_duration: UI phải đứng yên bao lâu (mặc định 0.4s). Dùng sau swipe, mở tab mới, hay bất kỳ animation nào trước khi tap.",
-      "optional": [
-        "timeout",
-        "stable_duration"
-      ],
+      "optional": ["timeout", "stable_duration"],
       "required": []
     }
   }

@@ -214,6 +214,10 @@ services:
     volumes:
       - ./device_farm/config.yaml:/app/config.yaml:ro
       - farm_captures:/app/captures
+      # scenario-trace.log — the account activity trail. Without this it was
+      # written inside the container and lost on every recreate, leaving
+      # `docker compose logs` as the only copy.
+      - farm_logs:/app/logs
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/api/health"]
       interval: 15s
@@ -273,4 +277,5 @@ services:
 volumes:
   pgdata:
   farm_captures:
+  farm_logs:
   # minio_data:

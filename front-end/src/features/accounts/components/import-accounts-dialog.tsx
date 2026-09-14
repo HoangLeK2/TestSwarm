@@ -116,14 +116,16 @@ export function ImportAccountsDialog() {
           <p className='text-sm text-muted-foreground'>{t('description')}</p>
           <code className='block overflow-hidden text-ellipsis whitespace-nowrap rounded bg-muted p-2 text-xs'>
             {kind === 'txt'
-              ? activeFormats.find((fmt) => fmt.slug === selectedFormatSlug)?.description ||
-                t('txtFormatFallback')
+              ? activeFormats.find((fmt) => fmt.slug === selectedFormatSlug)
+                  ?.description || t('txtFormatFallback')
               : 'platform,username,password,display_name,tags,notes'}
           </code>
           <div className='space-y-2'>
             <Select
               value={kind}
-              onValueChange={(value) => handleKindChange(value as 'csv' | 'txt')}
+              onValueChange={(value) =>
+                handleKindChange(value as 'csv' | 'txt')
+              }
             >
               <SelectTrigger className='w-full'>
                 <SelectValue />

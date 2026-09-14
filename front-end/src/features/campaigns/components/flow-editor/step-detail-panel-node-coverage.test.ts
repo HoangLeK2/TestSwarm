@@ -95,7 +95,9 @@ test('schema-driven nodes render through SchemaFields, not a hand-written branch
   // ...and every migrated node must gate its old branch on it, or both forms
   // render at once and the user edits the same field in two places.
   const migrated = [
-    ...source.matchAll(/const SCHEMA_DRIVEN_STEP_TYPES = new Set\(\[([^\]]*)\]/g)
+    ...source.matchAll(
+      /const SCHEMA_DRIVEN_STEP_TYPES = new Set\(\[([^\]]*)\]/g
+    )
   ].flatMap((m) => [...m[1].matchAll(/'([^']+)'/g)].map((v) => v[1]));
   assert.ok(migrated.length > 0, 'no node types are marked schema-driven');
 

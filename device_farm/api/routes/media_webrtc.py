@@ -297,6 +297,13 @@ def build_media_webrtc_router(
         data = _grpc_result_or_error(await servicer.heartbeat_session(session_id, ttl_seconds))
         return _session_payload_from_grpc(data, ok=True)
 
+    async def _keyframe_session_grpc(session_id: str) -> dict[str, Any]:
+        servicer = _media_adapter_servicer()
+        if servicer is None:
+            raise HTTPException(status_code=503, detail="media adapter control channel is unavailable")
+        _grpc_result_or_error(await servicer.request_keyframe(session_id))
+        return {"ok": True}
+
     async def _close_session_grpc(session_id: str) -> dict[str, Any]:
         servicer = _media_adapter_servicer()
         if servicer is None:
@@ -373,6 +380,25 @@ def build_media_webrtc_router(
             f"/v1/webrtc/sessions/{session_id}/heartbeat",
             body={"ttl_seconds": body.ttl_seconds},
         )
+
+    @router.post("/api/media/webrtc/sessions/{session_id}/keyframe")
+    async def request_keyframe(session_id: str):
+        """The cheap rung of the viewer's stall ladder.
+
+        A decoder that stalls while bytes keep arriving has a broken reference
+        chain; one IDR repairs it in about 100ms with the PeerConnection intact,
+        where the next rung rebuilds the session and flashes the picture black.
+
+        Only the gRPC control plane carries this. The direct-HTTP adapter has no
+        such endpoint, and inventing a 404 round trip to find that out would just
+        add latency to a caller that already escalates on failure.
+        """
+        if _control_plane_mode() == "http":
+            raise HTTPException(
+                status_code=501,
+                detail="keyframe requests need the gRPC control plane",
+            )
+        return await _keyframe_session_grpc(session_id)
 
     @router.delete("/api/media/webrtc/sessions/{session_id}")
     async def close_session(session_id: str):

@@ -72,7 +72,7 @@ export function RunScenarioFields({
   );
 
   const handleSelect = (value: string) => {
-    const option = allOptions.find((o) => `${o.source}:${o.name}` === value);
+    const option = allOptions.find((o) => o.id === value);
     if (!option) return;
     if (option.source === 'campaign') {
       onPatch({ scenario_id: option.id, scenario_name: undefined });
@@ -82,38 +82,38 @@ export function RunScenarioFields({
   };
 
   const panel = layout === 'panel';
-  const selectCls = panel
-    ? 'h-9 w-full min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1.5 text-sm shadow-sm sm:min-w-[200px]'
-    : `${inputCls} flex-1 min-w-[160px]`;
-  const manualCls = panel
-    ? 'h-9 w-full min-w-0 rounded-md border border-input bg-background px-2 text-sm sm:max-w-[220px]'
-    : `${inputCls} w-36`;
+  // Panel lives in a narrow side drawer — viewport `sm:` breakpoints would turn
+  // the row horizontal while the drawer stays ~330px, clipping the last label.
+  const fieldCls =
+    'h-9 w-full min-w-0 rounded-md border border-input bg-background px-2 text-sm shadow-sm';
+  const selectCls = panel ? fieldCls : `${inputCls} flex-1 min-w-[160px]`;
+  const manualCls = panel ? fieldCls : `${inputCls} w-36`;
 
   return (
     <div className={panel ? 'space-y-4' : 'space-y-2'}>
       {/* Scenario picker */}
       <div
         className={
-          panel
-            ? 'flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center'
-            : 'flex flex-wrap items-center gap-2'
+          panel ? 'flex flex-col gap-1.5' : 'flex flex-wrap items-center gap-2'
         }
       >
         <span
-          className={panel ? 'text-xs font-medium text-foreground' : labelCls}
+          className={
+            panel ? 'block text-xs font-medium text-foreground' : labelCls
+          }
         >
           {t('scenarioLabel')}
         </span>
         <select
           className={selectCls}
-          value={selected ? `${selected.source}:${selected.name}` : ''}
+          value={selected?.id ?? ''}
           onChange={(e) => handleSelect(e.target.value)}
         >
           <option value=''>{t('selectScenario')}</option>
           {campaignScenarios.length > 0 && (
             <optgroup label={t('campaignScenarios')}>
               {campaignScenarios.map((s) => (
-                <option key={s.id} value={`campaign:${s.name}`}>
+                <option key={s.id} value={s.id}>
                   {s.name}
                 </option>
               ))}
@@ -122,14 +122,18 @@ export function RunScenarioFields({
           {(templates ?? []).length > 0 && (
             <optgroup label={t('sharedTemplates')}>
               {(templates ?? []).map((t) => (
-                <option key={t.id} value={`${t.category}:${t.name}`}>
+                <option key={t.id} value={t.id}>
                   [{t.category}] {t.name}
                 </option>
               ))}
             </optgroup>
           )}
         </select>
-        <span className={panel ? 'text-xs text-muted-foreground' : labelCls}>
+        <span
+          className={
+            panel ? 'block pt-1 text-xs text-muted-foreground' : labelCls
+          }
+        >
           {t('orNameLabel')}
         </span>
         <input
@@ -147,7 +151,7 @@ export function RunScenarioFields({
         <span
           className={
             panel
-              ? 'text-xs font-medium text-muted-foreground'
+              ? 'block text-xs font-medium text-muted-foreground'
               : `${labelCls} text-[10px]`
           }
         >

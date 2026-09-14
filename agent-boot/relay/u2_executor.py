@@ -1091,6 +1091,25 @@ def _op_pull_file(dev: Any, act: dict) -> None:
     dev.pull(remote_path, local_path)
 
 
+def _op_install_apk(dev: Any, act: dict) -> None:
+    """Install an APK that *this host* downloads, not the phone.
+
+    atx-agent's /install makes the phone fetch the URL itself, so a device on a
+    LAN with no route to the APK host answers "http download error". adbutils
+    downloads here and pushes the file over ADB instead.
+    """
+    source = str(act.get("url") or act.get("local_path") or "").strip()
+    if not source:
+        raise ValueError("install_apk: url or local_path required")
+    dev.adb_device.install(source, nolaunch=True, silent=True)
+    package = str(act.get("verify_package") or "").strip()
+    if not package:
+        return
+    output, _rc = _adb_shell(str(act.get("_serial") or ""), f"pm path {package}", timeout=10)
+    if not str(output or "").strip().startswith("package:"):
+        raise RuntimeError(f"install_apk: {package} not present after install")
+
+
 _OP_TABLE: dict[str, Any] = {
     "click":          _op_click,
     "click_selector": _op_click_selector,
@@ -1115,6 +1134,7 @@ _OP_TABLE: dict[str, Any] = {
     "open_url":       _op_open_url,
     "push_file":      _op_push_file,
     "pull_file":      _op_pull_file,
+    "install_apk":    _op_install_apk,
 }
 
 # ── Named flow implementations (blocking) ─────────────────────────────────────

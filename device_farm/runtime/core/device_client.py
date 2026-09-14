@@ -4702,11 +4702,32 @@ class DeviceClient:
         timeout: float = 90.0,
         verify_package: str | None = None,
     ) -> None:
-        """Install APK via atx-agent /install endpoint (URL or local path).
+        """Install an APK from a URL or a path local to the installing host.
 
-        Requires atx-agent to be running on the device (port 7912).
-        Falls back to ADB install for ADB-mode devices.
+        Preferred route is agent-boot: the agent host downloads the APK and
+        pushes it over ADB, so the phone needs no route to the APK URL. Only if
+        the relay is unavailable do we fall back to atx-agent /install, where
+        the phone downloads the URL itself ("http download error" when it
+        cannot reach the host).
         """
+        relay_error = ""
+        if self._relay_batch_available():
+            action: Dict[str, Any] = {"op": "install_apk", "url": apk_source}
+            if verify_package:
+                action["verify_package"] = verify_package
+            result = self._run_relay_coro(
+                lambda relay, serial: relay.u2_batch(serial, [action], timeout=timeout),
+                timeout=timeout,
+            )
+            if result.get("ok"):
+                self._log(f"install via agent-boot: {self._install_source_for_log(apk_source)}")
+                return
+            relay_error = str(result.get("error") or "unknown error")
+            self._log(
+                f"install via agent-boot failed: {relay_error} — falling back to atx-agent",
+                level=logging.WARNING,
+            )
+
         with self._u2_lock:
             u2 = self._u2
         if u2 is not None:
@@ -4716,7 +4737,11 @@ class DeviceClient:
                 return
             except Exception as exc:
                 self._log(f"install via atx-agent failed: {exc}", level=logging.WARNING)
+                if relay_error:
+                    raise RuntimeError(f"agent-boot: {relay_error}; atx-agent: {exc}") from exc
                 raise
+        if relay_error:
+            raise RuntimeError(f"install via agent-boot failed: {relay_error}")
         raise RuntimeError("install: no suitable transport available")
 
     @staticmethod

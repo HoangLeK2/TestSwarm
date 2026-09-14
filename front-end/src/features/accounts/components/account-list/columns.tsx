@@ -11,6 +11,7 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu';
 import {
+  Footprints,
   History,
   MoreHorizontal,
   Pencil,
@@ -35,6 +36,7 @@ import { EditAccountDialog } from '../edit-account-dialog';
 import { AccountStateTransitionDialog } from '../account-state-transition-dialog';
 import { AccountDevicesDialog } from '../account-devices-dialog';
 import { AccountLoginDialog } from '../account-login-dialog';
+import { AccountStepTraceDialog } from '../account-step-trace-dialog';
 import Link from 'next/link';
 import { ROUTES } from '@/config/routes';
 import type { ResourcePermissionFlags } from '@/features/auth/types/resource-permissions';
@@ -270,6 +272,17 @@ export function getAccountColumns(
                       {t('history')}
                     </Link>
                   </DropdownMenuItem>
+                  <AccountStepTraceDialog
+                    account={account}
+                    trigger={
+                      <DropdownMenuItem
+                        onSelect={(event) => event.preventDefault()}
+                      >
+                        <Footprints className='mr-2 size-4' />
+                        {t('stepTrace')}
+                      </DropdownMenuItem>
+                    }
+                  />
                   {perms.canUpdate ? (
                     <EditAccountDialog
                       account={account}

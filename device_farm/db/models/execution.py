@@ -54,6 +54,9 @@ class Execution(Base):
         Index("idx_executions_kind_org_user_created", "kind", "org_id", "user_id", "created_at"),
         Index("idx_executions_org_status_created", "org_id", "status", "created_at"),
         Index("idx_executions_campaign_created", "campaign_id", "created_at"),
+        # account -> executions -> steps: the first hop of a ban investigation.
+        # See migration 130.
+        Index("idx_executions_org_account_created", "org_id", "account_id", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)

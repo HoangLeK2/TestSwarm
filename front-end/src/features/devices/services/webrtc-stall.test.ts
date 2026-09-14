@@ -1,0 +1,247 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+  DEFAULT_STALL_THRESHOLDS,
+  MAX_RECOVERY_ATTEMPTS,
+  acquireRecoverySlot,
+  classifyStall,
+  recoveryDelayMs,
+  resetRecoverySlotsForTest,
+  startMediaProgressWatcher,
+  type MediaSample
+} from './webrtc-stall';
+
+function sample(overrides: Partial<MediaSample> = {}): MediaSample {
+  return {
+    at: 0,
+    bytesReceived: 1000,
+    framesDecoded: 10,
+    connectionState: 'connected',
+    trackEnded: false,
+    ...overrides
+  };
+}
+
+test('a decoded frame clears any suspicion', () => {
+  const anchor = sample({ at: 0 });
+  const latest = sample({ at: 60_000, framesDecoded: 11, bytesReceived: 1000 });
+  assert.equal(classifyStall(anchor, latest), null);
+});
+
+test('an idle screen is not a stall inside the no-media budget', () => {
+  // The adapter forces an IDR after 5s of scrcpy silence, so a still phone
+  // still produces bytes well before noMediaMs.
+  const anchor = sample({ at: 0 });
+  const latest = sample({ at: 9_000 });
+  assert.equal(classifyStall(anchor, latest), null);
+});
+
+test('flat bytes past the no-media budget report no_media', () => {
+  const anchor = sample({ at: 0 });
+  const latest = sample({ at: DEFAULT_STALL_THRESHOLDS.noMediaMs });
+  assert.equal(classifyStall(anchor, latest), 'no_media');
+});
+
+test('bytes arriving with no decoded frame reports decoder_stalled', () => {
+  const anchor = sample({ at: 0 });
+  const latest = sample({
+    at: DEFAULT_STALL_THRESHOLDS.decoderStallMs,
+    bytesReceived: 5000
+  });
+  assert.equal(classifyStall(anchor, latest), 'decoder_stalled');
+});
+
+test('decoder_stalled needs the full window, not one flat frame', () => {
+  const anchor = sample({ at: 0 });
+  const latest = sample({ at: 1_500, bytesReceived: 5000 });
+  assert.equal(classifyStall(anchor, latest), null);
+});
+
+test('before the first frame the budget is firstFrameMs, not noMediaMs', () => {
+  const anchor = sample({ at: 0, framesDecoded: 0, bytesReceived: 0 });
+  const inside = sample({
+    at: DEFAULT_STALL_THRESHOLDS.noMediaMs,
+    framesDecoded: 0,
+    bytesReceived: 0
+  });
+  assert.equal(classifyStall(anchor, inside), null);
+  const outside = sample({
+    at: DEFAULT_STALL_THRESHOLDS.firstFrameMs,
+    framesDecoded: 0,
+    bytesReceived: 0
+  });
+  assert.equal(classifyStall(anchor, outside), 'no_media');
+});
+
+test('a failed connection is reported without waiting for a counter window', () => {
+  const anchor = sample({ at: 0 });
+  const latest = sample({ at: 10, connectionState: 'failed' });
+  assert.equal(classifyStall(anchor, latest), 'connection_failed');
+});
+
+test('an ended track is reported the same way', () => {
+  const anchor = sample({ at: 0 });
+  const latest = sample({ at: 10, trackEnded: true });
+  assert.equal(classifyStall(anchor, latest), 'connection_failed');
+});
+
+test('the first recovery is immediate and later ones back off with jitter', () => {
+  assert.equal(recoveryDelayMs(0), 0);
+  assert.equal(
+    recoveryDelayMs(1, () => 0.5),
+    2_000
+  );
+  assert.equal(
+    recoveryDelayMs(1, () => 0),
+    1_600
+  );
+  assert.equal(
+    recoveryDelayMs(1, () => 1),
+    2_400
+  );
+  // Past the table the delay is clamped rather than growing without bound.
+  assert.equal(
+    recoveryDelayMs(MAX_RECOVERY_ATTEMPTS + 5, () => 0.5),
+    30_000
+  );
+});
+
+test('concurrent recoveries are capped and slots are returned', () => {
+  resetRecoverySlotsForTest();
+  const first = acquireRecoverySlot();
+  const second = acquireRecoverySlot();
+  assert.ok(first);
+  assert.ok(second);
+  assert.equal(acquireRecoverySlot(), null);
+  first?.();
+  assert.ok(acquireRecoverySlot());
+  resetRecoverySlotsForTest();
+});
+
+test('a slot release is idempotent', () => {
+  resetRecoverySlotsForTest();
+  const release = acquireRecoverySlot();
+  release?.();
+  release?.();
+  assert.ok(acquireRecoverySlot());
+  assert.ok(acquireRecoverySlot());
+  assert.equal(acquireRecoverySlot(), null);
+  resetRecoverySlotsForTest();
+});
+
+test('a stall is only reported after two consecutive flat samples', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  let clock = 0;
+  const reasons: string[] = [];
+  const watcher = startMediaProgressWatcher({
+    // Frozen counters from the very first sample.
+    sample: async () => sample({ at: clock }),
+    onStall: (reason) => reasons.push(reason),
+    isVisible: () => true
+  });
+
+  const tick = async (advanceMs: number) => {
+    clock += advanceMs;
+    t.mock.timers.tick(1_000);
+    // The tick body awaits sample(); let the microtask queue drain.
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  await tick(0); // arms the anchor
+  await tick(DEFAULT_STALL_THRESHOLDS.noMediaMs);
+  assert.deepEqual(reasons, [], 'one flat sample is scheduling noise');
+  await tick(1_000);
+  assert.deepEqual(reasons, ['no_media']);
+  await tick(1_000);
+  assert.deepEqual(reasons, ['no_media'], 'the watcher fires once, then stops');
+  watcher.stop();
+  t.mock.timers.reset();
+});
+
+test('a hidden tab re-arms instead of reporting the hidden period', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  let clock = 0;
+  let visible = true;
+  const reasons: string[] = [];
+  const watcher = startMediaProgressWatcher({
+    sample: async () => sample({ at: clock }),
+    onStall: (reason) => reasons.push(reason),
+    isVisible: () => visible
+  });
+
+  const tick = async (advanceMs: number) => {
+    clock += advanceMs;
+    t.mock.timers.tick(1_000);
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  await tick(0);
+  visible = false;
+  await tick(60_000);
+  visible = true;
+  await tick(1_000); // re-arms the anchor at the new clock
+  await tick(1_000);
+  assert.deepEqual(reasons, []);
+  watcher.stop();
+  t.mock.timers.reset();
+});
+
+test('resume re-arms the watcher after a keyframe repair', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  let clock = 0;
+  // Bytes keep arriving, nothing decodes: the decoder_stalled signature the
+  // keyframe rung exists for.
+  let bytes = 1_000;
+  let frames = 10;
+  const reasons: string[] = [];
+  const watcher = startMediaProgressWatcher({
+    sample: async () =>
+      sample({ at: clock, bytesReceived: bytes, framesDecoded: frames }),
+    onStall: (reason) => reasons.push(reason),
+    isVisible: () => true
+  });
+
+  const tick = async (advanceMs: number) => {
+    clock += advanceMs;
+    bytes += 5_000;
+    t.mock.timers.tick(1_000);
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  await tick(0); // arms the anchor
+  await tick(DEFAULT_STALL_THRESHOLDS.decoderStallMs);
+  await tick(1_000);
+  assert.deepEqual(reasons, ['decoder_stalled']);
+
+  // Still stalled, but the watcher is paused, so nothing is reported twice.
+  await tick(10_000);
+  assert.deepEqual(reasons, ['decoder_stalled']);
+
+  // The keyframe landed: frames move again and the re-armed watcher stays quiet.
+  watcher.resume();
+  frames += 1;
+  await tick(1_000); // re-arms the anchor at the new clock
+  frames += 1;
+  await tick(1_000);
+  assert.deepEqual(reasons, ['decoder_stalled']);
+
+  // It did not stay fixed. The watcher is live again and reports the next stall,
+  // which is what lets the caller escalate past the keyframe rung.
+  await tick(DEFAULT_STALL_THRESHOLDS.decoderStallMs);
+  await tick(1_000);
+  assert.deepEqual(reasons, ['decoder_stalled', 'decoder_stalled']);
+
+  watcher.stop();
+  watcher.resume();
+  await tick(60_000);
+  assert.deepEqual(
+    reasons,
+    ['decoder_stalled', 'decoder_stalled'],
+    'resume after stop stays stopped'
+  );
+  t.mock.timers.reset();
+});

@@ -50,6 +50,7 @@ import { RecoveryPolicyEditor } from './recovery-policy-editor';
 import type { CampaignScenarioRefIn, RecoveryPolicy } from '../types';
 import { normalizeCampaignScenarioRefs, scenarioRefRunCount } from '../types';
 import { ContinuousCrawlSettings } from './continuous-crawl-settings';
+import { CaptureModeSettings } from './capture-mode-settings';
 import {
   campaignVariablesForEditor,
   mergeCampaignEditorVariables
@@ -531,6 +532,13 @@ export function CreateCampaignDialog({
                         onChange={handleVariablesChange}
                         disabled={effectiveScenarioIds.length === 0}
                       />
+                      <div className='mt-4'>
+                        <CaptureModeSettings
+                          variables={variables}
+                          onChange={handleVariablesChange}
+                          disabled={effectiveScenarioIds.length === 0}
+                        />
+                      </div>
                     </Section>
                     <Separator />
                     <Section icon={Variable} title={t('tagsLabel')}>

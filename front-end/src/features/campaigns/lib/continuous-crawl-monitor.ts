@@ -81,7 +81,34 @@ export type ContinuousCrawlControl = 'pause' | 'resume' | 'cancel';
 
 export const MAX_RENDERED_CRAWL_LANES = 12;
 export const MAX_RENDERED_CRAWL_TARGETS = 8;
-const RESERVED_CAMPAIGN_VARIABLES = new Set(['_crawl', '_continuous_crawl']);
+const RESERVED_CAMPAIGN_VARIABLES = new Set([
+  '_crawl',
+  '_continuous_crawl',
+  '__CAPTURE_MODE__'
+]);
+
+export const CAPTURE_MODES = ['error_only', 'extract_only', 'all'] as const;
+export type CaptureMode = (typeof CAPTURE_MODES)[number];
+
+export function readCaptureMode(variables: unknown): CaptureMode {
+  const raw =
+    variables && typeof variables === 'object'
+      ? (variables as Record<string, unknown>).__CAPTURE_MODE__
+      : null;
+  const mode = String(raw ?? '')
+    .trim()
+    .toLowerCase();
+  return (CAPTURE_MODES as readonly string[]).includes(mode)
+    ? (mode as CaptureMode)
+    : 'error_only';
+}
+
+export function writeCaptureMode(
+  variables: Record<string, unknown>,
+  mode: CaptureMode
+): Record<string, unknown> {
+  return { ...variables, __CAPTURE_MODE__: mode };
+}
 
 export type ContinuousCrawlSettings = {
   enabled: boolean;

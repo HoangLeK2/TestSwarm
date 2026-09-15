@@ -53,7 +53,13 @@ async def is_manual_takeover_active(serial: str | None) -> bool:
             return False
         return bool(await r.exists(key(_key(serial))))
     except Exception as exc:
-        log.debug("is_manual_takeover_active redis: %s", exc)
+        # Fail-open on a safety guard: automation keeps driving a device a human
+        # may be holding. Warn, not debug — this must not be invisible in prod.
+        log.warning(
+            "is_manual_takeover_active redis failed for %s (%s) — assuming free",
+            serial,
+            exc,
+        )
         return False
 
 

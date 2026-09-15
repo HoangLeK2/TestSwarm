@@ -90,8 +90,7 @@ export function TemplateList() {
 
   const { table } = useDataTable<ScenarioTemplateOut>({
     data: filtered,
-    columns,
-    pageCount: 1
+    columns
   });
 
   const categoryCounts = useMemo(() => {

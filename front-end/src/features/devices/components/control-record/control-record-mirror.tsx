@@ -1,9 +1,17 @@
 'use client';
 
-import { memo, useMemo, type MutableRefObject } from 'react';
+import {
+  memo,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject
+} from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { Device } from '../../types';
 import { DeviceTile } from '../device-tile';
+import { mockupScreenWidthForHeightPx } from '../device-android-frame';
 import type { DeviceOpsConfig } from '../device-ops-rail';
 import { ManualControlBlockedBanner } from './manual-control-blocked-banner';
 import { isManualControlBlockedByAutomation } from '../../lib/control-record-device-state';
@@ -74,6 +82,10 @@ const CONTROL_RECORD_SCRCPY_OPTIONS: ScrcpyAttachOptions = {
     2_000_000
   )
 };
+
+/** Card padding + app caption stacked above/below the frame inside DeviceTile. */
+const MIRROR_CHROME_HEIGHT_PX = 52;
+const MIN_MOCKUP_SCREEN_WIDTH_PX = 150;
 
 function isManualControlBlocked(device: Device): boolean {
   return isManualControlBlockedByAutomation(device);
@@ -151,12 +163,54 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
     queryFn: fetchConfig,
     staleTime: 60_000
   });
-  const mockupScreenWidth =
+  const baseMockupScreenWidth =
     mirrorSize === 'multiFocus'
       ? 236
       : mirrorSize === 'multiCompact'
         ? 252
         : 286;
+  // Only the single-device columns bound our height (overflow-hidden + min-h-0);
+  // the multi-device stage scrolls, so measuring there would feed back on itself.
+  const fitToColumnHeight =
+    mirrorSize === 'default' || mirrorSize === 'workbench';
+  const columnRef = useRef<HTMLDivElement>(null);
+  const [columnHeight, setColumnHeight] = useState(0);
+
+  useLayoutEffect(() => {
+    const el = columnRef.current;
+    if (!fitToColumnHeight || !el || typeof ResizeObserver === 'undefined') {
+      return;
+    }
+    const sync = () =>
+      setColumnHeight((current) =>
+        current === el.clientHeight ? current : el.clientHeight
+      );
+    sync();
+    const observer = new ResizeObserver(sync);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [fitToColumnHeight]);
+
+  const mockupScreenWidth = useMemo(() => {
+    if (!fitToColumnHeight || columnHeight <= 0) return baseMockupScreenWidth;
+    const fit = mockupScreenWidthForHeightPx(
+      columnHeight - MIRROR_CHROME_HEIGHT_PX,
+      // ponytail: device-reported orientation; a device lying about it only
+      // costs a slightly-too-small frame, never a clipped one.
+      device.screen_width,
+      device.screen_height
+    );
+    return Math.max(
+      MIN_MOCKUP_SCREEN_WIDTH_PX,
+      Math.min(baseMockupScreenWidth, fit)
+    );
+  }, [
+    baseMockupScreenWidth,
+    columnHeight,
+    device.screen_height,
+    device.screen_width,
+    fitToColumnHeight
+  ]);
   const compactPadding = mirrorSize !== 'default' && mirrorSize !== 'workbench';
   const compactOverlay = mirrorSize !== 'default';
 
@@ -179,7 +233,7 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
   }, [canTakeControl, compactOverlay, manualControlBlocked, onTakeControl]);
 
   return (
-    <div className='flex min-h-0 w-full flex-1 flex-col'>
+    <div ref={columnRef} className='flex min-h-0 w-full flex-1 flex-col'>
       <div
         className={
           compactPadding

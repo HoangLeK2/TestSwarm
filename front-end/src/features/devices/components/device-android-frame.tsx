@@ -2,6 +2,19 @@
 
 import { useMemo, type CSSProperties, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
+import {
+  mockupFrameWidthPx,
+  mockupInnerCornerRadiusPx,
+  screenContentInsetPx,
+  screenHeightForDevicePx
+} from './device-android-frame-geometry';
+
+export {
+  mockupFrameWidthPx,
+  mockupOuterHeightPx,
+  mockupPortraitScreenHeightPx,
+  mockupScreenWidthForHeightPx
+} from './device-android-frame-geometry';
 
 type Props = {
   screenWidth: number;
@@ -12,61 +25,6 @@ type Props = {
   children: ReactNode;
   className?: string;
 };
-
-/** Match lib's getSizeWithRatio(140) outer radius minus FRAME_WIDTH (~getSizeWithRatio(32)) for inner clip. */
-function mockupInnerCornerRadiusPx(screenWidth: number): number {
-  const outer = Math.floor((screenWidth * 140) / 1080);
-  const frame = Math.floor((screenWidth * 32) / 1080);
-  return Math.max(4, outer - frame);
-}
-
-/** Inset between stream and inner bezel — scales ~2% screen width (min 5px). */
-function screenContentInsetPx(screenWidth: number): number {
-  return Math.max(5, Math.round(screenWidth * 0.02));
-}
-
-/** Portrait screen height inside react-device-mockup bezel (matches lib formula). */
-export function mockupPortraitScreenHeightPx(screenWidth: number): number {
-  return Math.floor((screenWidth / 9) * 19.5);
-}
-
-function screenHeightForDevicePx(
-  screenWidth: number,
-  deviceWidth?: number,
-  deviceHeight?: number
-): number {
-  const safeDeviceWidth = Number(deviceWidth);
-  const safeDeviceHeight = Number(deviceHeight);
-  if (
-    Number.isFinite(safeDeviceWidth) &&
-    Number.isFinite(safeDeviceHeight) &&
-    safeDeviceWidth > 0 &&
-    safeDeviceHeight > 0
-  ) {
-    return Math.round((screenWidth * safeDeviceHeight) / safeDeviceWidth);
-  }
-  return mockupPortraitScreenHeightPx(screenWidth);
-}
-
-export function mockupFrameWidthPx(screenWidth: number): number {
-  return Math.max(8, Math.floor((screenWidth * 32) / 1080));
-}
-
-/** Approximate outer height of frameOnly AndroidMockup — pairs with control rail stretch. */
-export function mockupOuterHeightPx(
-  screenWidth: number,
-  deviceWidth?: number,
-  deviceHeight?: number
-): number {
-  const screenH = screenHeightForDevicePx(
-    screenWidth,
-    deviceWidth,
-    deviceHeight
-  );
-  const frame = mockupFrameWidthPx(screenWidth);
-  const inset = screenContentInsetPx(screenWidth);
-  return screenH + frame * 2 + inset * 2;
-}
 
 /** Android phone frame for farm tiles — stream fills the mock screen (status/nav hidden). */
 export function DeviceAndroidFrame({

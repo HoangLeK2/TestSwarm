@@ -182,6 +182,14 @@ async def _run_activity_coro(coro):
         return await coro
     finally:
         await dispose_loop_engine()
+        # Redis pools per loop too; leaving this loop's client behind hands the
+        # next activity a connection bound to a closed loop.
+        try:
+            from services.redis_store import dispose_loop_client
+
+            await dispose_loop_client()
+        except Exception:
+            pass
 
 
 def run_activity_coro(coro):

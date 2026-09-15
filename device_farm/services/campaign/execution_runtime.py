@@ -300,6 +300,20 @@ def _runtime_campaign_vars(campaign: Campaign) -> dict[str, Any]:
     return campaign_vars
 
 
+_CAPTURE_MODES = {"error_only", "extract_only", "all"}
+
+
+def _resolve_capture_mode(campaign_vars: dict[str, Any]) -> str:
+    """Per-campaign capture policy from ``__CAPTURE_MODE__``.
+
+    "all" matches no mode in capture_service, so pre/post capture is allowed on
+    successful steps too. Anything unset or unrecognised keeps the historical
+    "error_only" behaviour.
+    """
+    raw = str(campaign_vars.get("__CAPTURE_MODE__") or "").strip().lower()
+    return raw if raw in _CAPTURE_MODES else "error_only"
+
+
 def _build_prepared_scenario_input(
     *,
     execution: Execution,
@@ -327,7 +341,9 @@ def _build_prepared_scenario_input(
         return None
 
     start_step = int((execution.meta or {}).get("start_step") or execution.checkpoint_step or 0)
-    scenario_config: dict[str, Any] = {"capture_mode": "error_only"}
+    scenario_config: dict[str, Any] = {
+        "capture_mode": _resolve_capture_mode(campaign_vars)
+    }
     if recovery_policy:
         scenario_config["recovery_policy"] = recovery_policy
 

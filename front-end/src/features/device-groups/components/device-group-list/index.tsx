@@ -55,8 +55,7 @@ export function DeviceGroupList() {
 
   const { table } = useDataTable<DeviceGroupOut>({
     data,
-    columns,
-    pageCount: 1
+    columns
   });
 
   if (selectedGroup) {

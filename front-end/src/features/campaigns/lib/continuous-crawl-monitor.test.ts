@@ -7,7 +7,9 @@ import {
   crawlCompletion,
   isContinuousCrawl,
   mergeCampaignEditorVariables,
+  readCaptureMode,
   readContinuousCrawlSettings,
+  writeCaptureMode,
   reduceContinuousCrawlProgress,
   updateContinuousCrawlSettings,
   type ContinuousCrawlProgress
@@ -129,6 +131,21 @@ test('continuous settings derive devices and targets from assignments', () => {
   const crawl = configured._crawl as Record<string, unknown>;
   assert.equal('max_concurrency' in crawl, false);
   assert.equal('max_targets' in crawl, false);
+});
+
+test('capture mode round-trips and stays out of the variable editor', () => {
+  assert.equal(readCaptureMode({}), 'error_only');
+  assert.equal(readCaptureMode(null), 'error_only');
+  assert.equal(readCaptureMode({ __CAPTURE_MODE__: 'nonsense' }), 'error_only');
+  assert.equal(readCaptureMode({ __CAPTURE_MODE__: ' ALL ' }), 'all');
+
+  const configured = writeCaptureMode({ query: 'jobs' }, 'all');
+  assert.equal(readCaptureMode(configured), 'all');
+  assert.deepEqual(campaignVariablesForEditor(configured), { query: 'jobs' });
+  assert.equal(
+    readCaptureMode(mergeCampaignEditorVariables(configured, { query: 'x' })),
+    'all'
+  );
 });
 
 test('polling stops after a terminal status', () => {

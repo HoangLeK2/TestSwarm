@@ -10,7 +10,10 @@ import {
   useRemoveAccountGroupMember
 } from '../hooks/use-account-groups';
 import type { AccountGroupOut } from '../services/api';
-import { useAccounts } from '@/features/accounts/hooks/use-accounts';
+import {
+  ACCOUNTS_PAGE_LIMIT,
+  useAccounts
+} from '@/features/accounts/hooks/use-accounts';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -57,7 +60,9 @@ export function GroupMembersDialog({
     open ? group.id : ''
   );
   const { data: allAccounts, isLoading: accountsLoading } = useAccounts(
-    open ? { platform: group.platform } : undefined
+    open
+      ? { platform: group.platform, limit: ACCOUNTS_PAGE_LIMIT }
+      : undefined
   );
   const addMembers = useAddAccountGroupMembers();
   const removeMember = useRemoveAccountGroupMember();

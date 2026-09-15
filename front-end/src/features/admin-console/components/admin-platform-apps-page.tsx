@@ -64,6 +64,7 @@ function bytesLabel(value: number) {
 export function AdminPlatformAppsPage() {
   const t = useTranslations('adminConsole.platformApps');
   const tAdmin = useTranslations('adminConsole');
+  const tCommon = useTranslations('common');
   const qc = useQueryClient();
   const [status, setStatus] = useState(ALL);
   const [offset, setOffset] = useState(0);
@@ -338,7 +339,7 @@ export function AdminPlatformAppsPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={deleteMutation.isPending}>
-              {tAdmin('common.cancel')}
+              {tCommon('cancel')}
             </AlertDialogCancel>
             <AlertDialogAction
               className='bg-destructive text-destructive-foreground hover:bg-destructive/90'

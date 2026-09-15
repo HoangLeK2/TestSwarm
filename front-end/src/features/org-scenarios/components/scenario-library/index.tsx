@@ -270,8 +270,7 @@ export function ScenarioLibrary() {
 
   const { table } = useDataTable<ScenarioLibraryItem>({
     data: filtered,
-    columns,
-    pageCount: 1
+    columns
   });
 
   useEffect(() => {

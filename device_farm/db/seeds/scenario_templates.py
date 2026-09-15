@@ -1269,14 +1269,24 @@ def _fb_read_own_profile_steps(prefix: str) -> List[Dict[str, Any]]:
     ]
 
 
-def _fb_app_start_steps(prefix: str) -> List[Dict[str, Any]]:
+def _fb_app_start_steps(
+    prefix: str,
+    *,
+    stop_before: bool = False,
+    use_monkey: bool = False,
+) -> List[Dict[str, Any]]:
+    launch_step: Dict[str, Any] = {
+        "id": f"{prefix}_launch",
+        "type": "launch_app",
+        "package": "com.facebook.katana",
+        "title": "Mở Facebook",
+    }
+    if stop_before:
+        launch_step["stop_before"] = True
+    if use_monkey:
+        launch_step["use_monkey"] = True
     return [
-        {
-            "id": f"{prefix}_launch",
-            "type": "launch_app",
-            "package": "com.facebook.katana",
-            "title": "Mở Facebook",
-        },
+        launch_step,
         {
             "id": f"{prefix}_wait_stable",
             "type": "wait_stable",
@@ -1295,6 +1305,8 @@ def _fb_session_guard_steps(
     prefix: str,
     *,
     allow_login_recovery: bool = True,
+    stop_before: bool = False,
+    use_monkey: bool = False,
 ) -> List[Dict[str, Any]]:
     post_confirm_cleanup = [
         {
@@ -1320,7 +1332,11 @@ def _fb_session_guard_steps(
         },
     ]
     steps: List[Dict[str, Any]] = [
-        *_fb_app_start_steps(prefix),
+        *_fb_app_start_steps(
+            prefix,
+            stop_before=stop_before,
+            use_monkey=use_monkey,
+        ),
         *preflight_cleanup,
         {
             "id": f"{prefix}_session_preflight",
@@ -1524,7 +1540,11 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
         "tags": "facebook,login,app-automation,profile-identity",
         "variables": {},
         "steps": [
-            *_fb_session_guard_steps("facebook"),
+            *_fb_session_guard_steps(
+                "facebook",
+                stop_before=True,
+                use_monkey=True,
+            ),
             # Confirming the session says "somebody is signed in"; only the
             # profile header says who. Read it here, where the session row was
             # just written, so the account list stops being serials to guess at.

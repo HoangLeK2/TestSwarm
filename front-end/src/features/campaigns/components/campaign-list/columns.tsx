@@ -10,7 +10,7 @@ import {
   TooltipTrigger
 } from '@/components/ui/tooltip';
 import { useQuery } from '@tanstack/react-query';
-import { executionsApi } from '../../services/api';
+import { campaignsApi } from '../../services/api';
 import { CampaignRunStats } from './CampaignRunStats';
 import { CampaignStatusBadge } from './CampaignStatusBadge';
 import { AutomationBadge } from './AutomationBadge';
@@ -44,22 +44,27 @@ function CampaignLastRunCell({
   campaignId: string;
   status: string;
 }) {
+  // Same query as the run-stats cell — the latest dispatch *is* the last run, so
+  // this column costs no extra request.
   const { data, isLoading } = useQuery({
-    queryKey: ['campaign-latest-execution', campaignId],
-    queryFn: () => executionsApi.list({ campaignId, limit: 1, offset: 0 }),
+    queryKey: ['campaign-run-stats', campaignId],
+    queryFn: () => campaignsApi.runStats(campaignId),
     enabled: shouldFetchCampaignRowDetailsOnMount(status),
     staleTime: campaignRowStaleTime(status),
     refetchInterval: campaignRowPollInterval(status),
     refetchOnWindowFocus: false
   });
 
-  const ex = data?.items?.[0];
-  if (!ex && !isLoading)
-    return <span className='text-[11px] text-muted-foreground'>—</span>;
-  if (!ex) return <span className='text-[11px] text-muted-foreground'>…</span>;
-
-  const ts = ex.finished_at ?? ex.started_at ?? ex.created_at;
-  if (!ts) return <span className='text-[11px] text-muted-foreground'>—</span>;
+  const ts =
+    data?.latest_dispatch_latest_finished_at ??
+    data?.latest_dispatch_first_started_at ??
+    data?.latest_dispatch_created_at;
+  if (!ts)
+    return (
+      <span className='text-[11px] text-muted-foreground'>
+        {isLoading ? '…' : '—'}
+      </span>
+    );
 
   const date = new Date(ts);
   const exact = Number.isNaN(date.getTime())

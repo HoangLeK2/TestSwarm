@@ -42,15 +42,19 @@ const THROTTLE_MS = 50;
 
 interface UseDataTableProps<TData>
   extends Omit<
-      TableOptions<TData>,
-      | 'state'
-      | 'pageCount'
-      | 'getCoreRowModel'
-      | 'manualFiltering'
-      | 'manualPagination'
-      | 'manualSorting'
-    >,
-    Required<Pick<TableOptions<TData>, 'pageCount'>> {
+    TableOptions<TData>,
+    | 'state'
+    | 'pageCount'
+    | 'getCoreRowModel'
+    | 'manualFiltering'
+    | 'manualPagination'
+    | 'manualSorting'
+  > {
+  /**
+   * Số trang do server trả về — chỉ truyền khi `data` là MỘT trang.
+   * Bỏ trống khi `data` là toàn bộ danh sách: bảng tự cắt trang ở client.
+   */
+  pageCount?: number;
   initialState?: Omit<Partial<TableState>, 'sorting'> & {
     sorting?: ExtendedColumnSort<TData>[];
   };
@@ -67,7 +71,7 @@ interface UseDataTableProps<TData>
 export function useDataTable<TData>(props: UseDataTableProps<TData>) {
   const {
     columns,
-    pageCount = -1,
+    pageCount,
     initialState = {
       ...props.initialState,
       columnPinning: {
@@ -264,6 +268,10 @@ export function useDataTable<TData>(props: UseDataTableProps<TData>) {
     [debouncedSetFilterValues, filterableColumns, enableAdvancedFilter]
   );
 
+  // Server trả từng trang (có pageCount) -> table không tự cắt/lọc/sắp xếp.
+  // Không có pageCount -> `data` là cả danh sách, table làm hết ở client.
+  const serverSide = pageCount !== undefined;
+
   const table = useReactTable({
     ...tableProps,
     columns,
@@ -293,10 +301,17 @@ export function useDataTable<TData>(props: UseDataTableProps<TData>) {
     getFacetedRowModel: getFacetedRowModel(),
     getFacetedUniqueValues: getFacetedUniqueValues(),
     getFacetedMinMaxValues: getFacetedMinMaxValues(),
-    manualPagination: true,
-    manualSorting: true,
-    manualFiltering: true
+    manualPagination: serverSide,
+    manualSorting: serverSide,
+    manualFiltering: serverSide
   });
+
+  // Lọc ở client có thể làm số trang giảm dưới trang đang đứng -> bảng rỗng.
+  const clientPageCount = table.getPageCount();
+  React.useEffect(() => {
+    if (serverSide) return;
+    if (page > 1 && page > clientPageCount) void setPage(1);
+  }, [clientPageCount, page, serverSide, setPage]);
 
   return { table, shallow, debounceMs, throttleMs };
 }

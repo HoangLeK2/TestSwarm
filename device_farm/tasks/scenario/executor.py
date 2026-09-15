@@ -533,6 +533,10 @@ class ScenarioExecutor:
 
             step_start_t = time.monotonic()
             step_started_at = datetime.now(timezone.utc)
+            if sc.depth == 0 and sc.execution_id:
+                from services.execution.step_store import schedule_persist_step_start
+
+                schedule_persist_step_start(sc, step, idx)
             sc.ctx[TRACE_CONTEXT_KEY] = step_trace
             try:
                 step_result, attempts_used = execute_step_with_retry(

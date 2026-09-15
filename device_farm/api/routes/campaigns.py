@@ -2156,7 +2156,7 @@ async def remove_device(campaign_id: str, device_id: str, db: DB, user: CurrentU
     dependencies=[Depends(require_permission("campaigns", "read"))],
 )
 async def campaign_run_stats_endpoint(campaign_id: str, db: DB, user: CurrentUser):
-    """Return cumulative device-run counts (passed/failed/…) across all executions."""
+    """Return cumulative campaign-run counts (passed/failed/…) across all dispatches."""
     from api.schemas.execution import SummaryOut
     from db.crud.execution import campaign_run_stats
 

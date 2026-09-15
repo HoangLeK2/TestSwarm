@@ -70,9 +70,21 @@ async def upsert_execution_step(
         )
         db.add(row)
     else:
-        row.status = status
+        if status != "running":
+            row.status = status
+        elif row.ended_at is None or (started_at is not None and started_at > row.ended_at):
+            # A running write that was scheduled before the step finished can
+            # land after it (executor queues both on the device loop), which
+            # would pin the row at "running" forever. A genuine re-run of the
+            # same index starts after the previous attempt ended — allow that.
+            row.status = status
         if step_id is not None:
             row.step_id = step_id
+        if device_id is not None:
+            # The first write for a step is now the "running" row, which has no
+            # device yet, so every later write is an UPDATE — without this the
+            # device would be dropped and the column would go back to empty.
+            row.device_id = device_id
         if step_type is not None:
             row.step_type = step_type
         if started_at is not None:
@@ -92,7 +104,10 @@ async def upsert_execution_step(
                 row.artifacts_json = incoming
         if attempts_json is not None:
             row.attempts_json = attempts_json
-        row.marked_ignored = marked_ignored
+        if status != "running":
+            # The running write knows nothing about error policy; it must not
+            # reset a flag the finished write already set.
+            row.marked_ignored = marked_ignored
         if message is not None:
             row.message = message
         row.updated_at = now

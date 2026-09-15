@@ -5,14 +5,26 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
+from api.auth.context import AuthContext
 from api.routes.device_control.connect import build_connect_router
 from api.routes.device_control.scenarios import build_scenarios_router
+from db.models.account import Account, DeviceAccount
+from db.models.device import Device
+from db.models.execution import Execution, ExecutionResult
+from db.models.execution_step import ExecutionStep
+from db.models.organization import Organization
 
 
 class _Config:
     class database:
         enabled = False
+
+
+class _DbConfig:
+    class database:
+        enabled = True
 
 
 class _FakeDevice:
@@ -130,3 +142,147 @@ async def test_preview_routes_reject_unsupported_nodes_before_running(path: str)
     assert data["error"] == "node_capability_preflight_failed"
     assert data["preflight"]["ok"] is False
     assert data["preflight"]["issues"][0]["missing"] == ["has_ocr", "has_tesseract"]
+
+
+@pytest.mark.anyio
+async def test_account_login_preview_stream_creates_account_execution_history(
+    tenancy_session_factory,
+    monkeypatch,
+):
+    from api.routes.device_control import scenarios as scenario_routes
+
+    org_id = "org-login-stream"
+    user_id = "user-login-stream"
+    account_id = "acc-login-stream"
+    device_id = "dev-login-stream"
+    serial = "dev-1"
+    step_result = {
+        "index": 0,
+        "type": "wait",
+        "ok": True,
+        "message": "waited",
+        "trace": {
+            "account_id": account_id,
+            "step_path": "login_wait",
+            "step_id": "login_wait",
+            "step_type": "wait",
+            "depth": 0,
+        },
+    }
+    captured: dict[str, str | None] = {}
+
+    async with tenancy_session_factory() as db:
+        db.add(
+            Organization(
+                id=org_id,
+                business_name="Login Stream Org",
+                business_email="login-stream@example.com",
+            )
+        )
+        db.add(
+            Device(
+                id=device_id,
+                serial=serial,
+                device_serial=serial,
+                org_id=org_id,
+            )
+        )
+        db.add(
+            Account(
+                id=account_id,
+                org_id=org_id,
+                platform="facebook",
+                username="61582490922369",
+            )
+        )
+        db.add(
+            DeviceAccount(
+                device_id=device_id,
+                account_id=account_id,
+                is_primary=True,
+            )
+        )
+        await db.commit()
+
+    monkeypatch.setattr(scenario_routes, "AsyncSessionLocal", tenancy_session_factory)
+    monkeypatch.setattr(
+        scenario_routes,
+        "caller_auth_from_request",
+        lambda _request: AuthContext(
+            user_id=user_id,
+            token_type="access",
+            raw_token="test",
+            org_id=org_id,
+        ),
+    )
+
+    def fake_run_scenario_on_device(*_args, **kwargs):
+        captured["execution_id"] = kwargs.get("execution_id")
+        on_step_done = kwargs.get("on_step_done")
+        if on_step_done:
+            on_step_done(step_result)
+        return {
+            "serial": serial,
+            "success": True,
+            "steps_executed": 1,
+            "step_results": [step_result],
+            "failed_message": "",
+            "context": {},
+        }
+
+    monkeypatch.setattr(
+        scenario_routes,
+        "run_scenario_on_device",
+        fake_run_scenario_on_device,
+    )
+
+    app = FastAPI()
+    app.include_router(
+        build_scenarios_router(_FakeManager(_FakeDevice()), _DbConfig(), object()),
+        prefix="/api",
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            f"/api/devices/{serial}/scenario/preview-stream",
+            json={
+                "steps": [{"id": "login_wait", "type": "wait", "seconds": 0}],
+                "variables": {"__ACCOUNT_ID__": account_id},
+            },
+        )
+
+    assert response.status_code == 200
+    assert '"event": "start"' in response.text
+    assert '"execution_id":' in response.text
+    assert captured["execution_id"]
+
+    async with tenancy_session_factory() as db:
+        execution = (
+            await db.execute(
+                select(Execution).where(Execution.account_id == account_id)
+            )
+        ).scalar_one()
+        step = (
+            await db.execute(
+                select(ExecutionStep).where(
+                    ExecutionStep.execution_id == execution.id
+                )
+            )
+        ).scalar_one()
+        result = (
+            await db.execute(
+                select(ExecutionResult).where(
+                    ExecutionResult.execution_id == execution.id
+                )
+            )
+        ).scalar_one()
+
+    assert execution.kind == "session"
+    assert execution.run_type == "account_login"
+    assert execution.status == "completed"
+    assert execution.org_id == org_id
+    assert step.step_type == "wait"
+    assert step.effective_config_json["trace"]["account_id"] == account_id
+    assert result.status == "passed"

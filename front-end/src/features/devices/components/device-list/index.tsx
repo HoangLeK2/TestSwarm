@@ -146,8 +146,7 @@ export function DeviceList() {
 
   const { table } = useDataTable<DeviceOut>({
     data: filteredSortedData,
-    columns,
-    pageCount: 1
+    columns
   });
 
   if (error && !devices)

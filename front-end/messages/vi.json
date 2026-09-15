@@ -191,7 +191,7 @@
       "keyPlaceholder": "vd: username",
       "valuePlaceholderNumber": "VD: 3",
       "valuePlaceholderString": "VD: nguyen@gmail.com",
-      "valuePlaceholderStringWithRef": "VD: nguyen@gmail.com hoặc ${key}",
+      "valuePlaceholderStringWithRef": "VD: nguyen@gmail.com hoặc $'{key}'",
       "emptyTitle": "Chưa có biến nào",
       "emptyHintPrefix": "Dùng biến trong kịch bản qua cú pháp",
       "emptyFromScenarioTitle": "Kịch bản chưa khai báo biến",
@@ -1828,6 +1828,15 @@
       "enabledLabel": "Xử lý lần lượt mục tiêu đã phân công",
       "enabledHint": "Mỗi điện thoại chỉ xử lý danh sách mục tiêu được gắn cho chính nó."
     },
+    "captureModeSettings": {
+      "label": "Chụp màn hình",
+      "hint": "Chỉ bật chụp mọi step khi cần debug — chạy chậm hơn và lưu nhiều ảnh hơn hẳn.",
+      "options": {
+        "error_only": "Chỉ khi lỗi (mặc định)",
+        "extract_only": "Chỉ step trích xuất",
+        "all": "Mọi step"
+      }
+    },
     "recoveryPolicy": {
       "title": "Kịch bản xử lý lỗi",
       "hint": "Khi bất kỳ nút nào trong campaign bị lỗi hoặc treo, hệ thống gọi kịch bản xử lý chung rồi quay lại kịch bản chính theo quy tắc.",
@@ -2022,10 +2031,12 @@
       "runStatsRunning": "Đang chạy",
       "runStatsPending": "Đang chờ",
       "runStatsError": "Lỗi",
+      "runStatsCancelled": "Đã hủy",
       "runStatsCompact": "{passed} thành công · {failed} thất bại",
       "runStatsCompactWithTotal": "{passed} thành công · {failed} thất bại ({total} thiết bị)",
       "runStatsPopoverTitle": "Tổng kết chiến dịch",
       "runStatsDevices": "{total} lần chạy",
+      "runStatsDeviceRuns": "{total} lượt máy",
       "runStatsFinished": "{finished}/{total} lần chạy đã xong",
       "runStatsLatestDispatch": "Lượt chạy mới nhất",
       "runStatsLatestDevices": "Đã xong",
@@ -2083,6 +2094,10 @@
         "failed": "Lỗi",
         "total": "Tổng step"
       },
+      "runHistoryIterationSteps": "{count} bước",
+      "runHistoryIterationFailed": "{count} lỗi",
+      "runHistoryEventsTruncated": "Quá nhiều sự kiện để hiển thị — các vòng mới nhất bị thiếu.",
+      "runHistoryEventsExpired": "Sự kiện chi tiết của lần chạy này đã hết hạn lưu, chỉ còn các bước cấp cao nhất.",
       "automationBadge": "Tự động hóa",
       "automationActions": {
         "setup": "Thiết lập và chạy",
@@ -3506,8 +3521,9 @@
         "commentFilterKeep": "Không đổi — giữ mặc định nền tảng",
         "commentFilterMostRelevant": "Phù hợp nhất",
         "commentFilterNewest": "Mới nhất",
+        "commentText": "Nội dung bình luận",
         "commentTextReady": "Đã cấu hình nội dung bình luận.",
-        "commentTextRequired": "Nhập nội dung bình luận, hoặc dùng biến như ${COMMENT_TEXT}.",
+        "commentTextRequired": "Nhập nội dung bình luận, hoặc dùng biến như $'{COMMENT_TEXT}'.",
         "currentScreen": "Màn hình hiện tại",
         "currentScreenTarget": "Dùng target đang hiển thị trên màn hình.",
         "conditionJsonHint": "Điều kiện tổng quát theo backend (`condition`) — hỗ trợ element_exists / element_not_exists / variable_equals...",

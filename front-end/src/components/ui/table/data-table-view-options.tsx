@@ -30,7 +30,6 @@ export function DataTableViewOptions<TData>({
   table
 }: DataTableViewOptionsProps<TData>) {
   const t = useTranslations('components.table');
-  const tCommon = useTranslations('common');
   const columns = React.useMemo(
     () =>
       table
@@ -61,7 +60,7 @@ export function DataTableViewOptions<TData>({
         <Command>
           <CommandInput className='outline-none' placeholder={t('search')} />
           <CommandList>
-            <CommandEmpty>{tCommon('no_data')}</CommandEmpty>
+            <CommandEmpty>{t('noData')}</CommandEmpty>
             <CommandGroup>
               {columns.map((column) => (
                 <CommandItem

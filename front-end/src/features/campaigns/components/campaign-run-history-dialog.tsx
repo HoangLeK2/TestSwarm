@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle2,
+  ChevronRight,
   Clock,
   History,
   Loader2,
@@ -18,6 +19,11 @@ import {
   DialogTrigger
 } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger
+} from '@/components/ui/collapsible';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
@@ -25,10 +31,28 @@ import {
   useCampaignExecutionHistory,
   useExecutionTaskLog
 } from '../hooks/use-campaigns';
-import type { CampaignOut, ExecutionOut, ExecutionTaskLogStep } from '../types';
+import { useExecutionEventHistory } from '../hooks/use-execution-event-history';
+import type {
+  CampaignOut,
+  ExecutionOut,
+  ExecutionTaskLogStep,
+  StepLogEntry
+} from '../types';
 import { executionStepDetail } from '../lib/execution-step-detail';
+import { executionTraceFromLog } from '../lib/execution-trace';
+import { actionOutcomeMessageKey } from '../lib/workflow-step-list-model';
+import {
+  buildStepLogTree,
+  stepLogNodeStats,
+  type StepLogNode
+} from '../lib/step-log-tree';
 import { humanizeSessionGateMessage } from '../lib/session-gate-message';
+import { ExecutionTraceChips } from './execution-trace-chips';
 import { useTranslations } from 'next-intl';
+
+type ListTranslator = ReturnType<
+  typeof useTranslations<'campaignsFeature.list'>
+>;
 
 type Props = {
   campaign: CampaignOut;
@@ -83,7 +107,12 @@ function statusIcon(status: string) {
 
 function stepStatusClass(status: string): string {
   const normalized = status.toLowerCase();
-  if (normalized === 'completed' || normalized === 'success') {
+  // execution_steps rows store 'passed', not 'completed'.
+  if (
+    normalized === 'completed' ||
+    normalized === 'success' ||
+    normalized === 'passed'
+  ) {
     return 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300';
   }
   if (normalized === 'failed' || normalized === 'error') {
@@ -95,6 +124,24 @@ function stepStatusClass(status: string): string {
   return 'bg-muted text-muted-foreground';
 }
 
+function stepStatusLabel(t: ListTranslator, status: string): string {
+  const normalized = status.toLowerCase();
+  if (
+    normalized === 'completed' ||
+    normalized === 'success' ||
+    normalized === 'passed'
+  ) {
+    return t('monitorTaskLogCompleted');
+  }
+  if (normalized === 'failed' || normalized === 'error') {
+    return t('monitorTaskLogFailed');
+  }
+  if (normalized === 'running' || normalized === 'in_progress') {
+    return t('monitorTaskLogRunning');
+  }
+  return status;
+}
+
 function StepRow({
   step,
   fallbackLabel
@@ -102,6 +149,7 @@ function StepRow({
   step: ExecutionTaskLogStep;
   fallbackLabel: string;
 }) {
+  const t = useTranslations('campaignsFeature.list');
   const tGate = useTranslations('executionMessages');
   const detail = executionStepDetail(step);
   const stepType = detail.label || fallbackLabel;
@@ -138,12 +186,16 @@ function StepRow({
           <div className='mt-2 space-y-1 border-l-2 border-muted pl-3'>
             {detail.nested.map((nested, index) => (
               <div
-                key={`${nested.label}-${index}`}
+                key={`${nested.label ?? nested.iteration}-${index}`}
                 className='flex items-start justify-between gap-3 rounded bg-muted/35 px-2 py-1.5'
               >
                 <div className='min-w-0'>
                   <p className='text-[11px] font-medium text-foreground'>
-                    {index + 1}. {nested.label}
+                    {nested.label
+                      ? `${index + 1}. ${nested.label}`
+                      : t('monitorStepRowLoopRound', {
+                          n: (nested.iteration ?? index) + 1
+                        })}
                   </p>
                   {nested.message ? (
                     <p
@@ -161,7 +213,7 @@ function StepRow({
                     stepStatusClass(nested.status)
                   )}
                 >
-                  {nested.status}
+                  {stepStatusLabel(t, nested.status)}
                 </span>
               </div>
             ))}
@@ -174,9 +226,145 @@ function StepRow({
           stepStatusClass(step.status)
         )}
       >
-        {step.status}
+        {stepStatusLabel(t, step.status)}
       </span>
     </div>
+  );
+}
+
+function EventStepRow({ entry }: { entry: StepLogEntry }) {
+  const t = useTranslations('campaignsFeature.list');
+  const tGate = useTranslations('executionMessages');
+  const details = entry.details ?? {};
+  const status = entry.status ?? (entry.ok === false ? 'failed' : 'completed');
+  const label =
+    entry.step_type ||
+    entry.type ||
+    entry.step_id ||
+    t('monitorStepFallback', { n: entry.index + 1 });
+  const message = entry.message
+    ? (humanizeSessionGateMessage(entry.message, tGate) ?? entry.message)
+    : null;
+  const durationMs =
+    typeof details.duration_ms === 'number' ? details.duration_ms : null;
+  const outcome = String(details.outcome ?? '').trim();
+  const outcomeKey = actionOutcomeMessageKey(outcome);
+  const actionPerformed =
+    typeof details.action_performed === 'boolean'
+      ? details.action_performed
+      : null;
+
+  return (
+    <div className='grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-b px-3 py-2 last:border-b-0'>
+      <div className='min-w-0'>
+        <div className='flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5'>
+          <p className='text-xs font-medium text-foreground'>{label}</p>
+          {durationMs != null ? (
+            <span className='font-mono text-[10px] text-muted-foreground'>
+              {durationMs} ms
+            </span>
+          ) : null}
+        </div>
+        {message ? (
+          <p
+            className='mt-1 whitespace-pre-wrap break-words text-[11px] text-muted-foreground'
+            title={entry.message ?? undefined}
+          >
+            {message}
+          </p>
+        ) : null}
+        {outcome || actionPerformed != null ? (
+          <div className='mt-1 flex flex-wrap gap-1 text-[9px]'>
+            {outcome ? (
+              <span className='rounded bg-muted px-1.5 py-0.5 text-muted-foreground'>
+                {outcomeKey ? t(outcomeKey) : outcome}
+              </span>
+            ) : null}
+            {actionPerformed != null ? (
+              <span
+                className={cn(
+                  'rounded px-1.5 py-0.5',
+                  actionPerformed
+                    ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                    : 'bg-muted text-muted-foreground'
+                )}
+              >
+                {actionPerformed
+                  ? t('monitorActionPerformed')
+                  : t('monitorActionNotPerformed')}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+        <ExecutionTraceChips
+          trace={executionTraceFromLog(entry)}
+          className='mt-1'
+          maxPathClassName='max-w-[22rem]'
+        />
+      </div>
+      <span
+        className={cn(
+          'h-5 rounded px-1.5 py-0.5 text-[10px] font-medium',
+          stepStatusClass(status)
+        )}
+      >
+        {stepStatusLabel(t, status)}
+      </span>
+    </div>
+  );
+}
+
+function IterationRow({
+  node
+}: {
+  node: Extract<StepLogNode, { kind: 'iteration' }>;
+}) {
+  const t = useTranslations('campaignsFeature.list');
+  const stats = stepLogNodeStats(node.children);
+
+  return (
+    <Collapsible
+      defaultOpen={stats.failed > 0}
+      className='border-b last:border-b-0'
+    >
+      <CollapsibleTrigger className='group flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left hover:bg-muted/50'>
+        <ChevronRight className='size-3 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90' />
+        <span className='text-xs font-medium text-foreground'>
+          {t('monitorStepRowLoopRound', { n: node.iter + 1 })}
+        </span>
+        <span className='min-w-0 truncate font-mono text-[10px] text-muted-foreground'>
+          {node.loopId}
+        </span>
+        <span className='ml-auto shrink-0 text-[10px] text-muted-foreground'>
+          {t('runHistoryIterationSteps', { count: stats.steps })}
+        </span>
+        {stats.failed ? (
+          <span className='shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] text-destructive'>
+            {t('runHistoryIterationFailed', { count: stats.failed })}
+          </span>
+        ) : null}
+      </CollapsibleTrigger>
+      <CollapsibleContent className='ml-4 border-l-2 border-muted'>
+        <StepLogNodes nodes={node.children} />
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+function StepLogNodes({ nodes }: { nodes: StepLogNode[] }) {
+  return (
+    <>
+      {nodes.map((node) =>
+        node.kind === 'iteration' ? (
+          <IterationRow key={node.key} node={node} />
+        ) : (
+          <EventStepRow
+            key={node.entry.occurrence_key ?? `${node.entry.index}`}
+            entry={node.entry}
+          />
+        )
+      )}
+    </>
   );
 }
 
@@ -220,6 +408,17 @@ export function CampaignRunHistoryDialog({
   );
   const summary = taskLog.data?.summary;
   const counters = summary?.counters ?? {};
+  // execution_steps only ever holds depth-0 rows; the nested steps live in the
+  // event feed, so the timeline is built from events and falls back to steps
+  // once a run is old enough for its routine events to be purged.
+  const eventHistory = useExecutionEventHistory(
+    selectedExecutionId ?? undefined,
+    open
+  );
+  const stepTree = useMemo(
+    () => buildStepLogTree(eventHistory.stepLog),
+    [eventHistory.stepLog]
+  );
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -426,16 +625,28 @@ export function CampaignRunHistoryDialog({
                         t('monitorTaskLogFailedToLoad')
                       )}
                     </p>
-                  ) : taskLog.isLoading ? (
+                  ) : taskLog.isLoading || eventHistory.isLoading ? (
                     <p className='px-5 py-5 text-xs text-muted-foreground'>
                       {t('monitorTaskLogLoading')}
                     </p>
+                  ) : stepTree.length ? (
+                    <div>
+                      {eventHistory.truncated ? (
+                        <p className='border-b bg-muted/40 px-3 py-2 text-[11px] text-muted-foreground'>
+                          {t('runHistoryEventsTruncated')}
+                        </p>
+                      ) : null}
+                      <StepLogNodes nodes={stepTree} />
+                    </div>
                   ) : !taskLog.data?.steps.length ? (
                     <p className='px-5 py-5 text-xs text-muted-foreground'>
                       {t('monitorTaskLogEmpty')}
                     </p>
                   ) : (
                     <div>
+                      <p className='border-b bg-muted/40 px-3 py-2 text-[11px] text-muted-foreground'>
+                        {t('runHistoryEventsExpired')}
+                      </p>
                       {taskLog.data.steps.map((step) => (
                         <StepRow
                           key={step.id}

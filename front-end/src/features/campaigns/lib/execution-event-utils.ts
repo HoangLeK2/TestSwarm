@@ -398,10 +398,14 @@ export function foldEventsToStepLog(
         exit_code: existing?.exit_code,
         save_as: existing?.save_as,
         output_truncated: existing?.output_truncated,
-        step_path: traceSummary.stepPath ?? existing?.step_path,
-        loop_id: traceSummary.loopId ?? existing?.loop_id,
-        loop_iter: traceSummary.loopIter ?? existing?.loop_iter,
-        branch: traceSummary.branch ?? existing?.branch,
+        // The row's own step.* events know its full path; an activity event only
+        // carries the batch prefix (`.../loop#3`, no step segment) and the next
+        // iteration's `scheduled` shares a timestamp with this one's `completed`.
+        // Letting it win re-stamped a finished step into the following round.
+        step_path: existing?.step_path ?? traceSummary.stepPath,
+        loop_id: existing?.loop_id ?? traceSummary.loopId,
+        loop_iter: existing?.loop_iter ?? traceSummary.loopIter,
+        branch: existing?.branch ?? traceSummary.branch,
         reason_code:
           traceSummary.reasonCode ??
           existing?.reason_code ??

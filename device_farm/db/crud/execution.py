@@ -496,40 +496,118 @@ async def execution_summary(db: AsyncSession, execution_id: str) -> dict:
     }
 
 
-async def campaign_run_stats(db: AsyncSession, campaign_id: str) -> dict:
-    """Cumulative run stats across all executions for a campaign."""
-    status_counts = await db.execute(
-        select(ExecutionResult.status, func.count().label("cnt"))
-        .join(Execution, ExecutionResult.execution_id == Execution.id)
-        .where(Execution.campaign_id == campaign_id)
-        .group_by(ExecutionResult.status)
-    )
-    counts: dict[str, int] = {row.status: row.cnt for row in status_counts}
+def _dispatch_bucket(statuses: set[str]) -> str:
+    """Roll one dispatch's per-device execution statuses up into a single run outcome.
 
+    A campaign run fans out to one Execution per device; the run is only a success
+    when every device finished it. Checked worst-first so an in-flight or broken
+    device is never hidden behind its siblings' success.
+    """
+    if statuses & {"running", "paused"}:
+        return "running"
+    if "pending" in statuses:
+        return "pending"
+    if statuses & {"dlq_open", "dlq_closed"}:
+        return "error"
+    if "failed" in statuses:
+        return "failed"
+    if "cancelled" in statuses:
+        return "cancelled"
+    return "passed"
+
+
+def _dispatch_key():
+    """Grouping key for one campaign run: its dispatch id, else the execution's own.
+
+    Pre-dispatch_id rows (and any run that never got tagged) each count as a run of
+    their own instead of collapsing into one giant NULL bucket.
+    """
+    return func.coalesce(Execution.meta["dispatch_id"].as_string(), Execution.id)
+
+
+def _campaign_run_counts(status_rows) -> dict[str, int]:
+    """Bucket (dispatch, status, count) rows into campaign-run counts.
+
+    Returns the run buckets plus ``total_device_runs`` — the per-device number the
+    runs were rolled up from. Keeping both makes a wrong rollup visible instead of
+    silently plausible.
+    """
+    by_dispatch: dict[str, set[str]] = {}
+    device_runs = 0
+    for row in status_rows:
+        by_dispatch.setdefault(str(row.dispatch), set()).add(row.status)
+        device_runs += int(row.cnt)
+
+    counts = {
+        "passed": 0,
+        "failed": 0,
+        "running": 0,
+        "pending": 0,
+        "error": 0,
+        "cancelled": 0,
+    }
+    for statuses in by_dispatch.values():
+        counts[_dispatch_bucket(statuses)] += 1
+    counts["total_device_runs"] = device_runs
+    return counts
+
+
+async def campaign_run_stats(db: AsyncSession, campaign_id: str) -> dict:
+    """Cumulative run stats across all campaign runs (dispatches) for a campaign."""
     from db.models.content import ContentItem
     content_count_result = await db.execute(
         select(func.count()).where(ContentItem.campaign_id == campaign_id)
     )
     total_content = content_count_result.scalar_one()
 
-    recent_executions_result = await db.execute(
-        select(Execution)
+    dispatch_key = _dispatch_key()
+    # Grouped in SQL: covers every run (no window cap) and returns one row per
+    # (dispatch, status) instead of hauling whole Execution entities back.
+    status_rows = await db.execute(
+        select(
+            dispatch_key.label("dispatch"),
+            Execution.status,
+            func.count().label("cnt"),
+        )
+        .where(Execution.campaign_id == campaign_id)
+        .group_by(dispatch_key, Execution.status)
+    )
+    counts = _campaign_run_counts(status_rows)
+    device_runs = counts.pop("total_device_runs")
+
+    # Timing needs whole rows, but only for the newest dispatch — and only the six
+    # columns the rollup reads, never the scenario config blobs.
+    latest_dispatch = (
+        select(dispatch_key)
         .where(Execution.campaign_id == campaign_id)
         .order_by(Execution.created_at.desc())
-        .limit(1000)
+        .limit(1)
+        .scalar_subquery()
+    )
+    latest_rows_result = await db.execute(
+        select(
+            Execution.id,
+            Execution.status,
+            Execution.meta,
+            Execution.created_at,
+            Execution.started_at,
+            Execution.finished_at,
+        )
+        .where(
+            Execution.campaign_id == campaign_id,
+            dispatch_key == latest_dispatch,
+        )
+        .order_by(Execution.created_at.desc())
     )
     latest_dispatch_timing = _latest_campaign_dispatch_timing(
-        list(recent_executions_result.scalars().all())
+        list(latest_rows_result.all())
     )
 
-    total_runs = sum(counts.values())
     return {
-        "total_devices": total_runs,
-        "passed": counts.get("passed", 0),
-        "failed": counts.get("failed", 0),
-        "running": counts.get("running", 0),
-        "pending": counts.get("pending", 0),
-        "error": counts.get("error", 0),
+        # Runs, not devices — the key is kept for the shared SummaryOut schema.
+        "total_devices": sum(counts.values()),
+        **counts,
+        "total_device_runs": device_runs,
         "total_content_items": total_content,
         **latest_dispatch_timing,
     }
@@ -563,7 +641,9 @@ def _percentile_float(values: list[float], p: float) -> float | None:
     return ordered[idx] + (ordered[idx + 1] - ordered[idx]) * frac
 
 
-def _latest_campaign_dispatch_timing(executions: list[Execution]) -> dict:
+def _latest_campaign_dispatch_timing(executions: list) -> dict:
+    """Timing rollup for the newest dispatch. Takes Execution rows or any row
+    exposing id/status/meta/created_at/started_at/finished_at."""
     if not executions:
         return {}
 

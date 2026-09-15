@@ -366,6 +366,8 @@ export const campaignsApi = {
         running: number;
         pending: number;
         error: number;
+        cancelled?: number;
+        total_device_runs?: number;
         total_content_items: number;
         latest_dispatch_id?: string | null;
         latest_dispatch_target_count?: number;

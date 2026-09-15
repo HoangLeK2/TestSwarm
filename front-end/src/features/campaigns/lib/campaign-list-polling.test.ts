@@ -25,11 +25,14 @@ test('campaign list rows keep idle cache warm without realtime polling', () => {
   assert.equal(campaignRowStaleTime('completed'), CAMPAIGN_ROW_IDLE_STALE_MS);
 });
 
-test('campaign list only fetches row detail queries on mount for active campaigns', () => {
+test('campaign list fetches row details for every campaign that can have run', () => {
   assert.equal(shouldFetchCampaignRowDetailsOnMount('running'), true);
   assert.equal(shouldFetchCampaignRowDetailsOnMount('paused'), true);
-  assert.equal(shouldFetchCampaignRowDetailsOnMount('idle'), false);
-  assert.equal(shouldFetchCampaignRowDetailsOnMount('completed'), false);
-  assert.equal(shouldFetchCampaignRowDetailsOnMount('failed'), false);
+  assert.equal(shouldFetchCampaignRowDetailsOnMount('idle'), true);
+  assert.equal(shouldFetchCampaignRowDetailsOnMount('completed'), true);
+  assert.equal(shouldFetchCampaignRowDetailsOnMount('failed'), true);
+  assert.equal(shouldFetchCampaignRowDetailsOnMount('cancelled'), true);
+  // Never dispatched — nothing to fetch.
   assert.equal(shouldFetchCampaignRowDetailsOnMount('draft'), false);
+  assert.equal(shouldFetchCampaignRowDetailsOnMount('scheduled'), false);
 });

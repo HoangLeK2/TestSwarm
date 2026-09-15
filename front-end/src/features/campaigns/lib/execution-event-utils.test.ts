@@ -725,3 +725,78 @@ test('foldEventsToStepLog preserves every repeated step occurrence and action pr
     ['account-1', 'account-1']
   );
 });
+
+// Real shape from execution 057db296: a loop batch's activity events are keyed
+// to the batch's FIRST step (same depth:index:step_id as the real step) but
+// carry only the iteration prefix as their path — and iteration N+1's
+// `scheduled` shares a timestamp with iteration N's `completed`. Letting those
+// win re-stamped every round's first step into the following round, so the
+// history dialog showed round 1 starting at its second step.
+test('activity events do not re-path a finished loop step into the next round', () => {
+  const step = (path: string, index: number, at: string, durationMs: number) => [
+    {
+      event_id: `s-${path}`,
+      event_type: 'step.started',
+      execution_id: 'exec-1',
+      occurred_at: at,
+      payload: {
+        step_index: index,
+        depth: 2,
+        step_id: path.split('/').pop(),
+        step_type: 'social_scan_posts_interact',
+        trace: { step_path: path }
+      }
+    },
+    {
+      event_id: `c-${path}`,
+      event_type: 'step.completed',
+      execution_id: 'exec-1',
+      occurred_at: at,
+      payload: {
+        step_index: index,
+        depth: 2,
+        step_id: path.split('/').pop(),
+        step_type: 'social_scan_posts_interact',
+        ok: true,
+        duration_ms: durationMs,
+        trace: { step_path: path }
+      }
+    }
+  ];
+
+  const activity = (state: string, path: string, at: string) => ({
+    event_id: `a-${state}-${path}`,
+    event_type: `temporal.activity.${state}`,
+    execution_id: 'exec-1',
+    occurred_at: at,
+    step_id: 'first_step',
+    payload: {
+      step_index: 0,
+      depth: 2,
+      step_id: 'first_step',
+      activity_id: `act-${path}`,
+      trace: { step_path: path }
+    }
+  });
+
+  const rows = foldEventsToStepLog([
+    activity('scheduled', 'loop#0', '2026-09-15T16:36:38.596Z'),
+    ...step('loop#0/first_step', 0, '2026-09-15T16:36:40.367Z', 1671.7),
+    ...step('loop#0/second_step', 1, '2026-09-15T16:36:41.075Z', 679.9),
+    // Identical stamp: next round scheduled + this round completed.
+    activity('scheduled', 'loop#1', '2026-09-15T16:36:44.118Z'),
+    activity('completed', 'loop#0', '2026-09-15T16:36:44.118Z'),
+    ...step('loop#1/first_step', 0, '2026-09-15T16:36:44.203Z', 39.0),
+    ...step('loop#1/second_step', 1, '2026-09-15T16:36:45.763Z', 1550.0)
+  ] as never);
+
+  assert.deepEqual(
+    rows.map((row) => row.step_path).sort(),
+    [
+      'loop#0/first_step',
+      'loop#0/second_step',
+      'loop#1/first_step',
+      'loop#1/second_step'
+    ]
+  );
+});

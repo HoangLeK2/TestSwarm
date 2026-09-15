@@ -7,8 +7,6 @@ import { useSearchParams } from 'next/navigation';
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
   Clock,
   Download,
   ExternalLink,
@@ -53,6 +51,7 @@ import {
   TableHeader,
   TableRow
 } from '@/components/ui/table';
+import { TablePaginationControls } from '@/components/ui/table/data-table-pagination';
 import { useExecutionTaskLog } from '@/features/campaigns/hooks/use-campaigns';
 import { humanizeSessionGateMessage } from '@/features/campaigns/lib/session-gate-message';
 import type { ExecutionTaskLogStep } from '@/features/campaigns/types';
@@ -1463,7 +1462,7 @@ function ActivityDetailSheet({
   );
 }
 
-const PAGE_SIZE = 50;
+const DEFAULT_PAGE_SIZE = 50;
 
 const ACTION_FILTER_OPTIONS = [
   'all',
@@ -1513,6 +1512,7 @@ export function ActivityFeed({
   const [deviceSerial, setDeviceSerial] = useState('');
   const [accountId, setAccountId] = useState(accountIdFromUrl);
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [selectedActivityId, setSelectedActivityId] = useState<string | null>(
     null
   );
@@ -1529,8 +1529,8 @@ export function ActivityFeed({
       workspaceId: adminMode ? adminScope.scopedWorkspaceId : undefined,
       device_serial: adminMode ? undefined : deviceSerial.trim() || undefined,
       account_id: adminMode ? undefined : accountId.trim() || undefined,
-      offset: page * PAGE_SIZE,
-      limit: PAGE_SIZE
+      offset: page * pageSize,
+      limit: pageSize
     }),
     [
       accountId,
@@ -1538,7 +1538,8 @@ export function ActivityFeed({
       adminMode,
       adminScope.scopedWorkspaceId,
       deviceSerial,
-      page
+      page,
+      pageSize
     ]
   );
 
@@ -1550,7 +1551,7 @@ export function ActivityFeed({
   );
   const activities = useMemo(() => data?.activities ?? [], [data?.activities]);
   const total = data?.total ?? activities.length;
-  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const selectedActivity =
     activities.find((activity) => activity.id === selectedActivityId) ?? null;
   const stats = useMemo(() => {
@@ -1837,40 +1838,19 @@ export function ActivityFeed({
         }}
       />
 
-      {total > PAGE_SIZE ? (
-        <div className='flex items-center justify-between gap-2 text-xs text-muted-foreground'>
-          <span>
-            {tActivity('pagination', {
-              from: page * PAGE_SIZE + 1,
-              to: Math.min((page + 1) * PAGE_SIZE, total),
-              total
-            })}
-          </span>
-          <div className='flex items-center gap-1'>
-            <Button
-              variant='outline'
-              size='icon'
-              className='size-7'
-              disabled={page <= 0}
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-            >
-              <ChevronLeft className='size-4' />
-            </Button>
-            <span className='min-w-[4rem] text-center tabular-nums'>
-              {page + 1} / {pageCount}
-            </span>
-            <Button
-              variant='outline'
-              size='icon'
-              className='size-7'
-              disabled={page >= pageCount - 1}
-              onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-            >
-              <ChevronRight className='size-4' />
-            </Button>
-          </div>
-        </div>
-      ) : null}
+      <TablePaginationControls
+        pageIndex={page}
+        pageCount={pageCount}
+        pageSize={pageSize}
+        total={total}
+        onPageIndexChange={(next) =>
+          setPage(Math.min(Math.max(0, next), pageCount - 1))
+        }
+        onPageSizeChange={(next) => {
+          setPageSize(next);
+          setPage(0);
+        }}
+      />
     </div>
   );
 }

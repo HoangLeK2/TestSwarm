@@ -35,6 +35,7 @@ import {
 } from '../types';
 import { isCampaignEntityOut } from '../services/api';
 import { ContinuousCrawlSettings } from './continuous-crawl-settings';
+import { CaptureModeSettings } from './capture-mode-settings';
 import {
   campaignVariablesForEditor,
   mergeCampaignEditorVariables
@@ -206,6 +207,11 @@ export function EditCampaignEntityDialog({
             )}
           >
             <ContinuousCrawlSettings
+              variables={variables}
+              onChange={setVariables}
+              disabled={bodyLocked}
+            />
+            <CaptureModeSettings
               variables={variables}
               onChange={setVariables}
               disabled={bodyLocked}

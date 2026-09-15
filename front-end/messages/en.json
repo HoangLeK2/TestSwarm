@@ -189,7 +189,7 @@
       "keyPlaceholder": "e.g. username",
       "valuePlaceholderNumber": "e.g. 3",
       "valuePlaceholderString": "e.g. nguyen@gmail.com",
-      "valuePlaceholderStringWithRef": "e.g. nguyen@gmail.com or ${key}",
+      "valuePlaceholderStringWithRef": "e.g. nguyen@gmail.com or $'{key}'",
       "emptyTitle": "No variables yet",
       "emptyHintPrefix": "Use variables in scenarios with syntax",
       "emptyFromScenarioTitle": "Selected scenario(s) define no variables",
@@ -1826,6 +1826,15 @@
       "enabledLabel": "Process assigned targets in sequence",
       "enabledHint": "Each phone only processes the targets assigned to that phone."
     },
+    "captureModeSettings": {
+      "label": "Screenshot capture",
+      "hint": "Capture every step only while debugging — it slows the run down and stores far more artifacts.",
+      "options": {
+        "error_only": "Failed steps only (default)",
+        "extract_only": "Extraction steps only",
+        "all": "Every step"
+      }
+    },
     "recoveryPolicy": {
       "title": "Recovery scenario",
       "hint": "When any step in the campaign fails or gets stuck, the runtime calls the shared recovery scenario and then returns to the main scenario by rule.",
@@ -2061,6 +2070,10 @@
         "failed": "Failed",
         "total": "Total steps"
       },
+      "runHistoryIterationSteps": "{count} steps",
+      "runHistoryIterationFailed": "{count} failed",
+      "runHistoryEventsTruncated": "Too many events to show — the newest rounds are missing.",
+      "runHistoryEventsExpired": "Detailed events for this run have passed their retention window; only top-level steps remain.",
       "automationBadge": "Automation",
       "automationActions": {
         "setup": "Set up and run",
@@ -2466,10 +2479,12 @@
       "runStatsRunning": "Running",
       "runStatsPending": "Pending",
       "runStatsError": "Error",
+      "runStatsCancelled": "Cancelled",
       "runStatsCompact": "{passed} passed · {failed} failed",
       "runStatsCompactWithTotal": "{passed} passed · {failed} failed ({total} devices)",
       "runStatsPopoverTitle": "Campaign totals",
       "runStatsDevices": "{total} runs",
+      "runStatsDeviceRuns": "{total} device runs",
       "runStatsFinished": "{finished} of {total} runs finished",
       "runStatsLatestDispatch": "Latest dispatch",
       "runStatsLatestDevices": "Finished",
@@ -3504,8 +3519,9 @@
         "commentFilterKeep": "Leave as is — keep the platform default",
         "commentFilterMostRelevant": "Most relevant",
         "commentFilterNewest": "Newest",
+        "commentText": "Comment text",
         "commentTextReady": "Comment text is configured.",
-        "commentTextRequired": "Add the comment text, or use a variable such as ${COMMENT_TEXT}.",
+        "commentTextRequired": "Add the comment text, or use a variable such as $'{COMMENT_TEXT}'.",
         "currentScreen": "Current screen",
         "currentScreenTarget": "Uses the currently visible target.",
         "conditionJsonHint": "A general backend condition (`condition`) — supports element_exists / element_not_exists / variable_equals…",

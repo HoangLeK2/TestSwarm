@@ -139,6 +139,9 @@ class SummaryOut(BaseModel):
     running: int
     pending: int
     error: int
+    cancelled: int = 0
+    # Campaign run-stats only: the per-device executions the run counts came from.
+    total_device_runs: int = 0
     total_content_items: int
     latest_dispatch_id: Optional[str] = None
     latest_dispatch_target_count: int = 0

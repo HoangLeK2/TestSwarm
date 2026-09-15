@@ -1,7 +1,8 @@
 """Helpers to emit step events from Temporal activities (DF-T-04-013)."""
 from __future__ import annotations
 
-from datetime import datetime
+import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,6 +45,49 @@ _NODE_PREFLIGHT_KEYS = ("node_capability_preflight", "preflight")
 
 def _step_id(step: dict[str, Any], step_index: int) -> str:
     return str(step.get("id") or step.get("_id") or step_index)
+
+
+async def _mark_step_running(
+    db: AsyncSession,
+    *,
+    execution_id: str,
+    org_id: str,
+    step_id: str,
+    step_index: int,
+    step_type: str | None,
+    depth: int,
+    device_id: str | None = None,
+) -> None:
+    """Write the row before the step runs, so a killed execution still shows
+    which step it died on. Metadata only — never fail the event on this.
+
+    depth > 0 is skipped: execution_steps is keyed on (execution_id, step_index)
+    and nested steps reuse local indexes, so writing them would clobber the
+    top-level row.
+    """
+    if depth != 0:
+        return
+    try:
+        from db.crud.execution_steps import upsert_execution_step
+
+        await upsert_execution_step(
+            db,
+            execution_id=execution_id,
+            step_index=step_index,
+            status="running",
+            step_id=step_id,
+            step_type=step_type,
+            started_at=datetime.now(timezone.utc),
+            device_id=device_id,
+            org_id=org_id,
+        )
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "execution_step running write failed exec_id=%s step=%s (non-fatal)",
+            execution_id,
+            step_index,
+            exc_info=True,
+        )
 
 
 def _runtime_evidence_payload(
@@ -145,6 +189,17 @@ async def emit_control_flow_step_event(
     evidence = _runtime_evidence_payload(payload, trace)
     if evidence:
         event_payload["evidence"] = evidence
+    if event_type == STEP_STARTED:
+        await _mark_step_running(
+            db,
+            execution_id=execution_id,
+            org_id=org_id,
+            step_id=step_id,
+            step_index=step_index,
+            step_type=step_type,
+            depth=depth,
+            device_id=trace.get("device_id") if isinstance(trace, dict) else None,
+        )
     await enqueue_execution_event(
         db,
         event_type=event_type,
@@ -256,6 +311,16 @@ async def emit_step_started(
     }
     if evidence:
         payload["evidence"] = evidence
+    await _mark_step_running(
+        db,
+        execution_id=execution_id,
+        org_id=org_id,
+        step_id=step_id,
+        step_index=step_index,
+        step_type=step.get("type"),
+        depth=depth,
+        device_id=trace.get("device_id") if isinstance(trace, dict) else None,
+    )
     await enqueue_execution_event(
         db,
         event_type=STEP_STARTED,

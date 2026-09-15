@@ -1,7 +1,9 @@
 import type { ExecutionTaskLogStep } from '../types';
 
 type NestedStepDetail = {
-  label: string;
+  /** null when no label can be derived — the component picks the wording. */
+  label: string | null;
+  iteration: number | null;
   message: string | null;
   status: string;
 };
@@ -55,13 +57,13 @@ export function executionStepDetail(step: ExecutionTaskLogStep): {
       trace.step_results ??
       config.sub_results ??
       config.step_results
-  ).map((row, index) => ({
+  ).map((row) => ({
     label:
       text(row.scenario_name) ??
       text(row.step_type) ??
       text(row.type) ??
-      text(row.name) ??
-      `Bước ${index + 1}`,
+      text(row.name),
+    iteration: typeof row.iteration === 'number' ? row.iteration : null,
     message: text(row.message) ?? text(row.error),
     status:
       text(row.status) ??

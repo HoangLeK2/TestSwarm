@@ -4,7 +4,11 @@ import { useMemo } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { enUS, vi } from 'date-fns/locale';
 import { Users } from 'lucide-react';
-import { useAccounts, useDeleteAccount } from '../../hooks/use-accounts';
+import {
+  ACCOUNTS_PAGE_LIMIT,
+  useAccounts,
+  useDeleteAccount
+} from '../../hooks/use-accounts';
 import type { AccountOut } from '../../services/api';
 import { DataTable } from '@/components/ui/table/data-table';
 import { useDataTable } from '@/hooks/use-data-table';
@@ -22,7 +26,12 @@ export function AccountList() {
   const locale = useLocale();
   const dateLocale = locale === 'vi' ? vi : enUS;
   const confirm = useConfirm();
-  const { data: accounts, isLoading, error } = useAccounts();
+  // Không truyền limit thì server mặc định 50 và cắt im lặng.
+  const {
+    data: accounts,
+    isLoading,
+    error
+  } = useAccounts({ limit: ACCOUNTS_PAGE_LIMIT });
   const deleteMutation = useDeleteAccount();
   const perms = useResourcePermissions('accounts');
 
@@ -55,8 +64,7 @@ export function AccountList() {
 
   const { table } = useDataTable<AccountOut>({
     data,
-    columns,
-    pageCount: 1
+    columns
   });
 
   return (
@@ -115,7 +123,7 @@ export function AccountList() {
           />
         </Can>
       ) : (
-        <DataTable table={table} />
+        <DataTable table={table} total={data.length} />
       )}
     </div>
   );

@@ -6,7 +6,10 @@ from types import SimpleNamespace
 from api.schemas.scenario import ScenarioModel
 from common.scenario_schema import validate_scenario
 from common.variable_resolver import VariableContext
-from db.seeds.scenario_templates import _FB_LOGIN_PROFILE_NATIVE
+from db.seeds.scenario_templates import (
+    BUILTIN_TEMPLATE_BY_NAME,
+    _FB_LOGIN_PROFILE_NATIVE,
+)
 import tasks.scenario.steps.app_automation as app_automation_steps
 from tasks.scenario.steps.app_automation import (
     handle_assert_app_state,
@@ -78,6 +81,20 @@ _XML_FACEBOOK_LOGIN_EN = """
   <node text="Log in" content-desc="Log in" class="android.view.View" bounds="[239,534][302,567]" />
 </hierarchy>
 """
+
+
+def test_builtin_facebook_login_force_stops_and_uses_monkey_launcher() -> None:
+    template = BUILTIN_TEMPLATE_BY_NAME["Đăng nhập Facebook"]
+    launch_step = next(
+        step
+        for step in template["steps"]
+        if step.get("id") == "facebook_launch"
+    )
+
+    assert launch_step["type"] == "launch_app"
+    assert launch_step["package"] == "com.facebook.katana"
+    assert launch_step["stop_before"] is True
+    assert launch_step["use_monkey"] is True
 
 _XML_WAITING_FOR_APPROVAL_EN = """
 <hierarchy>

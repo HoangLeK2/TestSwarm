@@ -32,6 +32,30 @@ def test_workflow_id_for_execution():
     assert workflow_id_for_execution("abc-123") == "exec_abc-123"
 
 
+def test_resolve_capture_mode_defaults_to_error_only():
+    from services.campaign.execution_runtime import _resolve_capture_mode
+
+    assert _resolve_capture_mode({}) == "error_only"
+    assert _resolve_capture_mode({"__CAPTURE_MODE__": "nonsense"}) == "error_only"
+    assert _resolve_capture_mode({"__CAPTURE_MODE__": " ALL "}) == "all"
+    assert _resolve_capture_mode({"__CAPTURE_MODE__": "extract_only"}) == "extract_only"
+
+
+def test_capture_mode_all_allows_pre_post_capture_on_success():
+    from services.campaign.execution_runtime import _resolve_capture_mode
+    from services.execution.capture_service import _pre_post_capture_allowed
+
+    step = {"type": "tap", "id": "s1"}
+    for campaign_vars, allowed in (
+        ({}, False),
+        ({"__CAPTURE_MODE__": "all"}, True),
+    ):
+        sc = SimpleNamespace(
+            scenario={"capture_mode": _resolve_capture_mode(campaign_vars)}
+        )
+        assert _pre_post_capture_allowed(sc, step) is allowed
+
+
 def test_build_runtime_scenario_dict_includes_execution_capture_context():
     from temporal.shared import ScenarioInput
 

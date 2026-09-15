@@ -36,7 +36,22 @@ for (const file of walk(path.join(root, 'src'))) {
   ];
   if (!namespaces.length) continue;
 
-  for (const m of src.matchAll(/(?<![\w.])t\(\s*'([a-zA-Z0-9_.]+)'/g)) {
+  // Aliases too: `const tField = useTranslations(...)` is as common here as `t`,
+  // and a key only reached through an alias used to slip past this check.
+  const aliases = [
+    ...new Set([
+      't',
+      ...[...src.matchAll(/(?:const|let)\s+(t[A-Z]\w*)\s*=\s*useTranslations/g)]
+        .map((m) => m[1]),
+      ...[...src.matchAll(/(t[A-Z]\w*)\s*:\s*useTranslations/g)].map((m) => m[1])
+    ])
+  ];
+  const callRe = new RegExp(
+    `(?<![\\w.])(?:${aliases.join('|')})\\(\\s*'([a-zA-Z0-9_.]+)'`,
+    'g'
+  );
+
+  for (const m of src.matchAll(callRe)) {
     const key = m[1];
     const inEn = namespaces.some((ns) => has(en, `${ns}.${key}`));
     const inVi = namespaces.some((ns) => has(vi, `${ns}.${key}`));
@@ -46,6 +61,32 @@ for (const file of walk(path.join(root, 'src'))) {
     bad.push(
       `${path.relative(root, file)}:${line}  t('${key}')  missing in ${missing}`
     );
+  }
+}
+
+// ICU eats `{...}` as a placeholder. A message meaning to SHOW `${VAR}` to the
+// user throws at render time and next-intl falls back to printing the raw key.
+// Escape it as $'{VAR}'.
+const walkMessages = function* (node, trail = '') {
+  if (node && typeof node === 'object') {
+    for (const [k, v] of Object.entries(node)) {
+      yield* walkMessages(v, trail ? `${trail}.${k}` : k);
+    }
+  } else if (typeof node === 'string') {
+    yield [trail, node];
+  }
+};
+
+for (const [name, messages] of [
+  ['en', en],
+  ['vi', vi]
+]) {
+  for (const [key, value] of walkMessages(messages)) {
+    if (value.includes('${')) {
+      bad.push(
+        `messages/${name}.json  ${key}  unescaped \${...} — write $'{...}' instead`
+      );
+    }
   }
 }
 

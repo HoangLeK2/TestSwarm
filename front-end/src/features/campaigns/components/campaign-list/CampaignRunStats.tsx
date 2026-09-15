@@ -3,9 +3,11 @@
 import {
   AlertTriangle,
   Activity,
+  Ban,
   CheckCircle2,
   Clock,
   Loader2,
+  Play,
   Smartphone,
   Timer,
   XCircle
@@ -25,6 +27,7 @@ import {
   shouldFetchCampaignRowDetailsOnMount
 } from '../../lib/campaign-list-polling';
 
+/** Campaign totals: every count is one campaign run (dispatch), not one device. */
 type ExecutionSummary = {
   total_devices: number;
   passed: number;
@@ -32,6 +35,8 @@ type ExecutionSummary = {
   running: number;
   pending: number;
   error: number;
+  cancelled?: number;
+  total_device_runs?: number;
   latest_dispatch_id?: string | null;
   latest_dispatch_target_count?: number;
   latest_dispatch_finished_count?: number;
@@ -134,7 +139,7 @@ function StatRow({
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   value: number;
-  tone: 'passed' | 'failed' | 'running' | 'pending' | 'error';
+  tone: 'passed' | 'failed' | 'running' | 'pending' | 'error' | 'cancelled';
 }) {
   const toneClass =
     tone === 'passed'
@@ -143,7 +148,9 @@ function StatRow({
         ? 'text-destructive'
         : tone === 'running'
           ? 'text-blue-600 dark:text-blue-400'
-          : 'text-amber-600 dark:text-amber-400';
+          : tone === 'cancelled'
+            ? 'text-muted-foreground'
+            : 'text-amber-600 dark:text-amber-400';
 
   return (
     <div className='flex items-center justify-between gap-3 py-1'>
@@ -209,8 +216,17 @@ function RunStatsPopoverBody({
           </p>
           {total > 0 && (
             <p className='mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground'>
-              <Smartphone className='size-3 shrink-0' aria-hidden />
+              <Play className='size-3 shrink-0' aria-hidden />
               {t('runStatsDevices', { total })}
+              {/* Multi-device campaign: show what the runs rolled up from, so a
+                  surprising count can be checked without opening the DB. */}
+              {(s.total_device_runs ?? 0) > total && (
+                <span className='flex items-center gap-0.5'>
+                  ·
+                  <Smartphone className='size-3 shrink-0' aria-hidden />
+                  {t('runStatsDeviceRuns', { total: s.total_device_runs ?? 0 })}
+                </span>
+              )}
             </p>
           )}
         </div>
@@ -260,6 +276,14 @@ function RunStatsPopoverBody({
           value={s.error}
           tone='error'
         />
+        {(s.cancelled ?? 0) > 0 && (
+          <StatRow
+            icon={Ban}
+            label={t('runStatsCancelled')}
+            value={s.cancelled ?? 0}
+            tone='cancelled'
+          />
+        )}
       </div>
 
       {finished > 0 && total > 0 && (

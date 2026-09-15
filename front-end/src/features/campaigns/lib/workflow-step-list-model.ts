@@ -12,6 +12,19 @@ export type WorkflowStepRowStatus =
   | 'completed'
   | 'failed';
 
+const ACTION_OUTCOME_KEYS: Record<string, string> = {
+  applied: 'monitorActionOutcome.applied',
+  already_applied: 'monitorActionOutcome.alreadyApplied',
+  leased: 'monitorActionOutcome.leased',
+  no_eligible_target: 'monitorActionOutcome.noEligibleTarget',
+  no_ready_candidate: 'monitorActionOutcome.noReadyCandidate'
+};
+
+/** i18n key for an `outcome` payload value, or undefined to print it raw. */
+export function actionOutcomeMessageKey(outcome: string): string | undefined {
+  return ACTION_OUTCOME_KEYS[outcome];
+}
+
 export type FlatWorkflowStep = {
   step: FlowStep;
   flatIndex: number;

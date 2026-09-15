@@ -41,6 +41,7 @@ import {
   type ExecutionTraceSummary
 } from '../lib/execution-trace';
 import {
+  actionOutcomeMessageKey,
   buildWorkflowStepRows,
   deriveWorkflowCursor,
   mergeStepLogEntries,
@@ -655,15 +656,7 @@ export function StepRow({
   const adbOutput = stepOutput(logEntry);
   const proofDetails = logEntry?.details ?? {};
   const proofOutcome = String(proofDetails.outcome ?? '').trim();
-  const proofOutcomeKey = (
-    {
-      applied: 'monitorActionOutcome.applied',
-      already_applied: 'monitorActionOutcome.alreadyApplied',
-      leased: 'monitorActionOutcome.leased',
-      no_eligible_target: 'monitorActionOutcome.noEligibleTarget',
-      no_ready_candidate: 'monitorActionOutcome.noReadyCandidate'
-    } as Record<string, string>
-  )[proofOutcome];
+  const proofOutcomeKey = actionOutcomeMessageKey(proofOutcome);
   const proofTarget = String(
     proofDetails.display_name ??
       (

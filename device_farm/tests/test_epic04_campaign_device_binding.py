@@ -261,10 +261,14 @@ async def test_campaign_run_stats_includes_latest_dispatch_timing(session_factor
     from api.schemas.execution import SummaryOut
 
     summary = SummaryOut(**stats)
-    assert stats["total_devices"] == 3
+    # 3 device executions, but only 2 campaign runs: dispatch "older" and "latest".
+    assert stats["total_devices"] == 2
+    assert stats["total_device_runs"] == 3
     assert summary.latest_dispatch_id == "latest"
-    assert stats["passed"] == 2
+    assert stats["passed"] == 1
+    # "latest" has one device still running — the run is not a success yet.
     assert stats["running"] == 1
+    assert stats["cancelled"] == 0
     assert stats["latest_dispatch_id"] == "latest"
     assert stats["latest_dispatch_target_count"] == 2
     assert stats["latest_dispatch_finished_count"] == 1
@@ -275,6 +279,61 @@ async def test_campaign_run_stats_includes_latest_dispatch_timing(session_factor
     assert stats["latest_dispatch_to_start_p95_ms"] == pytest.approx(195.0)
     assert stats["latest_dispatch_terminal_ms"] is None
     assert stats["latest_dispatch_elapsed_ms"] is not None
+
+
+@pytest.mark.asyncio
+async def test_campaign_run_stats_counts_untagged_executions_separately(session_factory):
+    """No dispatch_id (legacy rows) must not collapse into a single run."""
+    await _seed_orgs(session_factory)
+    set_current_org_id(ORG_A)
+    started = datetime(2026, 8, 3, 0, 0, 0, tzinfo=timezone.utc)
+    async with session_factory() as db:
+        campaign = await campaign_repo.create_campaign_entity(
+            db,
+            org_id=ORG_A,
+            name="StatsUntagged",
+            created_by=USER_OWNER,
+        )
+        db.add_all(
+            [
+                Execution(
+                    id=f"untagged-{idx}",
+                    run_type="campaign_device",
+                    kind="campaign",
+                    status=status,
+                    org_id=ORG_A,
+                    campaign_id=campaign.id,
+                    device_config={},
+                    loop_config={},
+                    error_config={},
+                    meta={},
+                    user_id=USER_OWNER,
+                    created_at=started + timedelta(seconds=idx),
+                )
+                for idx, status in enumerate(["completed", "completed", "failed"])
+            ]
+        )
+        await db.commit()
+
+        stats = await campaign_run_stats(db, campaign.id)
+
+    assert stats["total_devices"] == 3
+    assert stats["total_device_runs"] == 3
+    assert stats["passed"] == 2
+    assert stats["failed"] == 1
+
+
+def test_dispatch_bucket_rolls_devices_up_worst_first():
+    from db.crud.execution import _dispatch_bucket
+
+    assert _dispatch_bucket({"completed"}) == "passed"
+    assert _dispatch_bucket({"completed", "failed"}) == "failed"
+    assert _dispatch_bucket({"completed", "cancelled"}) == "cancelled"
+    assert _dispatch_bucket({"failed", "cancelled"}) == "failed"
+    assert _dispatch_bucket({"completed", "failed", "running"}) == "running"
+    assert _dispatch_bucket({"completed", "pending"}) == "pending"
+    assert _dispatch_bucket({"completed", "dlq_open"}) == "error"
+    assert _dispatch_bucket({"paused"}) == "running"
 
 
 @pytest.mark.asyncio

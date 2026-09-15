@@ -8,6 +8,8 @@ import logging
 import importlib
 import queue
 import threading
+import time
+from datetime import datetime, timezone
 from uuid import uuid4
 from typing import Any, Callable, Dict, List, Optional
 
@@ -103,6 +105,7 @@ def run_scenario_on_device(
     trace_id: Optional[str] = None,
     trace_source: str = "api.preview",
     user_id: Optional[str] = None,
+    execution_id: Optional[str] = None,
     cancel_event: Optional["threading.Event"] = None,
 ) -> Dict[str, Any]:
     from tasks.scenario_task import run_scenario_task
@@ -122,6 +125,13 @@ def run_scenario_on_device(
         "_campaign_vars": {"__USER_ID__": str(user_id)} if user_id else {},
         "_run_hash_scope": run_id,
     }
+    if execution_id:
+        scenario["execution_id"] = execution_id
+        scenario["run_id"] = execution_id
+        scenario["_run_hash_scope"] = execution_id
+    account_id = str((variables or {}).get("__ACCOUNT_ID__") or "").strip()
+    if account_id:
+        scenario["account_id"] = account_id
     from services.scenario_node_preflight import (
         preflight_scenario_node_capabilities,
         scenario_node_preflight_error_payload,
@@ -156,6 +166,162 @@ def _resolve_user_id_from_request(request: Request) -> Optional[str]:
     shape (Optional[str]) so existing callers don't need to change."""
     ctx = caller_auth_from_request(request)
     return ctx.user_id if ctx else None
+
+
+def _requested_account_id(body: ScenarioPreviewRequest) -> str:
+    return str((body.variables or {}).get("__ACCOUNT_ID__") or "").strip()
+
+
+async def _create_account_login_stream_execution(
+    *,
+    serial: str,
+    body: ScenarioPreviewRequest,
+    account_id: str,
+    auth_ctx: AuthContext | None,
+    trace_id: str,
+    db_enabled: bool,
+) -> dict[str, str] | None:
+    """Create durable history for account-console login streams.
+
+    Generic preview-stream remains ephemeral. The account login dialog is the
+    primary login surface, though, so when it names an account we create the
+    execution before the phone is touched and pass that id into the direct
+    runner.
+    """
+    account_id = str(account_id or "").strip()
+    if not account_id:
+        return None
+    if not db_enabled or auth_ctx is None or not auth_ctx.org_id:
+        return None
+
+    from db.crud.device import get_device_by_serial
+    from db.crud.execution import (
+        add_device_to_execution,
+        create_execution,
+        upsert_execution_result,
+    )
+    from db.models.enums import ExecutionKind, ExecutionStatus
+    from services.campaign.account_resolver import (
+        AccountBindingError,
+        validate_account_in_org,
+    )
+
+    async with AsyncSessionLocal() as db:
+        with use_tenant_scope(auth_ctx.org_id):
+            device = await get_device_by_serial(db, serial)
+            if device is None or str(device.org_id or "") != str(auth_ctx.org_id):
+                raise HTTPException(status_code=404, detail="Device not found")
+            try:
+                account = await validate_account_in_org(db, account_id, auth_ctx.org_id)
+            except AccountBindingError as exc:
+                raise HTTPException(
+                    status_code=getattr(exc, "status", 404),
+                    detail=str(exc),
+                ) from exc
+
+            started_at = datetime.now(timezone.utc)
+            execution = await create_execution(
+                db,
+                run_type="account_login",
+                kind=ExecutionKind.SESSION.value,
+                organization_id=auth_ctx.org_id,
+                campaign_id=None,
+                scenario_id=body.scenario_id,
+                user_id=auth_ctx.user_id,
+                account_id=str(account.id),
+                status=ExecutionStatus.RUNNING.value,
+                meta={
+                    "source": "account_login_dialog",
+                    "trace_id": trace_id,
+                    "step_count": len(body.steps or []),
+                },
+                device_config={"device_serial": serial},
+            )
+            execution.started_at = started_at
+            await add_device_to_execution(db, execution.id, device.id)
+            await upsert_execution_result(
+                db,
+                execution_id=execution.id,
+                device_id=device.id,
+                status="running",
+                started_at=started_at,
+            )
+            await db.commit()
+            return {"execution_id": str(execution.id), "device_id": str(device.id)}
+
+
+async def _finish_account_login_stream_execution(
+    execution_ctx: dict[str, str] | None,
+    result: dict[str, Any],
+    *,
+    duration_s: float,
+    cancelled: bool,
+) -> None:
+    if not execution_ctx:
+        return
+
+    from db.crud.execution import get_execution, upsert_execution_result
+    from db.models.enums import ExecutionStatus
+    from services.execution.step_store import (
+        persist_execution_steps_from_results,
+        slim_step_results,
+    )
+
+    execution_id = execution_ctx["execution_id"]
+    device_id = execution_ctx["device_id"]
+    step_results = [
+        row for row in result.get("step_results", []) if isinstance(row, dict)
+    ]
+    success = bool(result.get("success"))
+    status = (
+        ExecutionStatus.CANCELLED.value
+        if cancelled
+        else ExecutionStatus.COMPLETED.value
+        if success
+        else ExecutionStatus.FAILED.value
+    )
+    result_status = (
+        "passed" if status == ExecutionStatus.COMPLETED.value else "failed"
+    )
+    now = datetime.now(timezone.utc)
+
+    async with AsyncSessionLocal() as db:
+        execution = await get_execution(db, execution_id)
+        if execution is None:
+            return
+        execution.status = status
+        execution.finished_at = now
+        if cancelled:
+            execution.cancelled_at = now
+            execution.cancel_signal_received_at = now
+            execution.cancel_reason = result.get("failed_message") or "cancelled"
+        await persist_execution_steps_from_results(
+            db,
+            execution_id=execution_id,
+            step_results=step_results,
+            default_ended_at=now,
+            device_id=device_id,
+        )
+        await upsert_execution_result(
+            db,
+            execution_id=execution_id,
+            device_id=device_id,
+            status=result_status,
+            passed_steps=slim_step_results(
+                [r for r in step_results if r.get("ok", True)]
+            ),
+            failed_steps=slim_step_results(
+                [r for r in step_results if not r.get("ok", True)]
+            ),
+            error_detail=(
+                None
+                if success
+                else str(result.get("failed_message") or "step failed")
+            ),
+            run_time_sec=duration_s,
+            finished_at=now,
+        )
+        await db.commit()
 
 
 async def _resolve_account_group_vars(
@@ -540,6 +706,7 @@ def build_scenarios_router(
             source="api.preview_stream",
             total_steps=len(body.steps),
         )
+        account_login_account_id = _requested_account_id(body)
         auth_ctx = caller_auth_from_request(request)
         user_id = auth_ctx.user_id if auth_ctx else None
         await _apply_preview_variables(
@@ -558,16 +725,45 @@ def build_scenarios_router(
         if preflight_response is not None:
             return preflight_response
 
+        execution_ctx = await _create_account_login_stream_execution(
+            serial=serial,
+            body=body,
+            account_id=account_login_account_id,
+            auth_ctx=auth_ctx,
+            trace_id=trace_id,
+            db_enabled=bool(getattr(config.database, "enabled", False)),
+        )
         cancel_event = threading.Event()
         _register_preview(serial, trace_id, cancel_event, user_id=user_id)
 
         q: queue.Queue[Dict[str, Any] | None] = queue.Queue()
         worker_done = threading.Event()
+        main_loop = asyncio.get_running_loop()
 
         def on_step_done(result: Dict[str, Any]) -> None:
             q.put(result)
 
         def run_in_thread() -> None:
+            started_mono = time.monotonic()
+
+            def finalize(result: Dict[str, Any]) -> None:
+                try:
+                    future = asyncio.run_coroutine_threadsafe(
+                        _finish_account_login_stream_execution(
+                            execution_ctx,
+                            result,
+                            duration_s=time.monotonic() - started_mono,
+                            cancelled=cancel_event.is_set(),
+                        ),
+                        main_loop,
+                    )
+                    future.result(timeout=30)
+                except Exception:
+                    log.exception(
+                        "preview-stream execution finalize failed trace_id=%s",
+                        trace_id,
+                    )
+
             try:
                 final = run_scenario_on_device(
                     manager,
@@ -578,10 +774,21 @@ def build_scenarios_router(
                     trace_id=trace_id,
                     trace_source="api.preview_stream",
                     user_id=user_id,
+                    execution_id=(
+                        execution_ctx["execution_id"] if execution_ctx else None
+                    ),
                     cancel_event=cancel_event,
                 )
+                finalize(final)
                 q.put({"_event": "done", **final})
             except Exception as exc:
+                finalize(
+                    {
+                        "success": False,
+                        "failed_message": str(exc),
+                        "step_results": [],
+                    }
+                )
                 q.put({"_event": "error", "error": str(exc)})
             finally:
                 worker_done.set()
@@ -592,7 +799,14 @@ def build_scenarios_router(
 
         async def event_generator():
             total_steps = len(body.steps)
-            yield f"data: {json.dumps({'event': 'start', 'trace_id': trace_id, 'total_steps': total_steps})}\n\n"
+            start_payload = {
+                "event": "start",
+                "trace_id": trace_id,
+                "total_steps": total_steps,
+            }
+            if execution_ctx:
+                start_payload["execution_id"] = execution_ctx["execution_id"]
+            yield f"data: {json.dumps(start_payload)}\n\n"
             completed = False
             try:
                 while True:

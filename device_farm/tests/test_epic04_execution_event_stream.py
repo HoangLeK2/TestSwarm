@@ -392,6 +392,139 @@ async def test_catch_up_since_event_id(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_step_started_marks_step_running_and_finalize_keeps_started_at(
+    session_factory,
+):
+    """A killed execution must still show which step it died on."""
+    from db.crud.execution_steps import get_execution_step, upsert_execution_step
+
+    exec_id = await _seed_campaign_execution(session_factory)
+    async with session_factory() as db:
+        with tenant_context("org-1"):
+            await emit_step_started(
+                db,
+                execution_id=exec_id,
+                org_id="org-1",
+                campaign_id="camp-1",
+                step={"type": "tap", "id": "s1"},
+                step_index=0,
+            )
+        await db.commit()
+
+    async with session_factory() as db:
+        row = await get_execution_step(db, exec_id, 0)
+        assert row is not None
+        assert row.status == "running"
+        assert row.started_at is not None
+        assert row.step_type == "tap"
+        started_at = row.started_at
+
+    # Finalize writes status/ended_at but must not wipe started_at.
+    async with session_factory() as db:
+        with tenant_context("org-1"):
+            await upsert_execution_step(
+                db,
+                execution_id=exec_id,
+                step_index=0,
+                status="passed",
+                ended_at=datetime.now(timezone.utc),
+                duration_ms=250.0,
+            )
+        await db.commit()
+
+    async with session_factory() as db:
+        row = await get_execution_step(db, exec_id, 0)
+        assert row.status == "passed"
+        assert row.started_at == started_at
+        assert row.duration_ms == 250.0
+
+    # A running write scheduled before the step finished can land after it;
+    # it must not pin the row at "running".
+    async with session_factory() as db:
+        with tenant_context("org-1"):
+            await upsert_execution_step(
+                db,
+                execution_id=exec_id,
+                step_index=0,
+                status="running",
+                started_at=started_at,
+            )
+        await db.commit()
+
+    async with session_factory() as db:
+        assert (await get_execution_step(db, exec_id, 0)).status == "passed"
+
+    # A genuine re-run of the same index starts after the last attempt ended.
+    async with session_factory() as db:
+        with tenant_context("org-1"):
+            await upsert_execution_step(
+                db,
+                execution_id=exec_id,
+                step_index=0,
+                status="running",
+                started_at=datetime.now(timezone.utc) + timedelta(seconds=1),
+            )
+        await db.commit()
+
+    async with session_factory() as db:
+        assert (await get_execution_step(db, exec_id, 0)).status == "running"
+
+
+@pytest.mark.asyncio
+async def test_running_row_does_not_drop_device_id_on_later_writes(session_factory):
+    """The running row inserts first, so every later write is an UPDATE."""
+    from db.crud.execution_steps import get_execution_step, upsert_execution_step
+
+    exec_id = await _seed_campaign_execution(session_factory)
+    async with session_factory() as db:
+        with tenant_context("org-1"):
+            await upsert_execution_step(
+                db,
+                execution_id=exec_id,
+                step_index=0,
+                status="running",
+                started_at=datetime.now(timezone.utc),
+            )
+            await upsert_execution_step(
+                db,
+                execution_id=exec_id,
+                step_index=0,
+                status="passed",
+                device_id="device-9",
+                ended_at=datetime.now(timezone.utc),
+            )
+        await db.commit()
+
+    async with session_factory() as db:
+        assert (await get_execution_step(db, exec_id, 0)).device_id == "device-9"
+
+
+@pytest.mark.asyncio
+async def test_step_started_does_not_write_running_row_for_nested_steps(
+    session_factory,
+):
+    """Nested steps reuse local indexes — writing them would clobber row 0."""
+    from db.crud.execution_steps import get_execution_step
+
+    exec_id = await _seed_campaign_execution(session_factory)
+    async with session_factory() as db:
+        with tenant_context("org-1"):
+            await emit_step_started(
+                db,
+                execution_id=exec_id,
+                org_id="org-1",
+                campaign_id="camp-1",
+                step={"type": "tap", "id": "child"},
+                step_index=0,
+                depth=1,
+            )
+        await db.commit()
+
+    async with session_factory() as db:
+        assert await get_execution_step(db, exec_id, 0) is None
+
+
+@pytest.mark.asyncio
 async def test_step_retried_events(session_factory):
     exec_id = await _seed_campaign_execution(session_factory)
     trace_context = {

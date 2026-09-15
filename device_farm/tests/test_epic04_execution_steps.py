@@ -16,6 +16,40 @@ from services.execution.step_store import (
 from services.campaign.dlq_service import _artifact_refs_from_steps
 
 
+def test_payload_duration_ms_falls_back_to_step_result():
+    """Finalize/checkpoint path never passes the kwarg — take it from the result."""
+    payload = build_execution_step_payload(
+        "exec-1",
+        {"type": "tap", "id": "s1"},
+        {"index": 0, "type": "tap", "ok": True, "duration_ms": 412.5},
+    )
+    assert payload["duration_ms"] == 412.5
+
+
+def test_payload_duration_ms_falls_back_to_temporal_details_envelope():
+    payload = build_execution_step_payload(
+        "exec-1",
+        {"type": "tap", "id": "s1"},
+        {
+            "index": 0,
+            "type": "tap",
+            "ok": True,
+            "details": {"duration_ms": 900.0, "activity_duration_ms": 950.0},
+        },
+    )
+    assert payload["duration_ms"] == 900.0
+
+
+def test_payload_duration_ms_kwarg_wins_over_step_result():
+    payload = build_execution_step_payload(
+        "exec-1",
+        {"type": "tap", "id": "s1"},
+        {"index": 0, "type": "tap", "ok": True, "duration_ms": 412.5},
+        duration_ms=10.0,
+    )
+    assert payload["duration_ms"] == 10.0
+
+
 def test_extract_artifacts_json_from_workflow_details():
     workflow_entry = {
         "index": 1,

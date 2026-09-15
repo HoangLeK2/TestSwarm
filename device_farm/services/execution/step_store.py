@@ -164,7 +164,10 @@ def build_execution_step_payload(
         "status": _step_status(flat),
         "started_at": started_at,
         "ended_at": ended_at,
-        "duration_ms": duration_ms,
+        # The finalize/checkpoint path builds payloads from step_result alone and
+        # never passes the kwarg, so duration_ms sat NULL for every Temporal run.
+        # The value is already in the (flattened) result.
+        "duration_ms": duration_ms if duration_ms is not None else flat.get("duration_ms"),
         "error_json": error_json,
         "effective_config_json": effective_config,
         "attempts_json": list(flat.get("retry_attempts") or []),
@@ -228,6 +231,60 @@ async def _device_id_for_serial(db, serial: str | None) -> str | None:
     if device_id:
         _DEVICE_ID_BY_SERIAL[serial] = device_id
     return device_id
+
+
+def schedule_persist_step_start(
+    sc: "ScenarioContext",
+    step: dict[str, Any],
+    step_index: int,
+) -> None:
+    """Mark the step running before it executes, so a killed run leaves a trace."""
+    if sc.depth > 0 or not sc.execution_id:
+        return
+    loop = getattr(sc.device, "_loop", None)
+    if loop is None or loop.is_closed():
+        return
+
+    step_id = step.get("id") or step.get("_id")
+    payload = {
+        "execution_id": sc.execution_id,
+        "step_index": step_index,
+        "step_id": str(step_id) if step_id else None,
+        "step_type": step.get("type"),
+        "status": "running",
+        "started_at": datetime.now(timezone.utc),
+    }
+
+    async def _do() -> None:
+        try:
+            from db.crud.execution_steps import upsert_execution_step
+            from db.database import activity_session
+
+            async with activity_session() as db:
+                # Cached after the first step, so this is one SELECT per run —
+                # and it is what makes a killed run's last row name its phone.
+                device_id = await _device_id_for_serial(db, sc.serial)
+                if device_id:
+                    payload["device_id"] = device_id
+                await upsert_execution_step(db, **payload)
+                await db.commit()
+        except Exception as exc:
+            log.debug("execution_step running write failed (non-fatal): %s", exc)
+
+    try:
+        fut = asyncio.run_coroutine_threadsafe(_do(), loop)
+        fut.add_done_callback(
+            lambda f: log.warning(
+                "execution_step running future failed exec_id=%s step=%s: %s",
+                sc.execution_id,
+                step_index,
+                f.exception(),
+            )
+            if f.exception() is not None
+            else None
+        )
+    except Exception as exc:
+        log.debug("execution_step running schedule failed (non-fatal): %s", exc)
 
 
 def schedule_persist_step(

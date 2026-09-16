@@ -1489,6 +1489,7 @@ function VirtualizedFlowEditor({
                           : undefined
                       }
                       variablePreviewValues={variablePreviewValues}
+                      campaignScenarios={campaignScenarios}
                       variableLineage={variableLineageByPathKey.get(
                         pathKey(row.path)
                       )}
@@ -1978,6 +1979,7 @@ function FlowEditorRow({
                 : undefined
             }
             variablePreviewValues={variablePreviewValues}
+            campaignScenarios={campaignScenarios}
             variableLineage={variableLineageByPathKey.get(
               pathKey([{ listKey: 'steps', ci: index }])
             )}

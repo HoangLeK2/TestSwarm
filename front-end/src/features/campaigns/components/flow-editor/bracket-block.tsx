@@ -32,6 +32,7 @@ import { BRACKET_COLORS } from './constants';
 import { useCampaignFlowI18n } from './flow-i18n';
 import { StepIcon } from './step-icon';
 import { StepCard } from './step-card';
+import { resolveRunScenarioDisplayRef } from './run-scenario-card-label';
 import { InsertGap } from './insert-button';
 import {
   StepDetailPanel,
@@ -561,6 +562,7 @@ function ChildStepList({
                             ? () => onToggleCoordinatePick(childSwipeCoord)
                             : undefined
                         }
+                        campaignScenarios={campaignScenarios}
                         variableLineage={childLineage(
                           variableLineageByPathKey,
                           lineageParentPath,
@@ -747,8 +749,11 @@ export function BracketBlock({
         name: getVariableDisplayName(step.name)
       });
     }
+    if (step.type === 'run_scenario') {
+      return resolveRunScenarioDisplayRef(step, { campaignScenarios });
+    }
     return getStepSummary(step);
-  }, [step, tFlow, getVariableDisplayName, getStepSummary]);
+  }, [step, tFlow, getVariableDisplayName, getStepSummary, campaignScenarios]);
 
   const ifElementCondition = useMemo(() => {
     if (step.type !== 'if_element') return null;
@@ -1368,7 +1373,9 @@ export function BracketBlock({
                 {step.scenario_name || step.scenario_id ? (
                   <>
                     {tFlow('runScenario.inlineCalls', {
-                      ref: String(step.scenario_name || step.scenario_id)
+                      ref: resolveRunScenarioDisplayRef(step, {
+                        campaignScenarios
+                      })
                     })}
                   </>
                 ) : (

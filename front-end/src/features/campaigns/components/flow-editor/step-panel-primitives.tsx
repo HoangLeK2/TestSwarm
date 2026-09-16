@@ -17,10 +17,13 @@ import { Switch } from '@/components/ui/switch';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { useOrgScenarios } from '@/features/org-scenarios/hooks/use-org-scenarios';
 import type { FlowStep } from '../scenario-steps/types';
+import type { RunScenarioCampaignOption } from '../scenario-steps/run-scenario-options';
 import { formatStepLabelForCard } from './constants';
 import { useCampaignFlowI18n } from './flow-i18n';
 import { StepIcon } from './step-icon';
+import { resolveRunScenarioDisplayRef } from './run-scenario-card-label';
 import {
   resolveVariablePreviewText,
   type VariablePreviewValues
@@ -248,16 +251,32 @@ export function StepPanelToggle({
 
 export function StepPanelHeader({
   step,
-  variablePreviewValues
+  variablePreviewValues,
+  campaignScenarios = []
 }: {
   step: FlowStep;
   variablePreviewValues?: VariablePreviewValues;
+  campaignScenarios?: RunScenarioCampaignOption[];
 }) {
   const { getStepTypeName, getStepSummary } = useCampaignFlowI18n();
   const typeName = formatStepLabelForCard(getStepTypeName(step.type));
   const userTitle = String((step as { title?: string }).title ?? '').trim();
+  const runScenarioId =
+    step.type === 'run_scenario'
+      ? String((step as { scenario_id?: unknown }).scenario_id || '').trim()
+      : '';
+  const { data: orgScenarios } = useOrgScenarios({
+    enabled: step.type === 'run_scenario' && !!runScenarioId
+  });
+  const rawSummary =
+    step.type === 'run_scenario'
+      ? resolveRunScenarioDisplayRef(step, {
+          campaignScenarios,
+          orgScenarios
+        })
+      : getStepSummary(step);
   const summary = resolveVariablePreviewText(
-    getStepSummary(step),
+    rawSummary,
     variablePreviewValues
   ).trim();
 

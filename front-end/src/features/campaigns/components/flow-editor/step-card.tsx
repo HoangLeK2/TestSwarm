@@ -33,7 +33,8 @@ import {
 import { analyzeStepConfiguration } from '../../lib/step-configuration-status';
 import type { StepVariableLineage } from '../../lib/step-variable-lineage';
 import { scenarioLintIssueSeverity } from '../../lib/scenario-lint-preflight';
-import { resolveRunScenarioCardRef } from './run-scenario-card-label';
+import { resolveRunScenarioDisplayRef } from './run-scenario-card-label';
+import type { RunScenarioCampaignOption } from '../scenario-steps/run-scenario-options';
 
 /** Build an <img> src from a stored image value (base64, object-storage URL, or local /captures/ path). */
 function stepImageSrc(val: string): string {
@@ -98,6 +99,7 @@ interface Props {
   };
   variablePreviewValues?: VariablePreviewValues;
   variableLineage?: StepVariableLineage;
+  campaignScenarios?: RunScenarioCampaignOption[];
 }
 
 export function StepCard({
@@ -116,7 +118,8 @@ export function StepCard({
   onTogglePickSwipeCoords,
   reorderControls,
   variablePreviewValues,
-  variableLineage
+  variableLineage,
+  campaignScenarios = []
 }: Props) {
   const tFlow = useTranslations('campaignsFeature.flowBracket');
   const tField = useTranslations('campaignsFeature.stepEditor.stepFields');
@@ -145,13 +148,16 @@ export function StepCard({
   });
   const runScenarioRef =
     step.type === 'run_scenario'
-      ? resolveRunScenarioCardRef(step, orgScenarios)
+      ? resolveRunScenarioDisplayRef(step, { campaignScenarios, orgScenarios })
       : '';
   const runScenarioEmptyHint =
     step.type === 'run_scenario' && !title && !runScenarioRef
       ? tFlow('runScenario.cardPickHint')
       : '';
-  const secondRowMain = title || target || runScenarioEmptyHint;
+  const secondRowMain =
+    title ||
+    (step.type === 'run_scenario' ? runScenarioRef : target) ||
+    runScenarioEmptyHint;
   const configurationStatus = analyzeStepConfiguration(step);
   const configurationIssueCount = configurationStatus.issues.length;
   const variableIssueCount = variableLineage?.issues.length ?? 0;

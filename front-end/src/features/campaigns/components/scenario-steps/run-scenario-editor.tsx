@@ -8,19 +8,18 @@ import { VariableEditor } from '@/components/variable-editor';
 import type { FlowStep } from './types';
 import { getStepIcon } from './types';
 import { useTranslations } from 'next-intl';
+import {
+  buildRunScenarioOptions,
+  findSelectedRunScenario,
+  runScenarioPatchFor,
+  type RunScenarioCampaignOption,
+  type RunScenarioFieldPatch
+} from './run-scenario-options';
 
-export type RunScenarioCampaignOption = {
-  id: string;
-  name: string;
-  steps?: any[];
-};
-
-/** Single merge — required so parent does not drop fields when two updates use the same stale `step` (e.g. template pick). */
-export type RunScenarioFieldPatch = Partial<{
-  scenario_id: string | undefined;
-  scenario_name: string | undefined;
-  variables: Record<string, any>;
-}>;
+export type {
+  RunScenarioCampaignOption,
+  RunScenarioFieldPatch
+} from './run-scenario-options';
 
 type Props = {
   step: FlowStep;
@@ -54,45 +53,21 @@ export function RunScenarioFields({
 
   const libraryScenarios = (orgScenarios ?? []).filter((s) => s.is_runnable);
 
-  const allOptions: {
-    id: string;
-    name: string;
-    source: string;
-    steps?: any[];
-    variables?: Record<string, any>;
-  }[] = [
-    ...campaignScenarios.map((s) => ({
-      ...s,
-      source: 'campaign',
-      variables: {} as Record<string, any>
-    })),
-    ...libraryScenarios.map((s) => ({
-      id: s.id,
-      name: s.name,
-      source: 'library',
-      variables: {} as Record<string, any>
-    })),
-    ...(templates ?? []).map((t) => ({
-      id: t.id,
-      name: t.name,
-      source: t.category,
-      steps: t.steps,
-      variables: t.variables
-    }))
-  ];
+  const allOptions = buildRunScenarioOptions({
+    campaignScenarios,
+    libraryScenarios,
+    templates: templates ?? []
+  });
 
-  const selected = allOptions.find(
-    (o) => o.name === step.scenario_name || o.id === step.scenario_id
-  );
+  const selected = findSelectedRunScenario(allOptions, {
+    scenarioId: step.scenario_id,
+    scenarioName: step.scenario_name
+  });
 
   const handleSelect = (value: string) => {
     const option = allOptions.find((o) => o.id === value);
     if (!option) return;
-    if (option.source === 'campaign' || option.source === 'library') {
-      onPatch({ scenario_id: option.id, scenario_name: undefined });
-    } else {
-      onPatch({ scenario_name: option.name, scenario_id: undefined });
-    }
+    onPatch(runScenarioPatchFor(option));
   };
 
   const panel = layout === 'panel';

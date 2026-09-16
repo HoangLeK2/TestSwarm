@@ -2593,7 +2593,7 @@
         "weightLine": "Trọng số {weight}"
       },
       "runScenario": {
-        "cardPickHint": "Chưa chọn — bấm để chọn template hoặc kịch bản khác trong campaign.",
+        "cardPickHint": "Chưa chọn — bấm để chọn kịch bản trong thư viện workspace, trong campaign, hoặc template.",
         "inlineCalls": "Gọi: {ref}",
         "inlineNotSet": "Chưa chọn kịch bản con"
       }
@@ -2985,7 +2985,7 @@
         "builtinHint": "Biến hệ thống (chèn từ menu \"Chèn biến\"):"
       },
       "runScenario": {
-        "intro": "Chọn mẫu dùng chung (template) hoặc một kịch bản khác trong cùng campaign. Khi chạy, hệ thống ưu tiên theo ID kịch bản (bản ghi campaign), sau đó theo tên — nếu trùng tên, kịch bản trong campaign được ưu tiên hơn template."
+        "intro": "Chọn kịch bản trong thư viện workspace (khuyến nghị), một kịch bản khác trong cùng campaign, hoặc mẫu dùng chung. Khi chạy, hệ thống ưu tiên theo ID kịch bản, sau đó theo tên — mẫu dùng chung chỉ resolve theo tên và không dùng được cho campaign đã chạy theo thư viện workspace."
       },
       "leaseTarget": {
         "sourceHint": "Mỗi lần chạy lấy một mục tiêu chưa được account này xử lý; các execution đồng thời không lấy trùng.",
@@ -4086,6 +4086,7 @@
         "scenarioLabel": "kịch bản:",
         "selectScenario": "-- chọn kịch bản --",
         "campaignScenarios": "Kịch bản trong Campaign",
+        "workspaceLibrary": "Thư viện kịch bản Workspace",
         "sharedTemplates": "Mẫu dùng chung",
         "orNameLabel": "hoặc tên:",
         "scenarioNamePlaceholder": "ten_kich_ban",

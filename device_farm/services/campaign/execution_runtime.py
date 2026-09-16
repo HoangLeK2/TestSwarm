@@ -189,23 +189,47 @@ async def build_org_scenario_registry(
     if not scenario_refs:
         return registry
 
-    scenario_ids = [str(ref["scenario_id"]) for ref in scenario_refs]
-    bodies = await org_scenario_repo.get_org_scenario_bodies_by_ids(db, org_id, scenario_ids)
-    names = await org_scenario_repo.get_org_scenario_names_by_ids(db, org_id, scenario_ids)
+    # The pinned refs are only the campaign's top level. A `run_scenario` step
+    # inside one of them points at another library scenario that was never
+    # loaded, so the runtime resolved nothing and failed with "sub-scenario not
+    # found". Walk the refs transitively, same batching + depth bound as
+    # org_scenario_validation.build_org_ref_cache.
+    from services.scenario_dsl.body_validator import get_org_nesting_depth_limit
+    from services.scenario_dsl.ref_cache import extract_run_scenario_id
+    from services.scenario_dsl.step_tree import iter_authored_steps
 
-    for scenario_id, _kind, body in bodies:
-        payload = body if isinstance(body, dict) else {}
-        name = names.get(scenario_id, scenario_id)
-        entry = {
-            "steps": payload.get("steps") or [],
-            "variables": dict(payload.get("variables") or {}),
-            "name": name,
-            "requirements": dict(payload.get("requirements") or {}),
-            "platform": payload.get("platform"),
-            "tags": str(payload.get("tags") or ""),
-        }
-        registry["by_id"][scenario_id] = entry
-        registry["by_campaign_name"][name] = entry
+    depth_limit = get_org_nesting_depth_limit(org_id)
+    pending = list(dict.fromkeys(str(ref["scenario_id"]) for ref in scenario_refs))
+    loaded: set[str] = set()
+
+    for _ in range(depth_limit + 1):
+        batch = [sid for sid in pending if sid not in loaded]
+        if not batch:
+            break
+        bodies = await org_scenario_repo.get_org_scenario_bodies_by_ids(db, org_id, batch)
+        names = await org_scenario_repo.get_org_scenario_names_by_ids(db, org_id, batch)
+        loaded.update(batch)
+        pending = []
+
+        for scenario_id, _kind, body in bodies:
+            payload = body if isinstance(body, dict) else {}
+            name = names.get(scenario_id, scenario_id)
+            entry = {
+                "steps": payload.get("steps") or [],
+                "variables": dict(payload.get("variables") or {}),
+                "name": name,
+                "requirements": dict(payload.get("requirements") or {}),
+                "platform": payload.get("platform"),
+                "tags": str(payload.get("tags") or ""),
+            }
+            registry["by_id"][scenario_id] = entry
+            registry["by_campaign_name"][name] = entry
+            # Nested, not just top level: a run_scenario can sit inside a loop
+            # or an if branch, so walk the whole authored tree.
+            for authored in iter_authored_steps(entry["steps"]):
+                ref_id = extract_run_scenario_id(authored.step)
+                if ref_id and ref_id not in loaded:
+                    pending.append(ref_id)
     return registry
 
 

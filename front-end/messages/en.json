@@ -2591,7 +2591,7 @@
         "weightLine": "Weight {weight}"
       },
       "runScenario": {
-        "cardPickHint": "No target — click and pick a template or another campaign scenario.",
+        "cardPickHint": "No target — click and pick a scenario from the workspace library, this campaign, or a template.",
         "inlineCalls": "Calls: {ref}",
         "inlineNotSet": "No sub-scenario selected"
       }
@@ -2983,7 +2983,7 @@
         "builtinHint": "Built-ins (use insert menu):"
       },
       "runScenario": {
-        "intro": "Pick a shared template or another scenario from this campaign. At runtime the worker resolves by scenario ID (campaign row) first, then by name (campaign name beats template name if both match)."
+        "intro": "Pick a scenario from the workspace library (recommended), another scenario in this campaign, or a shared template. At runtime the worker resolves by scenario ID first, then by name — shared templates resolve by name only and are not available to campaigns that use the workspace library."
       },
       "leaseTarget": {
         "sourceHint": "Each run takes one target this account has not processed; concurrent executions cannot reserve the same target.",
@@ -4082,6 +4082,7 @@
         "scenarioLabel": "scenario:",
         "selectScenario": "-- select scenario --",
         "campaignScenarios": "Campaign Scenarios",
+        "workspaceLibrary": "Workspace Scenario Library",
         "sharedTemplates": "Shared Templates",
         "orNameLabel": "or name:",
         "scenarioNamePlaceholder": "scenario_name",

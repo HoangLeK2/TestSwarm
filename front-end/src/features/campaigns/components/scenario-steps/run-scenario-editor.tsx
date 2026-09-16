@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-scenario-templates';
+import { useOrgScenarios } from '@/features/org-scenarios/hooks/use-org-scenarios';
 import { VariableEditor } from '@/components/variable-editor';
 import type { FlowStep } from './types';
 import { getStepIcon } from './types';
@@ -44,7 +45,14 @@ export function RunScenarioFields({
 }: Props) {
   const t = useTranslations('campaignsFeature.scenarioStepsInline.runScenario');
   const { data: templates } = useScenarioTemplates();
+  // The workspace scenario library is what the runtime registry and org
+  // scenario validation resolve `scenario_id` against — it has to be in the
+  // picker, and it goes first. System templates only resolve by name on the
+  // legacy campaign path, so they stay as the last group.
+  const { data: orgScenarios } = useOrgScenarios();
   const [showPreview, setShowPreview] = useState(false);
+
+  const libraryScenarios = (orgScenarios ?? []).filter((s) => s.is_runnable);
 
   const allOptions: {
     id: string;
@@ -56,6 +64,12 @@ export function RunScenarioFields({
     ...campaignScenarios.map((s) => ({
       ...s,
       source: 'campaign',
+      variables: {} as Record<string, any>
+    })),
+    ...libraryScenarios.map((s) => ({
+      id: s.id,
+      name: s.name,
+      source: 'library',
       variables: {} as Record<string, any>
     })),
     ...(templates ?? []).map((t) => ({
@@ -74,7 +88,7 @@ export function RunScenarioFields({
   const handleSelect = (value: string) => {
     const option = allOptions.find((o) => o.id === value);
     if (!option) return;
-    if (option.source === 'campaign') {
+    if (option.source === 'campaign' || option.source === 'library') {
       onPatch({ scenario_id: option.id, scenario_name: undefined });
     } else {
       onPatch({ scenario_name: option.name, scenario_id: undefined });
@@ -113,6 +127,15 @@ export function RunScenarioFields({
           {campaignScenarios.length > 0 && (
             <optgroup label={t('campaignScenarios')}>
               {campaignScenarios.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {libraryScenarios.length > 0 && (
+            <optgroup label={t('workspaceLibrary')}>
+              {libraryScenarios.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
                 </option>

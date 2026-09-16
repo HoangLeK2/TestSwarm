@@ -20,7 +20,10 @@ def steps_from_body(kind: str, body: dict[str, Any] | None) -> list[dict[str, An
 
 
 def extract_run_scenario_id(step: dict[str, Any]) -> str | None:
-    if str(step.get("type") or "") != COMPOSITION_RUN_SCENARIO:
+    # Both spellings are the same step: the DSL family name and the bare type
+    # the flow editor and the runtime registry use. Matching only the family
+    # name made every authored `run_scenario` invisible to ref collection.
+    if str(step.get("type") or "") not in (COMPOSITION_RUN_SCENARIO, "run_scenario"):
         return None
     config = step.get("config") if isinstance(step.get("config"), dict) else step
     ref_id = str(config.get("scenario_id") or "").strip()

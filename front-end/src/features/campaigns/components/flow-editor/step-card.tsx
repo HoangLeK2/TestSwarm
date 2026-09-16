@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
+import { useOrgScenarios } from '@/features/org-scenarios/hooks/use-org-scenarios';
 import type { FlowStep } from '../scenario-steps/types';
 import {
   STEP_COLORS,
@@ -32,6 +33,7 @@ import {
 import { analyzeStepConfiguration } from '../../lib/step-configuration-status';
 import type { StepVariableLineage } from '../../lib/step-variable-lineage';
 import { scenarioLintIssueSeverity } from '../../lib/scenario-lint-preflight';
+import { resolveRunScenarioCardRef } from './run-scenario-card-label';
 
 /** Build an <img> src from a stored image value (base64, object-storage URL, or local /captures/ path). */
 function stepImageSrc(val: string): string {
@@ -134,11 +136,16 @@ export function StepCard({
   const title = (step.title as string | undefined)?.trim() || undefined;
   const description =
     (step.description as string | undefined)?.trim() || undefined;
+  const runScenarioId =
+    step.type === 'run_scenario'
+      ? String((step as any).scenario_id || '').trim()
+      : '';
+  const { data: orgScenarios } = useOrgScenarios({
+    enabled: step.type === 'run_scenario' && !!runScenarioId
+  });
   const runScenarioRef =
     step.type === 'run_scenario'
-      ? String(
-          (step as any).scenario_name || (step as any).scenario_id || ''
-        ).trim()
+      ? resolveRunScenarioCardRef(step, orgScenarios)
       : '';
   const runScenarioEmptyHint =
     step.type === 'run_scenario' && !title && !runScenarioRef

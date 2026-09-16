@@ -145,6 +145,84 @@ async def test_preview_routes_reject_unsupported_nodes_before_running(path: str)
 
 
 @pytest.mark.anyio
+async def test_preview_stream_passes_org_scenario_registry_for_run_scenario(monkeypatch):
+    from api.routes.device_control import scenarios as scenario_routes
+
+    registry = {
+        "by_id": {
+            "child-1": {
+                "steps": [{"id": "child-wait", "type": "wait", "seconds": 0}],
+                "variables": {},
+                "name": "child",
+            }
+        },
+        "by_campaign_name": {},
+        "by_template_name": {},
+    }
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        scenario_routes,
+        "caller_auth_from_request",
+        lambda _request: AuthContext(
+            user_id="user-1",
+            token_type="access",
+            raw_token="test",
+            org_id="org-1",
+        ),
+    )
+    monkeypatch.setattr(
+        scenario_routes,
+        "_apply_preview_variables",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        scenario_routes,
+        "_build_preview_scenario_registry",
+        AsyncMock(return_value=registry),
+    )
+
+    def fake_run_scenario_on_device(*_args, **kwargs):
+        captured["scenario_registry"] = kwargs.get("scenario_registry")
+        on_step_done = kwargs.get("on_step_done")
+        result = {
+            "index": 0,
+            "type": "run_scenario",
+            "ok": True,
+            "message": "run_scenario: child-1 completed",
+        }
+        if on_step_done:
+            on_step_done(result)
+        return {
+            "serial": "dev-1",
+            "success": True,
+            "steps_executed": 1,
+            "step_results": [result],
+            "failed_message": "",
+            "context": {},
+        }
+
+    monkeypatch.setattr(
+        scenario_routes,
+        "run_scenario_on_device",
+        fake_run_scenario_on_device,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=_scenario_app(_FakeDevice())),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/api/devices/dev-1/scenario/preview-stream",
+            json={"steps": [{"type": "run_scenario", "scenario_id": "child-1"}]},
+        )
+
+    assert response.status_code == 200
+    assert captured["scenario_registry"] is registry
+    assert '"event": "done"' in response.text
+
+
+@pytest.mark.anyio
 async def test_account_login_preview_stream_creates_account_execution_history(
     tenancy_session_factory,
     monkeypatch,

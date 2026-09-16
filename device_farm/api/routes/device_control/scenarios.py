@@ -107,6 +107,7 @@ def run_scenario_on_device(
     user_id: Optional[str] = None,
     execution_id: Optional[str] = None,
     cancel_event: Optional["threading.Event"] = None,
+    scenario_registry: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     from tasks.scenario_task import run_scenario_task
 
@@ -129,6 +130,8 @@ def run_scenario_on_device(
         scenario["execution_id"] = execution_id
         scenario["run_id"] = execution_id
         scenario["_run_hash_scope"] = execution_id
+    if scenario_registry:
+        scenario["_scenario_registry"] = scenario_registry
     account_id = str((variables or {}).get("__ACCOUNT_ID__") or "").strip()
     if account_id:
         scenario["account_id"] = account_id
@@ -613,12 +616,52 @@ async def _apply_preview_variables(
         body.variables = {**base_vars, **acct_vars}
 
 
+def _collect_preview_scenario_refs(
+    steps: List[Dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Collect org-scenario ids referenced by ad-hoc preview payloads."""
+    from services.scenario_dsl.ref_cache import extract_run_scenario_id
+    from services.scenario_dsl.step_tree import iter_authored_steps
+
+    refs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for authored in iter_authored_steps(steps):
+        ref_id = extract_run_scenario_id(authored.step)
+        if not ref_id or ref_id in seen:
+            continue
+        seen.add(ref_id)
+        refs.append({"scenario_id": ref_id})
+    return refs
+
+
+async def _build_preview_scenario_registry(
+    body: ScenarioPreviewRequest,
+    org_id: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Load nested org scenarios so preview-stream can run run_scenario steps."""
+    if not org_id:
+        return None
+    refs = _collect_preview_scenario_refs(body.steps)
+    if not refs:
+        return None
+    try:
+        from services.campaign.execution_runtime import build_org_scenario_registry
+
+        async with AsyncSessionLocal() as db:
+            with use_tenant_scope(org_id):
+                return await build_org_scenario_registry(db, org_id, refs)
+    except Exception as exc:
+        log.warning("preview scenario registry resolve failed: %s", exc)
+        return None
+
+
 async def _execute_scenario_body(
     manager: DeviceManager,
     serial: str,
     body: ScenarioPreviewRequest,
     trace_source: str = "api.preview",
     user_id: Optional[str] = None,
+    org_id: Optional[str] = None,
 ):
     if not body.steps:
         return JSONResponse(
@@ -632,6 +675,9 @@ async def _execute_scenario_body(
         "steps": body.steps,
         "variables": body.variables or {},
     }
+    scenario_registry = await _build_preview_scenario_registry(body, org_id)
+    if scenario_registry:
+        scenario["_scenario_registry"] = scenario_registry
     preflight_response = _scenario_node_preflight_response(device, scenario)
     if preflight_response is not None:
         return preflight_response
@@ -655,6 +701,7 @@ async def _execute_scenario_body(
         trace_id,
         trace_source,
         user_id,
+        scenario_registry=scenario_registry,
     )
     result = await loop.run_in_executor(None, fn)
     if "error" in result:
@@ -683,7 +730,12 @@ def build_scenarios_router(
             auth_ctx.org_id if auth_ctx else None,
         )
         return await _execute_scenario_body(
-            manager, serial, body, trace_source="api.preview", user_id=user_id
+            manager,
+            serial,
+            body,
+            trace_source="api.preview",
+            user_id=user_id,
+            org_id=auth_ctx.org_id if auth_ctx else None,
         )
 
     @router.post("/devices/{serial}/scenario/preview-stream")
@@ -715,11 +767,20 @@ def build_scenarios_router(
             user_id,
             auth_ctx.org_id if auth_ctx else None,
         )
+        scenario_registry = await _build_preview_scenario_registry(
+            body,
+            auth_ctx.org_id if auth_ctx else None,
+        )
         preflight_response = _scenario_node_preflight_response(
             device,
             {
                 "steps": body.steps,
                 "variables": body.variables or {},
+                **(
+                    {"_scenario_registry": scenario_registry}
+                    if scenario_registry
+                    else {}
+                ),
             },
         )
         if preflight_response is not None:
@@ -778,6 +839,7 @@ def build_scenarios_router(
                         execution_ctx["execution_id"] if execution_ctx else None
                     ),
                     cancel_event=cancel_event,
+                    scenario_registry=scenario_registry,
                 )
                 finalize(final)
                 q.put({"_event": "done", **final})
@@ -877,7 +939,12 @@ def build_scenarios_router(
             auth_ctx.org_id if auth_ctx else None,
         )
         return await _execute_scenario_body(
-            manager, serial, body, trace_source="api.run", user_id=user_id
+            manager,
+            serial,
+            body,
+            trace_source="api.run",
+            user_id=user_id,
+            org_id=auth_ctx.org_id if auth_ctx else None,
         )
 
     @router.post("/sessions/{session_id}/scenario/run")
@@ -919,6 +986,7 @@ def build_scenarios_router(
             total_steps=len(body.steps),
             session_id=session_id,
         )
+        scenario_registry = await _build_preview_scenario_registry(body, ctx.org_id)
         fn = functools.partial(
             run_scenario_on_device,
             manager,
@@ -929,6 +997,7 @@ def build_scenarios_router(
             trace_id,
             "api.session_run",
             caller_id,
+            scenario_registry=scenario_registry,
         )
         result = await loop.run_in_executor(None, fn)
         if "error" in result:

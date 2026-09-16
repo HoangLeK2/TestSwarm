@@ -54,13 +54,14 @@ function toNodes(bucket: Bucket): StepLogNode[] {
       anchor.set(entry.step_id, entry.index);
     }
   }
-  const rows: { order: number; iter: number; node: StepLogNode }[] = [
-    ...bucket.steps.map((entry) => ({
+  const rows: { order: number; iter: number; node: StepLogNode }[] =
+    bucket.steps.map((entry) => ({
       order: entry.index,
       iter: -1,
       node: { kind: 'step', entry } as StepLogNode
-    })),
-    ...[...bucket.iters.entries()].map(([key, group]) => ({
+    }));
+  bucket.iters.forEach((group, key) => {
+    rows.push({
       order: anchor.get(group.loopId) ?? Number.MAX_SAFE_INTEGER,
       iter: group.iter,
       node: {
@@ -70,8 +71,8 @@ function toNodes(bucket: Bucket): StepLogNode[] {
         iter: group.iter,
         children: toNodes(group.bucket)
       } as StepLogNode
-    }))
-  ];
+    });
+  });
   rows.sort((a, b) => a.order - b.order || a.iter - b.iter);
   return rows.map((row) => row.node);
 }

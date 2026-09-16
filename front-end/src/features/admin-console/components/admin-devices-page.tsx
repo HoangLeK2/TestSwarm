@@ -190,10 +190,11 @@ export function AdminDevicesPage() {
                   <TableHead>{t('table.state')}</TableHead>
                   <TableHead>{t('table.relay')}</TableHead>
                   <TableHead>{t('table.lastSeen')}</TableHead>
+                  <TableHead className='text-right'>{t('table.actions')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {devices.isLoading ? <AdminTableSkeleton columns={7} /> : null}
+                {devices.isLoading ? <AdminTableSkeleton columns={8} /> : null}
                 {devices.data?.items.map((device) => (
                   <TableRow key={device.id}>
                     <TableCell>
@@ -227,12 +228,28 @@ export function AdminDevicesPage() {
                     <TableCell className='text-sm text-muted-foreground'>
                       {dateLabel(device.last_seen)}
                     </TableCell>
+                    <TableCell className='text-right'>
+                      <Button
+                        type='button'
+                        size='sm'
+                        variant='outline'
+                        disabled={!device.transferable}
+                        title={
+                          device.transferable
+                            ? t('actions.transfer')
+                            : t('actions.notTransferable')
+                        }
+                        onClick={() => setTransferDevice(device)}
+                      >
+                        {t('actions.transfer')}
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))}
                 {!devices.isLoading && devices.data?.items.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={7}
+                      colSpan={8}
                       className='h-28 text-center text-sm text-muted-foreground'
                     >
                       {t('empty')}

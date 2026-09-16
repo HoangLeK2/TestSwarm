@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 _LEGACY_STATUS_ALIASES = {"disabled": "suspended", "cooldown": "active"}
 _VALID_STATUSES = {
     "unassigned",
+    "assigned",
     "active",
     "banned",
     "suspended",

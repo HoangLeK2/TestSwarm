@@ -63,12 +63,21 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-async def _mark_account_active_for_session(
+async def _sync_account_state_for_session(
     db: AsyncSession,
     *,
     account_id: str,
+    to: AccountState,
     reason: str,
 ) -> None:
+    """Move the account between ``assigned`` and ``active`` with its session.
+
+    ``active`` means "a verified session exists", nothing weaker — linking a
+    device only gets an account as far as ``assigned`` (db.crud.account). So
+    both directions run from the session: ``mark_active`` promotes, losing the
+    session demotes. Operator-set and terminal states (``suspended``,
+    ``banned``, ``retired``) are never touched here.
+    """
     result = await db.execute(
         select(Account).where(Account.id == account_id).limit(1)
     )
@@ -79,27 +88,60 @@ async def _mark_account_active_for_session(
     try:
         current = normalize_state(account.state or account.status)
     except ValueError as exc:
-        log.warning("account %s session active sync skipped: %s", account_id, exc)
+        log.warning("account %s session state sync skipped: %s", account_id, exc)
         return
-    if current == AccountState.ACTIVE:
+    if current == to:
+        return
+    if to == AccountState.ASSIGNED and current != AccountState.ACTIVE:
+        # Only a logged-in account falls back; a suspended or unassigned one
+        # has a reason for its state that a dead session does not override.
         return
 
+    svc = AccountStateService()
     try:
-        await AccountStateService().transition(
+        if to == AccountState.ACTIVE and current == AccountState.UNASSIGNED:
+            # A session on a device the link table never recorded still means
+            # the account sits on that device — walk the ladder, don't skip it.
+            await svc.transition(
+                db,
+                account_id,
+                to=AccountState.ASSIGNED,
+                reason=reason,
+                actor="system",
+                skip_row_lock=True,
+            )
+        await svc.transition(
             db,
             account_id,
-            to=AccountState.ACTIVE,
+            to=to,
             reason=reason,
             actor="system",
             skip_row_lock=True,
         )
     except AccountStateError as exc:
         log.warning(
-            "account %s session active sync failed from %s: %s",
+            "account %s session state sync to %s failed from %s: %s",
             account_id,
+            to.value,
             current.value,
             exc,
         )
+
+
+async def _demote_account_for_lost_session(
+    db: AsyncSession,
+    account_id: str | None,
+    reason: str,
+) -> None:
+    """Drop the account the session was holding back to ``assigned``."""
+    if not account_id:
+        return
+    await _sync_account_state_for_session(
+        db,
+        account_id=str(account_id),
+        to=AccountState.ASSIGNED,
+        reason=reason,
+    )
 
 
 def sanitize_session_evidence(value: Any, *, depth: int = 0) -> Any:
@@ -214,6 +256,7 @@ async def mark_login_required(
 ) -> DevicePlatformSession:
     row = await get_or_create_platform_session(db, org_id=org_id, device_id=device_id, platform=platform)
     _check_expected_version(row, expected_version)
+    held_account_id = row.account_id
     row.account_id = None
     row.state = DevicePlatformSessionState.LOGIN_REQUIRED.value
     row.state_reason = reason
@@ -227,6 +270,7 @@ async def mark_login_required(
         }
     )
     _bump(row)
+    await _demote_account_for_lost_session(db, held_account_id, reason)
     await db.flush()
     return row
 
@@ -268,9 +312,10 @@ async def mark_active(
     row.display_name_observed = display_name_observed
     row.evidence = sanitize_session_evidence(evidence or {})
     _bump(row)
-    await _mark_account_active_for_session(
+    await _sync_account_state_for_session(
         db,
         account_id=account_id,
+        to=AccountState.ACTIVE,
         reason=reason,
     )
     await db.flush()
@@ -320,6 +365,13 @@ async def mark_readiness_observed(
     if state == DevicePlatformSessionState.ACTIVE:
         row.last_ready_at = now
         row.invalidated_at = None
+        if row.account_id:
+            await _sync_account_state_for_session(
+                db,
+                account_id=str(row.account_id),
+                to=AccountState.ACTIVE,
+                reason=reason,
+            )
     elif state in {
         DevicePlatformSessionState.LOGGED_OUT,
         DevicePlatformSessionState.LOGIN_REQUIRED,
@@ -329,6 +381,7 @@ async def mark_readiness_observed(
     }:
         row.last_ready_at = None
         row.invalidated_at = now
+        await _demote_account_for_lost_session(db, row.account_id, reason)
     row.evidence = sanitize_session_evidence(evidence or {})
     _bump(row)
     await db.flush()
@@ -412,6 +465,7 @@ async def invalidate_platform_session(
 ) -> DevicePlatformSession:
     row = await get_or_create_platform_session(db, org_id=org_id, device_id=device_id, platform=platform)
     _check_expected_version(row, expected_version)
+    held_account_id = row.account_id
     row.account_id = None
     row.state = DevicePlatformSessionState.LOGIN_REQUIRED.value
     row.state_reason = reason
@@ -421,6 +475,7 @@ async def invalidate_platform_session(
     row.establishment_method = None
     row.evidence = sanitize_session_evidence(evidence or {})
     _bump(row)
+    await _demote_account_for_lost_session(db, held_account_id, reason)
     await db.flush()
     return row
 

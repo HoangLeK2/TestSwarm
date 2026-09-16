@@ -14,6 +14,7 @@ from api.http_headers import content_disposition_attachment
 from api.org_scope import org_member_user_ids
 from api.schemas.preview import PreviewStartRequest, PreviewStartResponse
 from api.schemas.org_scenario import (
+    AccountLoginScenarioEnsureIn,
     OrgScenarioBodyIn,
     OrgScenarioBodyOut,
     OrgScenarioCloneTemplateIn,
@@ -52,12 +53,160 @@ from services.org_scenario_io.importer import (
     import_scenario_bytes,
     import_scenario_bytes_into_existing,
 )
-from services.org_scenario_io.service import clone_system_template, export_scenario_for_org
+from services.org_scenario_io.service import (
+    _template_body_json,
+    _template_kind,
+    _template_tags,
+    clone_system_template,
+    export_scenario_for_org,
+)
 from db.crud.scenario_template import list_templates as list_scenario_template_rows
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/scenarios", tags=["scenarios"])
+
+
+
+ACCOUNT_LOGIN_SYSTEM_TAG = "system-account-login"
+ACCOUNT_LOGIN_REQUIRED_TAGS = ("login", "account-login", "login-override")
+
+
+def _norm_tag(value: str | None) -> str:
+    return str(value or "").strip().lower()
+
+
+def _account_login_tags(platform: str, existing: list[str] | None = None) -> list[str]:
+    platform_tag = _norm_tag(platform)
+    tags = [
+        *(existing or []),
+        *ACCOUNT_LOGIN_REQUIRED_TAGS,
+        platform_tag,
+        f"login-platform:{platform_tag}",
+        ACCOUNT_LOGIN_SYSTEM_TAG,
+    ]
+    by_key: dict[str, str] = {}
+    for tag in tags:
+        clean = str(tag or "").strip()
+        if not clean:
+            continue
+        by_key.setdefault(_norm_tag(clean), clean)
+    return list(by_key.values())
+
+
+def _is_effective_account_login(view, platform: str) -> bool:
+    tags = {_norm_tag(tag) for tag in (view.tags or [])}
+    platform_tag = _norm_tag(platform)
+    has_platform = platform_tag in tags or f"login-platform:{platform_tag}" in tags
+    return (
+        view.status == "active"
+        and view.kind == "sequence"
+        and view.is_runnable
+        and has_platform
+        and ACCOUNT_LOGIN_SYSTEM_TAG in tags
+        and all(tag in tags for tag in ACCOUNT_LOGIN_REQUIRED_TAGS)
+    )
+
+
+def _template_matches_login(template, platform: str) -> bool:
+    tags = {_norm_tag(tag) for tag in _template_tags(template)}
+    platform_tag = _norm_tag(platform)
+    return "login" in tags and (
+        _norm_tag(getattr(template, "category", "")) == platform_tag
+        or platform_tag in tags
+        or f"login-platform:{platform_tag}" in tags
+    )
+
+
+def _account_login_name(template) -> str:
+    display = str(getattr(template, "display_name", "") or "").strip()
+    name = display or str(getattr(template, "name", "") or "").strip()
+    base = name or "Đăng nhập tài khoản"
+    return f"{base} (Account Login)"
+
+
+async def _create_system_account_login_scenario(
+    db: DB,
+    *,
+    org_id: str,
+    platform: str,
+    user: CurrentUser,
+):
+    user_ids = await org_member_user_ids(db, org_id)
+    templates = await list_scenario_template_rows(
+        db,
+        category=_norm_tag(platform),
+        tags="login",
+        user_ids=user_ids,
+    )
+    template = next(
+        (row for row in templates if _template_matches_login(row, platform)),
+        None,
+    )
+    if template is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "LOGIN_TEMPLATE_NOT_FOUND"},
+        )
+
+    base_name = _account_login_name(template)
+    tags = _account_login_tags(platform, _template_tags(template))
+    last_error: OrgScenarioDuplicateNameError | None = None
+    for attempt in range(20):
+        name = base_name if attempt == 0 else f"{base_name} {attempt + 1}"
+        try:
+            created = await create_scenario(
+                db,
+                org_id=org_id,
+                name=name,
+                kind=_template_kind(template),
+                description=str(getattr(template, "description", "") or ""),
+                body_json=_template_body_json(template),
+                tags=tags,
+                created_by=None,
+            )
+            return await update_scenario(
+                db,
+                org_id=org_id,
+                scenario_id=created.id,
+                user_id=None,
+                status="active",
+                tags=tags,
+                is_superadmin=is_superadmin(user),
+            )
+        except OrgScenarioDuplicateNameError as exc:
+            last_error = exc
+            continue
+    if last_error is not None:
+        raise last_error
+    raise OrgScenarioDuplicateNameError(base_name)
+
+
+async def _ensure_system_account_login_scenario(
+    db: DB,
+    *,
+    org_id: str,
+    platform: str,
+    user: CurrentUser,
+):
+    views = await list_scenarios_for_org(
+        db,
+        org_id,
+        include_archived=False,
+        tag=ACCOUNT_LOGIN_SYSTEM_TAG,
+    )
+    matches = [
+        view for view in views if _is_effective_account_login(view, platform)
+    ]
+    matches.sort(key=lambda view: view.updated_at, reverse=True)
+    if matches:
+        return await get_scenario_for_org(db, matches[0].id, org_id)
+    return await _create_system_account_login_scenario(
+        db,
+        org_id=org_id,
+        platform=platform,
+        user=user,
+    )
 
 
 def _resolve_org_id(user: CurrentUser, org: str | None) -> str:
@@ -359,6 +508,28 @@ async def create_scenario_route(body: OrgScenarioCreate, db: DB, user: CurrentUs
             body_json=body.body_json,
             tags=body.tags,
             created_by=user.id,
+        )
+    except OrgScenarioError as exc:
+        raise _map_error(exc) from exc
+    return _detail_out(view)
+
+@router.post(
+    "/account-login/effective",
+    response_model=OrgScenarioOut,
+    dependencies=[Depends(require_permission("accounts", "update"))],
+)
+async def ensure_account_login_scenario_route(
+    body: AccountLoginScenarioEnsureIn,
+    db: DB,
+    user: CurrentUser,
+):
+    org_id = _resolve_org_id(user, None)
+    try:
+        view = await _ensure_system_account_login_scenario(
+            db,
+            org_id=org_id,
+            platform=body.platform,
+            user=user,
         )
     except OrgScenarioError as exc:
         raise _map_error(exc) from exc

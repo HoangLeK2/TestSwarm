@@ -415,6 +415,7 @@ async def list_devices(
 
     org_id = getattr(user, "org_id", None)
     ctrl = _get_ctrl_servicer_optional()
+    relay_manager = _get_relay_manager_optional()
     agent_boot_presence_cache: dict[str, AgentBootPresence] = {}
 
     def _presence_for(device):
@@ -535,6 +536,9 @@ async def list_devices(
                         relay_id=resolve_relay_id(device),
                         adb_serial=row.adb_serial,
                         state=effective_state,
+                        transport_online=_transport_online_for(
+                            device, ctrl, relay_manager, adb_serial=row.adb_serial
+                        ),
                     )
                 )
             size = page_size or limit or 50
@@ -632,12 +636,16 @@ async def list_devices(
     out = []
     for d in devices:
         d_state = _state_for(d, states_map)
+        runtime_adb_serial = _resolve_runtime_adb_serial(d)
         out.append(
             _to_out(
                 d,
                 relay_id=_resolve_relay_id(d),
-                adb_serial=_resolve_runtime_adb_serial(d),
+                adb_serial=runtime_adb_serial,
                 state=d_state,
+                transport_online=_transport_online_for(
+                    d, ctrl, relay_manager, adb_serial=runtime_adb_serial
+                ),
             )
         )
     return out
@@ -955,12 +963,18 @@ async def create_device(body: DeviceCreate, db: DB, user: CurrentUser):
     return _to_out(device)
 
 
+# NOT "/claim": device_reserve.py owns POST /devices/{device_id}/claim (lease a
+# session, body required) and is mounted first, so a claim here never reached
+# this handler — the body-less call from the register dialog got that route's
+# 422 instead. Same path, different verb in the domain sense; keep them apart.
 @router.post(
-    "/{device_id}/claim",
+    "/{device_id}/claim-allocated",
     response_model=DeviceOut,
     dependencies=[Depends(require_permission("devices", "create"))],
 )
-async def claim_device(device_id: str, request: Request, db: DB, user: CurrentUser):
+async def claim_allocated_device_route(
+    device_id: str, request: Request, db: DB, user: CurrentUser
+):
     org_id = getattr(user, "org_id", None)
     if not org_id:
         raise HTTPException(status_code=400, detail={"code": "WORKSPACE_SCOPE_REQUIRED"})
@@ -1402,12 +1416,43 @@ async def restart_scrcpy(device_id: str, request: Request, db: DB, user: Current
     )
 
 
+def _device_serial_aliases(d, adb_serial: str | None = None) -> list[str]:
+    """Every serial this device may be reachable under, deduped, order kept."""
+    candidates = (
+        adb_serial,
+        getattr(d, "adb_serial", None),
+        getattr(d, "relay_serial", None),
+        getattr(d, "device_serial", None),
+        getattr(d, "serial", None),
+    )
+    seen: list[str] = []
+    for candidate in candidates:
+        value = str(candidate or "").strip()
+        if value and value not in seen:
+            seen.append(value)
+    return seen
+
+
+def _transport_online_for(d, ctrl, relay, adb_serial: str | None = None) -> bool:
+    """Live transport to this phone, whoever's agent carries it.
+
+    Asks the control/video registries by serial instead of asking which agent
+    the caller can see: the answer must not change because the agent belongs to
+    the pool workspace rather than the tenant's.
+    """
+    return any(
+        _serial_reachable(ctrl, relay, serial)
+        for serial in _device_serial_aliases(d, adb_serial)
+    )
+
+
 def _to_out(
     d,
     *,
     relay_id: str | None = None,
     adb_serial: str | None = None,
     state: str = DeviceFsmState.UNKNOWN.value,
+    transport_online: bool = False,
 ) -> DeviceOut:
     return DeviceOut(
         id=d.id,
@@ -1433,6 +1478,7 @@ def _to_out(
         adb_port=getattr(d, "adb_port", 5555),
         tags=getattr(d, "tags", "") or "",
         relay_id=relay_id if relay_id is not None else getattr(d, "managed_by_relay_id", None),
+        transport_online=transport_online,
         state=state,
         status=getattr(d, "status", "paired") or "paired",
         paired_at=getattr(d, "paired_at", None),

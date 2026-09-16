@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.account import Account
 from db.models.account_group import AccountGroup, AccountGroupMember
+from db.models.enums import DISPATCHABLE_STATES
 from db.models.utils import _now
 from tenancy.context import get_current_org_id
 
@@ -287,7 +288,7 @@ async def pick_next_batch(
         .join(Account, Account.id == AccountGroupMember.account_id)
         .where(
             AccountGroupMember.group_id == group_id,
-            Account.state == "active",
+            Account.state.in_(DISPATCHABLE_STATES),
             or_(
                 Account.cooldown_until.is_(None),
                 Account.cooldown_until <= now,
@@ -301,7 +302,7 @@ async def pick_next_batch(
         .join(Account, Account.id == AccountGroupMember.account_id)
         .where(
             AccountGroupMember.group_id == group_id,
-            Account.state == "active",
+            Account.state.in_(DISPATCHABLE_STATES),
             or_(
                 Account.cooldown_until.is_(None),
                 Account.cooldown_until <= now,

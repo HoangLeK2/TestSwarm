@@ -48,6 +48,7 @@ const STATUS_VARIANT: Record<
   'default' | 'secondary' | 'outline' | 'destructive'
 > = {
   unassigned: 'secondary',
+  assigned: 'outline',
   active: 'default',
   suspended: 'outline',
   banned: 'destructive',

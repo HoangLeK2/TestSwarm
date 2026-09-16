@@ -30,6 +30,7 @@ import { normalizeAccountState } from '@/features/accounts/lib/account-fsm';
 
 const STATUS_LABEL_KEY: Record<string, string> = {
   unassigned: 'statusUnassigned',
+  assigned: 'statusAssigned',
   active: 'statusActive',
   suspended: 'statusVerifying',
   banned: 'statusBanned',

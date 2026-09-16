@@ -25,6 +25,8 @@ export type DeviceOut = {
   adb_port: number;
   tags?: string;
   relay_id?: string | null;
+  /** Server-side "a live transport reaches this serial" — see device-online.ts. */
+  transport_online?: boolean;
   state: string;
 };
 
@@ -182,7 +184,9 @@ export const devicesApi = {
       .then((r) => r.data),
   claimAllocated: (deviceId: string) =>
     farmApi
-      .post<DeviceOut>(`/devices/${encodeURIComponent(deviceId)}/claim`)
+      .post<DeviceOut>(
+        `/devices/${encodeURIComponent(deviceId)}/claim-allocated`
+      )
       .then((r) => {
         clearDeviceListCache();
         return r.data;

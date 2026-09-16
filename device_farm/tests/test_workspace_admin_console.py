@@ -759,6 +759,32 @@ async def test_workspace_admin_can_create_workspace_for_owner_and_manage_it(
 
 
 @pytest.mark.asyncio
+async def test_workspace_admin_can_create_pool_workspace_for_owner(session_factory):
+    await _seed_workspace(session_factory)
+    await _seed_workspace_admin_user(session_factory, user_id="admin-1", org_id="org-1")
+    app = _app(session_factory, _user(role="operator", org_role="admin", org_id="org-1"))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        created = await client.post(
+            "/api/admin/workspaces",
+            json={
+                "businessName": "Pool Rack",
+                "kind": "pool",
+                "ownerEmail": "pool-owner@example.com",
+                "ownerName": "Pool Owner",
+            },
+        )
+
+    assert created.status_code == 201, created.text
+    created_body = created.json()
+    assert created_body["kind"] == "pool"
+    assert created_body["owner"]["email"] == "pool-owner@example.com"
+    assert {admin["user_id"] for admin in created_body["workspaceAdmins"]} == {
+        "admin-1"
+    }
+
+
+@pytest.mark.asyncio
 async def test_workspace_admin_create_workspace_requires_owner(session_factory):
     await _seed_workspace(session_factory)
     await _seed_workspace_admin_user(session_factory, user_id="admin-1", org_id="org-1")
@@ -955,7 +981,7 @@ async def test_phone_allocation_refused_when_agent_is_in_tenant_workspace(
 
 
 @pytest.mark.asyncio
-async def test_workspace_admin_cannot_promote_own_workspace_to_pool(session_factory):
+async def test_workspace_admin_can_promote_own_workspace_to_pool(session_factory):
     await _seed_workspace(session_factory)
     set_current_org_id(None)
     async with session_factory() as db:
@@ -965,15 +991,14 @@ async def test_workspace_admin_cannot_promote_own_workspace_to_pool(session_fact
     app = _app(session_factory, _user(org_role="admin", org_id="org-1"))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         promote = await client.patch("/api/admin/workspaces/org-1", json={"kind": "pool"})
-        # Echoing the unchanged value back must stay allowed — edit forms do it.
         rename = await client.patch(
             "/api/admin/workspaces/org-1",
             json={"businessName": "Acme Renamed", "kind": "tenant"},
         )
 
-    assert promote.status_code == 403
-    assert promote.json()["detail"]["code"] == "SUPERADMIN_ONLY"
-    assert rename.status_code == 200
+    assert promote.status_code == 200, promote.text
+    assert promote.json()["kind"] == "pool"
+    assert rename.status_code == 200, rename.text
     # The route normalises workspace names with a " Workspace" suffix.
     assert rename.json()["businessName"] == "Acme Renamed Workspace"
     assert rename.json()["kind"] == "tenant"
@@ -1504,7 +1529,7 @@ async def test_workspace_owner_lists_allocated_unclaimed_phones(session_factory)
     async with AsyncClient(transport=ASGITransport(app=app_owner_b), base_url="http://test") as client:
         allocated = await client.get("/api/devices/allocated")
         filtered = await client.get("/api/devices/allocated?q=SN001")
-        claim = await client.post("/api/devices/dev-1/claim")
+        claim = await client.post("/api/devices/dev-1/claim-allocated")
         after_claim = await client.get("/api/devices/allocated")
 
     assert allocated.status_code == 200
@@ -1546,7 +1571,7 @@ async def test_workspace_owner_claims_allocated_phone_and_delete_releases_to_adm
         _user(user_id="owner-2", org_role="owner", role="system", org_id="org-2"),
     )
     async with AsyncClient(transport=ASGITransport(app=app_owner_b), base_url="http://test") as client:
-        claim = await client.post("/api/devices/dev-1/claim")
+        claim = await client.post("/api/devices/dev-1/claim-allocated")
         delete = await client.delete("/api/devices/dev-1")
 
     assert claim.status_code == 200
@@ -1598,7 +1623,7 @@ async def test_workspace_admin_revoke_cleans_workspace_phone_bindings(session_fa
         _user(user_id="owner-2", org_role="owner", role="system", org_id="org-2"),
     )
     async with AsyncClient(transport=ASGITransport(app=app_owner_b), base_url="http://test") as client:
-        claim = await client.post("/api/devices/dev-1/claim")
+        claim = await client.post("/api/devices/dev-1/claim-allocated")
     assert claim.status_code == 200
 
     async with session_factory() as db:
@@ -1784,7 +1809,7 @@ async def test_workspace_owner_connects_claimed_allocated_phone_via_managed_agen
         _user(user_id="owner-2", org_role="owner", role="system", org_id="org-2"),
     )
     async with AsyncClient(transport=ASGITransport(app=app_owner_b), base_url="http://test") as client:
-        claim = await client.post("/api/devices/dev-1/claim")
+        claim = await client.post("/api/devices/dev-1/claim-allocated")
         connect = await client.post(
             "/api/devices/dev-1/connect-via-managed-agent",
             json={"wsBaseUrl": "ws://farm.example.test"},
@@ -2024,3 +2049,181 @@ async def test_enabling_a_departed_agent_stays_offline_until_it_returns(
 
     assert enabled.json()["status"] == "offline"
     assert enabled.json()["connected"] is False
+
+
+@pytest.mark.asyncio
+async def test_releasing_a_phone_the_agent_stopped_reporting_still_returns_it(
+    session_factory,
+):
+    """A dead phone is the one that most needs releasing.
+
+    `agent.serials` is rewritten by every heartbeat, so a phone that was
+    unplugged or died drops off it. Requiring it on release stranded the device
+    in the workspace it was lent to, with no way back. Assignment keeps the
+    guard — the same serial must still be refused there.
+    """
+    await _seed_workspace(session_factory)
+    await _seed_second_workspace(session_factory)
+    async with session_factory() as db:
+        with tenant_context("org-1"):
+            agent = await db.get(RelayAgent, "ra-1")
+            assert agent is not None
+            agent.serials = ["SN001"]
+        await db.commit()
+
+    app = _app(session_factory, _user(role="superadmin", org_role=""))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        assign = await client.post(
+            "/api/admin/agents/relay-1/phone-allocations",
+            json={"targetWorkspaceId": "org-2", "serials": ["SN001"]},
+        )
+
+    # The phone is unplugged; the next heartbeat overwrites the snapshot.
+    set_current_org_id(None)
+    async with session_factory() as db:
+        with tenant_context("org-1"):
+            agent = await db.get(RelayAgent, "ra-1")
+            assert agent is not None
+            agent.serials = []
+        await db.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        release = await client.request(
+            "DELETE",
+            "/api/admin/agents/relay-1/phone-allocations",
+            json={"serials": ["SN001"]},
+        )
+        reassign = await client.post(
+            "/api/admin/agents/relay-1/phone-allocations",
+            json={"targetWorkspaceId": "org-2", "serials": ["SN001"]},
+        )
+
+    assert assign.status_code == 200, assign.text
+    assert release.status_code == 200, release.text
+    assert release.json()["items"][0]["assignedWorkspaceId"] == "org-1"
+    # Assignment still picks only from what the agent can see.
+    assert reassign.status_code == 409
+    assert reassign.json()["detail"]["code"] == "SERIAL_NOT_REPORTED_BY_AGENT"
+
+    set_current_org_id(None)
+    async with session_factory() as db:
+        row = (
+            await db.execute(
+                text("SELECT org_id, managed_by_org_id FROM devices WHERE serial = 'SN001'")
+            )
+        ).one()
+    assert row[0] == "org-1"
+    assert row[1] == "org-1"
+
+
+@pytest.mark.asyncio
+async def test_releasing_an_unknown_serial_is_refused_and_creates_no_device(
+    session_factory,
+):
+    """Dropping the snapshot guard on release must not let a typo mint a row."""
+    await _seed_workspace(session_factory)
+    await _seed_second_workspace(session_factory)
+
+    set_current_org_id(None)
+    async with session_factory() as db:
+        before = (await db.execute(text("SELECT COUNT(*) FROM devices"))).scalar_one()
+
+    app = _app(session_factory, _user(role="superadmin", org_role=""))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        release = await client.request(
+            "DELETE",
+            "/api/admin/agents/relay-1/phone-allocations",
+            json={"serials": ["TYPO-SERIAL"]},
+        )
+
+    assert release.status_code == 404, release.text
+    assert release.json()["detail"]["code"] == "DEVICE_NOT_FOUND"
+    assert release.json()["detail"]["serial"] == "TYPO-SERIAL"
+
+    set_current_org_id(None)
+    async with session_factory() as db:
+        after = (await db.execute(text("SELECT COUNT(*) FROM devices"))).scalar_one()
+        ghost = (
+            await db.execute(
+                text("SELECT COUNT(*) FROM devices WHERE serial = 'TYPO-SERIAL'")
+            )
+        ).scalar_one()
+    assert after == before
+    assert ghost == 0
+
+
+@pytest.mark.asyncio
+async def test_pooled_separates_a_phone_in_stock_from_one_handed_out(session_factory):
+    """`org_id` alone cannot tell the two apart — it equals the pool in both."""
+    await _seed_workspace(session_factory)
+    await _seed_second_workspace(session_factory)
+    async with session_factory() as db:
+        with tenant_context("org-1"):
+            agent = await db.get(RelayAgent, "ra-1")
+            assert agent is not None
+            agent.serials = ["SN001"]
+        await db.commit()
+
+    app = _app(session_factory, _user(org_role="admin", org_id="org-1"))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        assign = await client.post(
+            "/api/admin/agents/relay-1/phone-allocations",
+            json={"targetWorkspaceId": "org-2", "serials": ["SN001"]},
+        )
+        assigned_devices = await client.get("/api/admin/devices?limit=100")
+        release = await client.request(
+            "DELETE",
+            "/api/admin/agents/relay-1/phone-allocations",
+            json={"serials": ["SN001"]},
+        )
+        released_devices = await client.get("/api/admin/devices?limit=100")
+
+    assert assign.status_code == 200, assign.text
+    assert assign.json()["items"][0]["pooled"] is False
+    assert assigned_devices.status_code == 200
+    assert assigned_devices.json()["items"][0]["pooled"] is False
+    assert assigned_devices.json()["items"][0]["workspaceId"] == "org-2"
+
+    assert release.status_code == 200, release.text
+    assert release.json()["items"][0]["pooled"] is True
+    assert released_devices.status_code == 200
+    assert released_devices.json()["items"][0]["pooled"] is True
+    assert released_devices.json()["items"][0]["workspaceId"] == "org-1"
+
+
+@pytest.mark.asyncio
+async def test_agent_workspace_cannot_be_moved_by_patch(session_factory):
+    """The activation code owns the agent's workspace.
+
+    `upsert_relay_agent` writes org_id back from the enrollment token on every
+    reconnect, so a move made here would silently revert. Refuse it instead of
+    promising a change that does not survive the next heartbeat.
+    """
+    await _seed_workspace(session_factory)
+    await _seed_second_workspace(session_factory)
+
+    app = _app(session_factory, _user(role="superadmin", org_role=""))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        moved = await client.patch(
+            "/api/admin/agents/relay-1", json={"workspaceId": "org-2"}
+        )
+        # Echoing the unchanged value back must stay allowed — edit forms do it.
+        renamed = await client.patch(
+            "/api/admin/agents/relay-1",
+            json={"workspaceId": "org-1", "name": "rack-a"},
+        )
+
+    assert moved.status_code == 409, moved.text
+    assert moved.json()["detail"]["code"] == "AGENT_WORKSPACE_IS_IMMUTABLE"
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["name"] == "rack-a"
+    assert renamed.json()["workspaceId"] == "org-1"
+    # org-1 is the pool workspace, so the console may offer allocation.
+    assert renamed.json()["workspaceKind"] == "pool"
+
+    set_current_org_id(None)
+    async with session_factory() as db:
+        org_id = (
+            await db.execute(text("SELECT org_id FROM relay_agents WHERE relay_id = 'relay-1'"))
+        ).scalar_one()
+    assert org_id == "org-1"

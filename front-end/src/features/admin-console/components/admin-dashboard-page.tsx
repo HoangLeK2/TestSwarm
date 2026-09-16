@@ -5,8 +5,12 @@ import {
   Activity,
   AlertTriangle,
   Building2,
+  CheckCircle2,
+  Circle,
+  KeyRound,
   Server,
   ShieldCheck,
+  Smartphone,
   SquareArrowOutUpRight,
   type LucideIcon
 } from 'lucide-react';
@@ -96,6 +100,48 @@ function AttentionItem({
   );
 }
 
+function SetupStep({
+  done,
+  icon: Icon,
+  title,
+  description,
+  href,
+  action
+}: {
+  done: boolean;
+  icon: LucideIcon;
+  title: string;
+  description: string;
+  href: string;
+  action: string;
+}) {
+  return (
+    <div className='flex h-full flex-col gap-3 rounded-md border bg-background p-4'>
+      <div className='flex items-start justify-between gap-3'>
+        <div className='flex min-w-0 items-center gap-2'>
+          <span className='rounded-full bg-muted p-2 text-muted-foreground'>
+            <Icon className='size-4' />
+          </span>
+          <div className='min-w-0'>
+            <h3 className='text-sm font-semibold'>{title}</h3>
+            <p className='mt-1 text-xs leading-5 text-muted-foreground'>
+              {description}
+            </p>
+          </div>
+        </div>
+        {done ? (
+          <CheckCircle2 className='size-5 shrink-0 text-emerald-600 dark:text-emerald-400' />
+        ) : (
+          <Circle className='size-5 shrink-0 text-muted-foreground' />
+        )}
+      </div>
+      <Button asChild variant={done ? 'outline' : 'default'} size='sm' className='mt-auto w-fit'>
+        <Link href={href}>{action}</Link>
+      </Button>
+    </div>
+  );
+}
+
 export function AdminDashboardPage() {
   const t = useTranslations('adminConsole.dashboard');
   const locale = getLocaleByNextLocale(useLocale());
@@ -121,6 +167,13 @@ export function AdminDashboardPage() {
     queryFn: () => adminApi.listWorkspaces(workspaceParams),
     refetchInterval: 30_000
   });
+  const workspaceItems = workspaces.data?.items ?? [];
+  const poolWorkspaceCount = workspaceItems.filter(
+    (workspace) => workspace.kind === 'pool'
+  ).length;
+  const hasPoolWorkspace = poolWorkspaceCount > 0;
+  const hasAgent = (summary.data?.totalAgents ?? 0) > 0;
+  const hasPhones = (summary.data?.totalDevices ?? 0) > 0;
   return (
     <div className='min-h-full bg-muted/20'>
       <AdminPageHeader
@@ -147,6 +200,54 @@ export function AdminDashboardPage() {
             }}
           />
         ) : null}
+
+        <section className='rounded-md border bg-muted/30 p-4'>
+          <div className='flex flex-col gap-2 md:flex-row md:items-start md:justify-between'>
+            <div>
+              <h2 className='text-sm font-semibold'>{t('setup.title')}</h2>
+              <p className='mt-1 max-w-3xl text-sm text-muted-foreground'>
+                {t('setup.description')}
+              </p>
+            </div>
+            <Button asChild variant='outline' size='sm' className='shrink-0'>
+              <Link href={ROUTES.ADMIN.AGENTS}>{t('setup.primaryAction')}</Link>
+            </Button>
+          </div>
+          <div className='mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4'>
+            <SetupStep
+              done={hasPoolWorkspace}
+              icon={Building2}
+              title={t('setup.poolWorkspace.title')}
+              description={t('setup.poolWorkspace.description')}
+              href={ROUTES.ADMIN.WORKSPACES}
+              action={t('setup.poolWorkspace.action')}
+            />
+            <SetupStep
+              done={hasAgent}
+              icon={KeyRound}
+              title={t('setup.activation.title')}
+              description={t('setup.activation.description')}
+              href={ROUTES.ADMIN.AGENTS}
+              action={t('setup.activation.action')}
+            />
+            <SetupStep
+              done={hasPhones}
+              icon={Server}
+              title={t('setup.agent.title')}
+              description={t('setup.agent.description')}
+              href={ROUTES.ADMIN.AGENTS}
+              action={t('setup.agent.action')}
+            />
+            <SetupStep
+              done={hasPhones}
+              icon={Smartphone}
+              title={t('setup.allocate.title')}
+              description={t('setup.allocate.description')}
+              href={ROUTES.ADMIN.DEVICES}
+              action={t('setup.allocate.action')}
+            />
+          </div>
+        </section>
 
         <div className='grid gap-3 md:grid-cols-3 xl:grid-cols-4'>
           <Metric

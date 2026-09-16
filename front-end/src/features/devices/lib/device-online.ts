@@ -37,6 +37,12 @@ export function resolveDeviceRelay(
 
 /**
  * List "online" matches backend dispatch: live relay transport OR recent DB heartbeat.
+ *
+ * `transport_online` comes from the server and outranks the relay map for a
+ * reason: a pool phone is carried by the managing workspace's agent, and
+ * `/relay-agents` only lists agents of the caller's own workspace. Judging
+ * transport by "can I see the agent?" marked every allocated phone offline
+ * while it was streaming.
  */
 export function isDeviceOnlineForList(
   device: DeviceOut,
@@ -44,6 +50,7 @@ export function isDeviceOnlineForList(
   now = Date.now()
 ): boolean {
   if (isPendingDevice(device)) return false;
+  if (device.transport_online === true) return true;
 
   const relay = resolveDeviceRelay(device, relayMap);
   const relayOperational =

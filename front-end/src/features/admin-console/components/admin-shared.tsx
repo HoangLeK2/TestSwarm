@@ -73,6 +73,9 @@ const STATUS_TONES: Record<string, keyof typeof STATUS_TONE> = {
   connecting: 'warn',
   dead: 'bad',
   error: 'bad',
+  // Device pool states, derived from `pooled` rather than reported by a device.
+  in_pool: 'ok',
+  allocated: 'warn',
   offline: 'muted',
   disabled: 'muted',
   archived: 'muted',

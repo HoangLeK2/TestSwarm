@@ -147,16 +147,24 @@ class EventRecorder:
         if not serial:
             return
 
-        from db.crud.device import get_device_by_serial
         from db.models.enums import DeviceFsmEvent, DeviceFsmState
         from services.device_state.service import DeviceStateService
+        from tenancy.background import lookup_device_by_serial
 
-        device = await get_device_by_serial(db, serial)
+        # This runs on the runtime's own session, with no HTTP request behind
+        # it, so there is no current_org_id: the ORM lookup raised
+        # TENANCY_STRICT_MODE on every connect and the caller swallowed it as a
+        # warning — every device stayed UNKNOWN while physically online. The
+        # raw-SQL background helper is the supported cross-tenant read here
+        # (same one services/device_registration.py uses). The FSM tables
+        # themselves (device_states, device_state_transitions) are not
+        # tenant-scoped, so nothing else needs a tenant context.
+        device = await lookup_device_by_serial(db, serial)
         if device is None:
             return
 
         svc = DeviceStateService()
-        current = await svc.get_state(db, device.id)
+        current = await svc.get_state(db, device.device_id)
         event_id = str(entry.get("id") or "")
         payload = {
             "serial": serial,
@@ -171,7 +179,7 @@ class EventRecorder:
         if current in (DeviceFsmState.UNKNOWN, DeviceFsmState.DEAD):
             attached = await svc.apply_event(
                 db,
-                device.id,
+                device.device_id,
                 event=DeviceFsmEvent.ATTACHED.value,
                 source="agent",
                 event_id=f"runtime-{event_id}-attached" if event_id else None,
@@ -182,7 +190,7 @@ class EventRecorder:
         if current in (DeviceFsmState.CONNECTING, DeviceFsmState.RECONNECTING):
             await svc.apply_event(
                 db,
-                device.id,
+                device.device_id,
                 event=DeviceFsmEvent.ONLINE.value,
                 source="agent",
                 event_id=f"runtime-{event_id}-online" if event_id else None,

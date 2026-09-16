@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from db.models.account import Account, DeviceAccount
-from db.models.enums import AccountState
+from db.models.enums import DISPATCHABLE_STATES, AccountState
 
 logger = logging.getLogger(__name__)
 
@@ -377,7 +377,7 @@ async def get_available_account(
     stmt = (
         select(Account)
         .where(Account.platform == platform)
-        .where(Account.state == AccountState.ACTIVE.value)
+        .where(Account.state.in_(DISPATCHABLE_STATES))
         .where((Account.cooldown_until.is_(None)) | (Account.cooldown_until < now))
     )
     if user_id is not None:
@@ -392,11 +392,14 @@ async def get_available_account(
 
 
 async def sync_account_link_state(db: AsyncSession, account_id: str) -> None:
-    """Keep ``unassigned`` in step with the device links that define it.
+    """Keep ``unassigned``/``assigned`` in step with the device links.
 
-    ``unassigned`` means "no DeviceAccount row". Both directions run here — the
-    single chokepoint every link/unlink path routes through — so the state can
-    never drift from the link table. Terminal and operator-set states
+    ``unassigned`` means "no DeviceAccount row", ``assigned`` means "linked but
+    not logged in". Linking stops at ``assigned`` on purpose: only a verified
+    platform session may promote to ``active``
+    (``services.device_platform_session.mark_active``). Both directions run here
+    — the single chokepoint every link/unlink path routes through — so the state
+    can never drift from the link table. Terminal and operator-set states
     (``banned``, ``retired``, ``suspended``) are left alone: linking a device to
     a banned account must not silently reactivate it.
     """
@@ -418,8 +421,12 @@ async def sync_account_link_state(db: AsyncSession, account_id: str) -> None:
     ).first() is not None
 
     if linked and current == AccountState.UNASSIGNED.value:
-        target, reason = AccountState.ACTIVE, "device linked"
-    elif not linked and current == AccountState.ACTIVE.value:
+        target, reason = AccountState.ASSIGNED, "device linked"
+    elif not linked and current in {
+        AccountState.ASSIGNED.value,
+        AccountState.ACTIVE.value,
+    }:
+        # The session died with the link — no device, no session.
         target, reason = AccountState.UNASSIGNED, "no device linked"
     else:
         return
@@ -554,8 +561,11 @@ async def get_primary_account_for_device(
     platform: str,
 ) -> Optional[Account]:
     """
-    Return the primary active account for a device filtered by platform.
+    Return the primary dispatchable account for a device filtered by platform.
     Used by campaign_dispatch to inject __ACCOUNT_* variables into scenario tasks.
+
+    ``assigned`` counts as dispatchable — the login scenario needs these
+    variables before a session (and therefore ``active``) can exist at all.
     """
     result = await db.execute(
         select(Account)
@@ -564,7 +574,7 @@ async def get_primary_account_for_device(
             DeviceAccount.device_id == device_id,
             DeviceAccount.is_primary.is_(True),
             Account.platform == platform,
-            Account.state == AccountState.ACTIVE.value,
+            Account.state.in_(DISPATCHABLE_STATES),
         )
     )
     return result.scalar_one_or_none()
@@ -575,7 +585,7 @@ async def get_primary_accounts_for_devices(
     device_ids: list[str],
     platform: str,
 ) -> dict[str, Account]:
-    """Return primary active accounts keyed by device id in one round-trip."""
+    """Return primary dispatchable accounts keyed by device id in one round-trip."""
     if not device_ids:
         return {}
     result = await db.execute(
@@ -585,7 +595,7 @@ async def get_primary_accounts_for_devices(
             DeviceAccount.device_id.in_(device_ids),
             DeviceAccount.is_primary.is_(True),
             Account.platform == platform,
-            Account.state == AccountState.ACTIVE.value,
+            Account.state.in_(DISPATCHABLE_STATES),
         )
     )
     out: dict[str, Account] = {}
@@ -600,13 +610,13 @@ async def get_primary_accounts_for_devices(
 async def list_active_account_ids(
     db: AsyncSession, account_ids: List[str]
 ) -> List[str]:
-    """Return subset of account_ids that are in active FSM state (round-robin pool)."""
+    """Return subset of account_ids that are dispatchable (round-robin pool)."""
     if not account_ids:
         return []
     result = await db.execute(
         select(Account.id).where(
             Account.id.in_(account_ids),
-            Account.state == AccountState.ACTIVE.value,
+            Account.state.in_(DISPATCHABLE_STATES),
         )
     )
     return [str(r[0]) for r in result.all()]

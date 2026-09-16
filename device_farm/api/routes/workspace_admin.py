@@ -1652,10 +1652,6 @@ async def admin_create_workspace(
         kind = body.kind.strip().lower()
         if kind not in WORKSPACE_KINDS:
             raise HTTPException(status_code=400, detail={"code": "INVALID_WORKSPACE_KIND"})
-        if kind == POOL_WORKSPACE_KIND:
-            # Same rule as promotion: a pool workspace ends up managing phones
-            # handed to every tenant it allocates to.
-            _require_superadmin(user)
         org.kind = kind
     assigned_admins: list[AdminWorkspaceAdminOut] = []
     admin_user_ids = [item for item in dict.fromkeys(body.adminUserIds) if item]
@@ -1776,13 +1772,7 @@ async def admin_update_workspace(
         value = body.kind.strip().lower()
         if value not in WORKSPACE_KINDS:
             raise HTTPException(status_code=400, detail={"code": "INVALID_WORKSPACE_KIND"})
-        # Only an actual change is privileged — edit forms echo the current
-        # value back on every save, and a workspace admin must still be able to
-        # rename their own workspace. Promoting one to a pool is different: it
-        # would take over the phones of every tenant it allocates to.
-        if value != (getattr(org, "kind", "tenant") or "tenant"):
-            _require_superadmin(user)
-            org.kind = value
+        org.kind = value
     org.updated_at = _now()
     ip, ua = _client_meta(request)
     await emit_security_event(
@@ -2674,6 +2664,7 @@ def _agent_out(
     row: RelayAgent,
     workspace_name: str | None = None,
     live_relay_ids: set[str] | None = None,
+    workspace_kind: str = "tenant",
 ) -> AdminAgentOut:
     live = _live_relay_ids() if live_relay_ids is None else live_relay_ids
     return AdminAgentOut(
@@ -2681,6 +2672,7 @@ def _agent_out(
         relay_id=row.relay_id,
         workspaceId=row.org_id,
         workspaceName=workspace_name,
+        workspaceKind=workspace_kind,
         user_id=row.user_id,
         enrollment_token_id=row.enrollment_token_id,
         name=row.name or "",
@@ -2702,6 +2694,7 @@ def _agent_out_from_mapping(
     row: Any,
     workspace_name: str | None = None,
     live_relay_ids: set[str] | None = None,
+    workspace_kind: str = "tenant",
 ) -> AdminAgentOut:
     serials = list(row["serials"] or [])
     live = _live_relay_ids() if live_relay_ids is None else live_relay_ids
@@ -2710,6 +2703,7 @@ def _agent_out_from_mapping(
         relay_id=row["relay_id"],
         workspaceId=row["org_id"],
         workspaceName=workspace_name,
+        workspaceKind=workspace_kind,
         user_id=row["user_id"],
         enrollment_token_id=row["enrollment_token_id"],
         name=row["name"] or "",
@@ -2776,11 +2770,29 @@ async def admin_list_agents(
             .limit(safe_limit)
         )
     ).mappings().all()
-    orgs = await _workspace_name_map(db, {str(row["org_id"]) for row in rows})
+    org_ids = {str(row["org_id"]) for row in rows}
+    orgs = await _workspace_name_map(db, org_ids)
+    pool_ids = {
+        str(org_id)
+        for org_id in (
+            await db.execute(
+                select(Organization.id)
+                .where(Organization.id.in_(org_ids))
+                .where(Organization.kind == POOL_WORKSPACE_KIND)
+            )
+        ).scalars()
+    }
     live_relay_ids = _live_relay_ids()
     return AdminAgentListOut(
         items=[
-            _agent_out_from_mapping(row, orgs.get(str(row["org_id"])), live_relay_ids)
+            _agent_out_from_mapping(
+                row,
+                orgs.get(str(row["org_id"])),
+                live_relay_ids,
+                workspace_kind=(
+                    POOL_WORKSPACE_KIND if str(row["org_id"]) in pool_ids else "tenant"
+                ),
+            )
             for row in rows
         ],
         total=total,
@@ -2924,6 +2936,7 @@ async def _agent_phone_outs(
                 managedByWorkspaceName=orgs.get(managed_id),
                 assignedWorkspaceId=assigned_id,
                 assignedWorkspaceName=orgs.get(assigned_id) if assigned_id else None,
+                pooled=assigned_id is None or assigned_id == managed_id,
             )
         )
     return phones
@@ -2972,7 +2985,9 @@ async def _agent_phone_page(
     )
 
 
-def _clean_phone_serials(serials: list[str], agent: RelayAgent) -> list[str]:
+def _clean_phone_serials(
+    serials: list[str], agent: RelayAgent, *, require_reported: bool
+) -> list[str]:
     reported = {
         str(serial).strip()
         for serial in (agent.serials or [])
@@ -2992,12 +3007,17 @@ def _clean_phone_serials(serials: list[str], agent: RelayAgent) -> list[str]:
                 "count": len(cleaned),
             },
         )
-    missing = [serial for serial in cleaned if serial not in reported]
-    if missing:
-        raise HTTPException(
-            status_code=409,
-            detail={"code": "SERIAL_NOT_REPORTED_BY_AGENT", "serials": missing},
-        )
+    # `agent.serials` is the heartbeat snapshot, not a ledger: a phone that was
+    # unplugged or died drops off it. Requiring it is right for assignment (the
+    # admin picks from what the agent sees) and wrong for release — it would
+    # strand the device in the workspace it was lent to, forever.
+    if require_reported:
+        missing = [serial for serial in cleaned if serial not in reported]
+        if missing:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "SERIAL_NOT_REPORTED_BY_AGENT", "serials": missing},
+            )
     return cleaned
 
 
@@ -3007,6 +3027,7 @@ async def _assign_agent_phone_serials(
     agent: RelayAgent,
     serials: list[str],
     target_workspace_id: str,
+    create_missing: bool,
 ) -> list[AdminAgentPhoneOut]:
     manager_org_id = str(agent.org_id)
     manager = await _workspace_by_id_or_404(db, manager_org_id)
@@ -3031,6 +3052,14 @@ async def _assign_agent_phone_serials(
     for serial in serials:
         row = device_rows.get(serial)
         if row is None:
+            if not create_missing:
+                # Only assignment may register a phone the agent just reported.
+                # On release an unknown serial is a typo, and inventing a row
+                # for it would plant a ghost device nobody can clean up.
+                raise HTTPException(
+                    status_code=404,
+                    detail={"code": "DEVICE_NOT_FOUND", "serial": serial},
+                )
             with tenant_context(target.id):
                 device = await repo.create_device(
                     db,
@@ -3121,12 +3150,13 @@ async def admin_assign_agent_phones(
 ):
     agent = await _agent_or_404(db, relay_id, user)
     await _require_visible_workspace_scope(db, user, str(agent.org_id))
-    serials = _clean_phone_serials(body.serials, agent)
+    serials = _clean_phone_serials(body.serials, agent, require_reported=True)
     phones = await _assign_agent_phone_serials(
         db,
         agent=agent,
         serials=serials,
         target_workspace_id=body.targetWorkspaceId,
+        create_missing=True,
     )
     ip, ua = _client_meta(request)
     await emit_security_event(
@@ -3163,12 +3193,15 @@ async def admin_unassign_agent_phones(
 ):
     agent = await _agent_or_404(db, relay_id, user)
     await _require_visible_workspace_scope(db, user, str(agent.org_id))
-    serials = _clean_phone_serials(body.serials, agent)
+    # A phone the agent no longer reports is exactly the one that most needs
+    # releasing, so release resolves the device row instead of the snapshot.
+    serials = _clean_phone_serials(body.serials, agent, require_reported=False)
     phones = await _assign_agent_phone_serials(
         db,
         agent=agent,
         serials=serials,
         target_workspace_id=str(agent.org_id),
+        create_missing=False,
     )
     ip, ua = _client_meta(request)
     await emit_security_event(
@@ -3203,10 +3236,15 @@ async def admin_update_agent(
     user: AdminUser,
 ):
     row = await _agent_or_404(db, relay_id, user)
-    if body.workspaceId is not None:
-        await _require_visible_workspace_scope(db, user, body.workspaceId)
-        target = await _workspace_or_404(db, body.workspaceId, user)
-        row.org_id = target.id
+    if body.workspaceId is not None and str(body.workspaceId) != str(row.org_id):
+        # The activation code decides the agent's workspace, and
+        # `upsert_relay_agent` writes it back from the token on every reconnect,
+        # so a move made here would silently revert. Move it by revoking the
+        # code and re-enrolling with one minted from the target workspace.
+        # Echoing the current value back stays allowed — edit forms do it.
+        raise HTTPException(
+            status_code=409, detail={"code": "AGENT_WORKSPACE_IS_IMMUTABLE"}
+        )
     if body.name is not None:
         row.name = body.name.strip()
     if body.status is not None:
@@ -3250,7 +3288,11 @@ async def admin_update_agent(
     )
     await db.commit()
     org = await db.get(Organization, row.org_id)
-    return _agent_out(row, org.business_name if org else None)
+    return _agent_out(
+        row,
+        org.business_name if org else None,
+        workspace_kind=(getattr(org, "kind", None) or "tenant") if org else "tenant",
+    )
 
 
 @router.post(
@@ -3334,6 +3376,8 @@ def _device_out(
         status=row.status,
         state=state,
         assigned=bool(row.user_id),
+        pooled=row.managed_by_org_id is None
+        or str(row.org_id) == str(row.managed_by_org_id),
         last_seen=row.last_seen,
         paired_at=row.paired_at,
         unpaired_at=row.unpaired_at,
@@ -3369,6 +3413,8 @@ def _device_out_from_mapping(
         state=row["state"] or "unknown",
         assigned=bool(row["user_id"]),
         transferable=transferable,
+        pooled=row["managed_by_org_id"] is None
+        or str(row["org_id"]) == str(row["managed_by_org_id"]),
         last_seen=row["last_seen"],
         paired_at=row["paired_at"],
         unpaired_at=row["unpaired_at"],

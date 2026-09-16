@@ -37,6 +37,11 @@ class DeviceOut(BaseModel):
     adb_port: int = 5555
     tags: str = ""
     relay_id: Optional[str] = None
+    # Whether a live transport currently reaches this serial. A pool phone is
+    # served by the managing workspace's agent, which a tenant may not list
+    # (`/relay-agents` is org-scoped), so the client cannot derive this from the
+    # agent list — it would render every allocated phone as "no transport".
+    transport_online: bool = False
     state: str = "unknown"
     status: str = "paired"
     paired_at: Optional[datetime] = None

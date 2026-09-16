@@ -18,6 +18,11 @@ import {
   previewScenarioStream
 } from '@/features/devices/services/api';
 import {
+  useOrgScenarioBody,
+  useOrgScenarios
+} from '@/features/org-scenarios/hooks/use-org-scenarios';
+import { orgScenariosApi } from '@/features/org-scenarios/services/api';
+import {
   deviceFsmStateOf,
   isDeviceFsmDispatchable
 } from '@/features/devices/lib/device-fsm';
@@ -34,6 +39,12 @@ import {
   DialogTrigger
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import {
+  pickOrgLoginScenario,
+  resolveLoginScenarioSource,
+  stepsFromOrgScenarioBody,
+  type LoginScenarioSource
+} from '../lib/login-scenario-selection';
 
 /** A login scenario declares itself with this tag, not with its display name. */
 const LOGIN_TEMPLATE_TAG = 'login';
@@ -94,10 +105,31 @@ export function AccountLoginDialog({
       { category: account.platform, tags: LOGIN_TEMPLATE_TAG },
       { enabled: open }
     );
+  const { data: orgLoginScenarios = [], isLoading: loadingOrgLoginScenarios } =
+    useOrgScenarios({ tag: LOGIN_TEMPLATE_TAG, enabled: open });
 
   const loginTemplate = useMemo(
     () => templates.find((tpl) => hasTag(tpl.tags, LOGIN_TEMPLATE_TAG)) ?? null,
     [templates]
+  );
+  const orgLoginScenario = useMemo(
+    () => pickOrgLoginScenario(orgLoginScenarios, account.platform),
+    [orgLoginScenarios, account.platform]
+  );
+  const { data: orgLoginBody, isLoading: loadingOrgLoginBody } =
+    useOrgScenarioBody(orgLoginScenario?.id ?? '', open && !!orgLoginScenario);
+  const loginScenarioSource = useMemo(
+    () =>
+      resolveLoginScenarioSource({
+        orgScenario: orgLoginScenario,
+        orgBody: orgLoginBody,
+        template: loginTemplate
+      }),
+    [orgLoginScenario, orgLoginBody, loginTemplate]
+  );
+  const loginSteps = useMemo(
+    () => loginScenarioSource?.steps ?? [],
+    [loginScenarioSource]
   );
 
   /** Only phones this account is actually attached to may run its login. */
@@ -142,6 +174,17 @@ export function AccountLoginDialog({
     setRunning(false);
   }, [open]);
 
+  const ensureLoginScenarioSource =
+    useCallback(async (): Promise<LoginScenarioSource> => {
+      if (loginScenarioSource?.kind === 'org') return loginScenarioSource;
+      const ensured = await orgScenariosApi.ensureAccountLogin({
+        platform: account.platform
+      });
+      void qc.invalidateQueries({ queryKey: ['org-scenarios'] });
+      const steps = stepsFromOrgScenarioBody({ body_json: ensured.body_json });
+      return { kind: 'org', scenarioId: ensured.id, steps };
+    }, [account.platform, loginScenarioSource, qc]);
+
   const selected = linkedDevices.find(
     (row) => row.device.id === selectedDeviceId
   );
@@ -151,7 +194,7 @@ export function AccountLoginDialog({
     : false;
 
   const handleRun = useCallback(async () => {
-    if (!selected || !loginTemplate) return;
+    if (!selected || !loginScenarioSource || loginSteps.length === 0) return;
     const controller = new AbortController();
     abortRef.current = controller;
     runRef.current = { serial: selected.device.serial, traceId: null };
@@ -159,9 +202,14 @@ export function AccountLoginDialog({
     setLines([]);
     setOutcome(null);
     try {
+      const ensuredSource = await ensureLoginScenarioSource();
+      const ensuredSteps = ensuredSource?.steps ?? [];
+      if (!ensuredSource || ensuredSteps.length === 0) {
+        throw new Error(t('noTemplate', { platform: account.platform }));
+      }
       await previewScenarioStream(
         selected.device.serial,
-        loginTemplate.steps ?? [],
+        ensuredSteps,
         (event) => {
           if (event.event === 'start') {
             if (runRef.current) {
@@ -189,7 +237,11 @@ export function AccountLoginDialog({
         controller.signal,
         // The backend resolves this account's password and TOTP from the id,
         // and refuses when the account is not linked to this phone.
-        { __ACCOUNT_ID__: account.id }
+        { __ACCOUNT_ID__: account.id },
+        null,
+        ensuredSource.kind === 'org' ? ensuredSource.scenarioId : null,
+        null,
+        true
       );
     } catch (err) {
       if (!controller.signal.aborted) {
@@ -205,7 +257,16 @@ export function AccountLoginDialog({
         queryKey: ['devices', selected.device.id, 'platform-sessions']
       });
     }
-  }, [selected, loginTemplate, account.id, qc]);
+  }, [
+    selected,
+    loginScenarioSource,
+    loginSteps.length,
+    ensureLoginScenarioSource,
+    t,
+    account.platform,
+    account.id,
+    qc
+  ]);
 
   useEffect(() => {
     if (!outcome) return;
@@ -226,10 +287,14 @@ export function AccountLoginDialog({
 
   // "not found" is only true once the queries have answered — reporting it
   // while they are still in flight tells the operator the wrong thing.
-  const loading = loadingLinks || loadingTemplates;
+  const loading =
+    loadingLinks ||
+    loadingTemplates ||
+    loadingOrgLoginScenarios ||
+    (Boolean(orgLoginScenario) && loadingOrgLoginBody);
   const blockedReason = loading
     ? t('loading')
-    : !loginTemplate
+    : !loginScenarioSource || loginSteps.length === 0
       ? t('noTemplate', { platform: account.platform })
       : linkedDevices.length === 0
         ? t('noDevice')

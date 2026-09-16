@@ -74,6 +74,19 @@ type RelayDeviceChoice = {
   deviceName?: string;
 };
 
+function errorDetail(error: unknown): string | undefined {
+  const detail = (
+    error as { response?: { status?: number; data?: { detail?: unknown } } }
+  )?.response?.data?.detail;
+  if (typeof detail === 'string') return detail;
+  if (detail && typeof detail === 'object' && 'code' in detail) {
+    return String((detail as { code?: unknown }).code);
+  }
+  const status = (error as { response?: { status?: number } })?.response
+    ?.status;
+  return status ? `HTTP ${status}` : undefined;
+}
+
 function normalizeDeviceSearch(value: string): string {
   return value
     .normalize('NFD')
@@ -287,8 +300,10 @@ export function RegisterDeviceDialog({
       invalidateDeviceFleetQueries(qc);
       qc.invalidateQueries({ queryKey: ['devices', 'allocated'] });
       qc.invalidateQueries({ queryKey: ['relay-agents'] });
-    } catch {
-      toast.error(t('errorRegister'));
+    } catch (error) {
+      // A bare "register failed" hid a 422 from a shadowed route for weeks;
+      // the server's detail is the only thing that names the real cause.
+      toast.error(t('errorRegister'), { description: errorDetail(error) });
     } finally {
       setLoading(false);
     }

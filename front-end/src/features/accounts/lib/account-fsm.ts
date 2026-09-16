@@ -2,6 +2,7 @@
 
 export const ACCOUNT_STATES = [
   'unassigned',
+  'assigned',
   'active',
   'suspended',
   'banned',
@@ -11,9 +12,10 @@ export const ACCOUNT_STATES = [
 export type AccountStateKey = (typeof ACCOUNT_STATES)[number];
 
 const ALLOWED_FROM: Record<AccountStateKey, AccountStateKey[]> = {
-  unassigned: ['active', 'banned', 'retired'],
-  active: ['unassigned', 'suspended', 'banned', 'retired'],
-  suspended: ['active', 'banned', 'retired'],
+  unassigned: ['assigned', 'banned', 'retired'],
+  assigned: ['unassigned', 'active', 'suspended', 'banned', 'retired'],
+  active: ['unassigned', 'assigned', 'suspended', 'banned', 'retired'],
+  suspended: ['assigned', 'active', 'banned', 'retired'],
   banned: ['retired'],
   retired: []
 };

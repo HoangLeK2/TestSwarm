@@ -5,12 +5,22 @@ from typing import Final
 
 from db.models.enums import AccountState
 
-# Allowed targets from each source state. ``unassigned``↔``active`` is normally
-# driven by device link/unlink (db.crud.account) rather than by an operator.
+# Allowed targets from each source state. ``unassigned``↔``assigned`` is driven
+# by device link/unlink (db.crud.account) and ``assigned``↔``active`` by the
+# platform session (services.device_platform_session), not by an operator.
 _TRANSITIONS: Final[dict[AccountState, frozenset[AccountState]]] = {
     AccountState.UNASSIGNED: frozenset(
         {
+            AccountState.ASSIGNED,
+            AccountState.BANNED,
+            AccountState.RETIRED,
+        }
+    ),
+    AccountState.ASSIGNED: frozenset(
+        {
+            AccountState.UNASSIGNED,
             AccountState.ACTIVE,
+            AccountState.SUSPENDED,
             AccountState.BANNED,
             AccountState.RETIRED,
         }
@@ -18,6 +28,7 @@ _TRANSITIONS: Final[dict[AccountState, frozenset[AccountState]]] = {
     AccountState.ACTIVE: frozenset(
         {
             AccountState.UNASSIGNED,
+            AccountState.ASSIGNED,
             AccountState.SUSPENDED,
             AccountState.BANNED,
             AccountState.RETIRED,
@@ -25,6 +36,7 @@ _TRANSITIONS: Final[dict[AccountState, frozenset[AccountState]]] = {
     ),
     AccountState.SUSPENDED: frozenset(
         {
+            AccountState.ASSIGNED,
             AccountState.ACTIVE,
             AccountState.BANNED,
             AccountState.RETIRED,

@@ -725,7 +725,17 @@ def test_login_template_opens_credential_form_from_saved_profile_chooser() -> No
     )
     login_branch = login_gate["else"]
 
-    chooser = login_branch[0]
+    language_switch = login_branch[0]
+    assert language_switch["type"] == "if_element"
+    assert language_switch["by"] == "content-desc"
+    assert language_switch["value"] == "English (US)"
+
+    chooser = next(
+        step
+        for step in login_branch
+        if step.get("type") == "if_element"
+        and step.get("value") == "Dùng trang cá nhân khác"
+    )
     assert chooser["type"] == "if_element"
     assert chooser["by"] == "content-desc"
     assert chooser["value"] == "Dùng trang cá nhân khác"
@@ -740,7 +750,8 @@ def test_login_template_opens_credential_form_from_saved_profile_chooser() -> No
         for index, step in enumerate(login_branch)
         if step.get("type") == "login_if_needed"
     )
-    assert login_index > 0
+    chooser_index = login_branch.index(chooser)
+    assert 0 < chooser_index < login_index
 
 
 def test_post_template_runs_real_like_and_comment() -> None:

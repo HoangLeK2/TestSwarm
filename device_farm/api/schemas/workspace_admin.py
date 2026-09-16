@@ -284,6 +284,9 @@ class AdminAgentOut(BaseModel):
     relay_id: str
     workspaceId: str
     workspaceName: Optional[str] = None
+    # "pool" | "tenant". Only a pool agent's phones may be handed to another
+    # workspace, so the console needs this before it offers the button.
+    workspaceKind: str = "tenant"
     user_id: Optional[str] = None
     enrollment_token_id: Optional[str] = None
     name: str = ""
@@ -324,6 +327,10 @@ class AdminAgentPhoneOut(BaseModel):
     managedByWorkspaceName: Optional[str] = None
     assignedWorkspaceId: Optional[str] = None
     assignedWorkspaceName: Optional[str] = None
+    # `org_id` doubles as "in stock" and "handed out" — it equals the managing
+    # workspace in both cases. True means the phone is still in the stock of the
+    # workspace that owns it.
+    pooled: bool = True
 
 
 class AdminAgentPhoneListOut(BaseModel):
@@ -376,6 +383,9 @@ class AdminDeviceOut(BaseModel):
     assigned: bool = False
     # Only phones managed by a pool workspace are the admin's to move.
     transferable: bool = True
+    # True means the phone still sits in the stock of the workspace that owns
+    # it; false means it has been allocated out to another workspace.
+    pooled: bool = True
     last_seen: Optional[datetime] = None
     paired_at: Optional[datetime] = None
     unpaired_at: Optional[datetime] = None

@@ -327,10 +327,12 @@ async def _mark_account_state_for_checkpoint(
     svc = AccountStateService()
     try:
         if current == AccountState.UNASSIGNED and target == AccountState.SUSPENDED:
+            # `unassigned` cannot go straight to `suspended`; hop through the
+            # linked-but-not-logged-in state the checkpoint implies.
             await svc.transition(
                 db,
                 account_id,
-                to=AccountState.ACTIVE,
+                to=AccountState.ASSIGNED,
                 reason="checkpoint_account_linked",
                 actor="system",
                 skip_row_lock=True,

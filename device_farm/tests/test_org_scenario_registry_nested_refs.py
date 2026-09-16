@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from services.campaign.execution_runtime import build_org_scenario_registry
+from services.org_scenario_validation.checks import build_org_ref_cache
 from services.scenario_dsl.ref_cache import extract_run_scenario_id
 
 # A (pinned) --loop--> B --> C, plus D which nobody references.
@@ -87,6 +88,47 @@ async def test_registry_stops_on_circular_refs():
     assert set(registry["by_id"]) == {"sc-x", "sc-y"}
 
 
+@pytest.mark.asyncio
+async def test_validation_ref_cache_collects_normalized_root_scenario_id():
+    bodies = AsyncMock(
+        return_value=[
+            (
+                "sc-child",
+                "sequence",
+                {"steps": []},
+                "draft",
+                1,
+            )
+        ]
+    )
+    root_body = {
+        "steps": [
+            {
+                "id": "run-child",
+                "type": "run_scenario",
+                "scenario_id": "sc-child",
+                "config": {},
+            }
+        ]
+    }
+
+    with patch("db.crud.org_scenario.get_org_scenario_refs_by_ids", new=bodies):
+        cache = await build_org_ref_cache(
+            AsyncMock(),
+            org_id="org-1",
+            root_scenario_id="sc-root",
+            root_kind="sequence",
+            root_body=root_body,
+            root_status="draft",
+            root_version=1,
+            depth_limit=3,
+        )
+
+    assert cache.get("sc-child") == ("sequence", {"steps": []}, "draft", 1)
+    bodies.assert_awaited_once()
+    assert list(bodies.await_args.args[2]) == ["sc-child"]
+
+
 def test_extract_run_scenario_id_accepts_both_type_spellings():
     assert extract_run_scenario_id({"type": "run_scenario", "scenario_id": "a"}) == "a"
     assert (
@@ -95,4 +137,20 @@ def test_extract_run_scenario_id_accepts_both_type_spellings():
         )
         == "b"
     )
-    assert extract_run_scenario_id({"type": "tap", "scenario_id": "c"}) is None
+    assert (
+        extract_run_scenario_id(
+            {"type": "run_scenario", "scenario_id": "c", "config": {}}
+        )
+        == "c"
+    )
+    assert (
+        extract_run_scenario_id(
+            {
+                "type": "run_scenario",
+                "scenario_id": "root",
+                "config": {"scenario_id": "config"},
+            }
+        )
+        == "config"
+    )
+    assert extract_run_scenario_id({"type": "tap", "scenario_id": "d"}) is None

@@ -121,6 +121,7 @@ export function AdminAccountsPage() {
               <SelectItem value='unassigned'>
                 {t('states.unassigned')}
               </SelectItem>
+              <SelectItem value='assigned'>{t('states.assigned')}</SelectItem>
               <SelectItem value='active'>{t('states.active')}</SelectItem>
               <SelectItem value='suspended'>{t('states.suspended')}</SelectItem>
               <SelectItem value='banned'>{t('states.banned')}</SelectItem>

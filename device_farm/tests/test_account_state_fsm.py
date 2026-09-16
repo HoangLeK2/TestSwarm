@@ -43,8 +43,8 @@ ORG_ID = "org-fsm-test"
 
 
 async def _new_account(db: AsyncSession, username: str, *, active: bool = True):
-    """Create an account. New accounts start `unassigned`; `active=True`
-    promotes it the way linking a device would."""
+    """Create an account. New accounts start `unassigned`; `active=True` walks
+    it up the ladder the way a device link plus a login would."""
     acc = await create_account(
         db,
         platform="facebook",
@@ -53,9 +53,11 @@ async def _new_account(db: AsyncSession, username: str, *, active: bool = True):
         org_id=ORG_ID,
     )
     if active:
-        await AccountStateService().transition(
-            db, acc.id, to=AccountState.ACTIVE, reason="test setup", actor=USER_ID
-        )
+        svc = AccountStateService()
+        for target in (AccountState.ASSIGNED, AccountState.ACTIVE):
+            await svc.transition(
+                db, acc.id, to=target, reason="test setup", actor=USER_ID
+            )
         await db.refresh(acc)
     return acc
 
@@ -154,9 +156,17 @@ class TestAccountStateFsmMatrix:
         assert can_transition(AccountState.BANNED, AccountState.RETIRED)
         assert not can_transition(AccountState.BANNED, AccountState.ACTIVE)
 
-    def test_unassigned_activates_but_cannot_be_suspended(self):
-        assert can_transition(AccountState.UNASSIGNED, AccountState.ACTIVE)
+    def test_unassigned_assigns_but_cannot_skip_to_active(self):
+        # `active` means "a session exists", which an unlinked account cannot
+        # have — it has to be linked (`assigned`) and log in first.
+        assert can_transition(AccountState.UNASSIGNED, AccountState.ASSIGNED)
+        assert not can_transition(AccountState.UNASSIGNED, AccountState.ACTIVE)
         assert not can_transition(AccountState.UNASSIGNED, AccountState.SUSPENDED)
+
+    def test_assigned_is_the_only_door_into_active(self):
+        assert can_transition(AccountState.ASSIGNED, AccountState.ACTIVE)
+        assert can_transition(AccountState.ACTIVE, AccountState.ASSIGNED)
+        assert can_transition(AccountState.ASSIGNED, AccountState.UNASSIGNED)
 
     def test_cooldown_is_no_longer_a_state(self):
         assert "cooldown" not in {s.value for s in AccountState}
@@ -165,8 +175,10 @@ class TestAccountStateFsmMatrix:
 
     def test_full_matrix_snapshot(self):
         allowed = {(a.value, b.value) for a, b, ok in all_transition_pairs() if ok}
-        assert ("unassigned", "active") in allowed
+        assert ("unassigned", "assigned") in allowed
+        assert ("assigned", "active") in allowed
         assert ("active", "unassigned") in allowed
+        assert ("unassigned", "active") not in allowed
         assert ("banned", "retired") in allowed
         assert ("retired", "active") not in allowed
 
@@ -360,14 +372,17 @@ async def test_new_account_starts_unassigned(tenancy_session_factory, fsm_seed):
 
 
 @pytest.mark.asyncio
-async def test_link_activates_and_unlink_reverts(tenancy_session_factory, fsm_seed):
+async def test_link_assigns_without_activating_and_unlink_reverts(
+    tenancy_session_factory, fsm_seed
+):
+    """A phone is not a login: linking stops at `assigned`, never `active`."""
     async with tenancy_session_factory() as db:
         acc = await _new_account(db, "linkme", active=False)
         dev_id = _new_device(db)
         await db.flush()
 
         await assign_account_to_device(db, dev_id, acc.id)
-        assert (await get_account(db, acc.id)).state == AccountState.ACTIVE.value
+        assert (await get_account(db, acc.id)).state == AccountState.ASSIGNED.value
 
         await unassign_account_from_device(db, dev_id, acc.id)
         assert (await get_account(db, acc.id)).state == AccountState.UNASSIGNED.value
@@ -397,7 +412,7 @@ async def test_unlink_does_not_revive_banned_account(
 async def test_second_link_does_not_retrigger_transition(
     tenancy_session_factory, fsm_seed
 ):
-    """Only the last unlink reverts — an account on two devices stays active."""
+    """Only the last unlink reverts — an account on two devices stays assigned."""
     async with tenancy_session_factory() as db:
         acc = await _new_account(db, "twodev", active=False)
         dev_a, dev_b = _new_device(db), _new_device(db)
@@ -406,7 +421,7 @@ async def test_second_link_does_not_retrigger_transition(
         await assign_account_to_device(db, dev_b, acc.id)
 
         await unassign_account_from_device(db, dev_a, acc.id)
-        assert (await get_account(db, acc.id)).state == AccountState.ACTIVE.value
+        assert (await get_account(db, acc.id)).state == AccountState.ASSIGNED.value
 
         await unassign_account_from_device(db, dev_b, acc.id)
         assert (await get_account(db, acc.id)).state == AccountState.UNASSIGNED.value

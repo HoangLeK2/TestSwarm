@@ -126,6 +126,11 @@ export const orgScenariosApi = {
       )
       .then((r) => r.data),
 
+  ensureAccountLogin: (data: { platform: string }) =>
+    farmApi
+      .post<OrgScenarioOut>('/scenarios/account-login/effective', data)
+      .then((r) => r.data),
+
   export: async (
     scenarioId: string,
     format: 'yaml' | 'json' = 'yaml',

@@ -108,6 +108,8 @@ export type AdminUserUpdate = {
   is_active?: boolean;
 };
 
+export type AdminWorkspaceKind = 'pool' | 'tenant';
+
 export type AdminWorkspaceOut = {
   id: string;
   businessName: string;
@@ -118,7 +120,7 @@ export type AdminWorkspaceOut = {
   status: string;
   plan: string;
   /** 'pool' workspaces own relay hosts; 'tenant' workspaces receive phones. */
-  kind: string;
+  kind: AdminWorkspaceKind;
   owner?: AdminOwnerOut | null;
   workspaceAdmins: AdminWorkspaceAdminOut[];
   agentCount: number;
@@ -138,7 +140,7 @@ export type AdminWorkspaceListOut = {
 
 export type AdminWorkspaceCreate = {
   businessName: string;
-  kind?: string;
+  kind?: AdminWorkspaceKind;
   description?: string;
   businessEmail?: string;
   ownerEmail?: string;
@@ -153,7 +155,7 @@ export type AdminWorkspaceUpdate = {
   businessEmail?: string;
   status?: string;
   plan?: string;
-  kind?: string;
+  kind?: AdminWorkspaceKind;
 };
 
 export type AdminOwnerUpdate = {
@@ -231,6 +233,12 @@ export type AdminAgentOut = {
   relay_id: string;
   workspaceId: string;
   workspaceName?: string | null;
+  /**
+   * Kind of the workspace whose activation code enrolled this agent. Only a
+   * `pool` agent may hand its phones to other workspaces — see
+   * docs/device-pool-allocation.md §3.
+   */
+  workspaceKind: 'pool' | 'tenant';
   user_id?: string | null;
   enrollment_token_id?: string | null;
   name: string;
@@ -270,6 +278,8 @@ export type AdminAgentPhoneOut = {
   managedByWorkspaceName?: string | null;
   assignedWorkspaceId?: string | null;
   assignedWorkspaceName?: string | null;
+  /** True while the phone still sits in its owning workspace's pool. */
+  pooled: boolean;
 };
 
 export type AdminAgentPhoneListOut = {
@@ -324,6 +334,8 @@ export type AdminDeviceOut = {
   assigned: boolean;
   /** False for phones a tenant registered on its own relay — admin cannot move them. */
   transferable: boolean;
+  /** True while the phone still sits in its owning workspace's pool. */
+  pooled: boolean;
   last_seen?: string | null;
   paired_at?: string | null;
   unpaired_at?: string | null;
@@ -452,7 +464,12 @@ export type AgentPhoneListParams = {
 /** Codes an operator can act on. Everything else still surfaces as its code. */
 const ADMIN_ERROR_MESSAGES: Record<string, string> = {
   AGENT_NOT_IN_POOL_WORKSPACE:
-    'Workspace quản lý agent này là workspace khách nên phone của nó ở lại đó. Đánh dấu Loại = Pool cho workspace đó trong trang Workspace là phân bổ được ngay, không cần tạo mã mới.',
+    'Agent này enroll bằng activation code của một workspace khách nên phone của nó thuộc riêng workspace đó. Muốn chia sẻ, hãy phát activation code mới từ pool workspace rồi enroll lại agent.',
+  DEVICE_NOT_IN_POOL_WORKSPACE:
+    'Phone này do một workspace khách quản lý nên không chuyển sang workspace khác được. Muốn chia sẻ, hãy phát activation code mới từ pool workspace rồi enroll lại agent.',
+  AGENT_WORKSPACE_IS_IMMUTABLE:
+    'Workspace của agent do activation code quyết định, không đổi được tại đây.',
+  DEVICE_NOT_FOUND: 'Serial này chưa từng được đăng ký.',
   INVALID_WORKSPACE_KIND:
     'Loại workspace không hợp lệ (chỉ nhận pool hoặc tenant).',
   SUPERADMIN_ONLY: 'Chỉ superadmin thực hiện được thao tác này.',
@@ -471,6 +488,17 @@ const ADMIN_ERROR_MESSAGES: Record<string, string> = {
   DEVICE_MANAGED_BY_ANOTHER_WORKSPACE:
     'Phone này đang do workspace khác quản lý — không phân bổ từ agent này được.'
 };
+
+/** Machine code of a `{detail: {code}}` error, for screens with a localized message. */
+export function adminApiErrorCode(error: unknown): string | null {
+  const detail = (
+    error as { response?: { data?: { detail?: unknown } } } | null | undefined
+  )?.response?.data?.detail;
+  if (detail && typeof detail === 'object' && 'code' in detail) {
+    return String((detail as { code?: string }).code);
+  }
+  return null;
+}
 
 export function formatAdminApiError(error: unknown): string {
   const err = error as {

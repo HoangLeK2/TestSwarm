@@ -14,7 +14,7 @@ from db.crud.account_group import get_group, pick_next_batch
 from db.models.account import Account, DeviceAccount
 from services.social_ext.contract import SOCIAL_ACCOUNT_BOUND_STEP_TYPES
 from db.models.campaign import Campaign
-from db.models.enums import AccountState
+from db.models.enums import DISPATCHABLE_STATES
 from services.org_scenario_validation.step_index import OrgStepIndex
 from services.platform_session_guard import DEFAULT_PLATFORM
 from services.scenario_dsl.step_registry import StepRegistry
@@ -227,7 +227,7 @@ async def validate_account_group_in_org(
 
 def _account_is_dispatchable(account: Account, *, now: datetime | None = None) -> bool:
     ts = now or datetime.now(timezone.utc)
-    if account.state != AccountState.ACTIVE.value:
+    if account.state not in DISPATCHABLE_STATES:
         return False
     cooldown = account.cooldown_until
     if cooldown is not None and cooldown > ts:
@@ -387,7 +387,7 @@ async def resolve_accounts_for_devices(
                     DeviceAccount.device_id.in_(missing_primary_ids),
                     Account.org_id == org_id,
                     Account.platform == platform,
-                    Account.state == AccountState.ACTIVE.value,
+                    Account.state.in_(DISPATCHABLE_STATES),
                 )
                 .order_by(DeviceAccount.assigned_at)
             )

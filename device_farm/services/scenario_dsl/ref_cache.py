@@ -25,8 +25,8 @@ def extract_run_scenario_id(step: dict[str, Any]) -> str | None:
     # name made every authored `run_scenario` invisible to ref collection.
     if str(step.get("type") or "") not in (COMPOSITION_RUN_SCENARIO, "run_scenario"):
         return None
-    config = step.get("config") if isinstance(step.get("config"), dict) else step
-    ref_id = str(config.get("scenario_id") or "").strip()
+    config = step.get("config") if isinstance(step.get("config"), dict) else {}
+    ref_id = str(config.get("scenario_id") or step.get("scenario_id") or "").strip()
     return ref_id or None
 
 

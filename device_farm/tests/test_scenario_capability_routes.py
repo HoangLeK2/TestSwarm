@@ -232,6 +232,7 @@ async def test_account_login_preview_stream_creates_account_execution_history(
     org_id = "org-login-stream"
     user_id = "user-login-stream"
     account_id = "acc-login-stream"
+    org_scenario_id = "org-login-scenario-preview"
     device_id = "dev-login-stream"
     serial = "dev-1"
     step_result = {
@@ -328,6 +329,8 @@ async def test_account_login_preview_stream_creates_account_execution_history(
             json={
                 "steps": [{"id": "login_wait", "type": "wait", "seconds": 0}],
                 "variables": {"__ACCOUNT_ID__": account_id},
+                "persist_account_login_execution": True,
+                "scenario_id": org_scenario_id,
             },
         )
 
@@ -361,6 +364,119 @@ async def test_account_login_preview_stream_creates_account_execution_history(
     assert execution.run_type == "account_login"
     assert execution.status == "completed"
     assert execution.org_id == org_id
+    assert execution.scenario_id is None
+    assert execution.meta["org_scenario_id"] == org_scenario_id
     assert step.step_type == "wait"
     assert step.effective_config_json["trace"]["account_id"] == account_id
     assert result.status == "passed"
+
+
+async def test_generic_account_preview_stream_does_not_create_account_login_history(
+    tenancy_session_factory,
+    monkeypatch,
+):
+    from api.routes.device_control import scenarios as scenario_routes
+
+    org_id = "org-generic-preview"
+    user_id = "user-generic-preview"
+    account_id = "acc-generic-preview"
+    device_id = "dev-generic-preview"
+    serial = "dev-1"
+
+    async with tenancy_session_factory() as db:
+        db.add(
+            Organization(
+                id=org_id,
+                business_name="Generic Preview Org",
+                business_email="generic-preview@example.com",
+            )
+        )
+        db.add(
+            Device(
+                id=device_id,
+                serial=serial,
+                device_serial=serial,
+                org_id=org_id,
+            )
+        )
+        db.add(
+            Account(
+                id=account_id,
+                org_id=org_id,
+                platform="facebook",
+                username="61582490922369",
+            )
+        )
+        db.add(
+            DeviceAccount(
+                device_id=device_id,
+                account_id=account_id,
+                is_primary=True,
+            )
+        )
+        await db.commit()
+
+    monkeypatch.setattr(scenario_routes, "AsyncSessionLocal", tenancy_session_factory)
+    monkeypatch.setattr(
+        scenario_routes,
+        "caller_auth_from_request",
+        lambda _request: AuthContext(
+            user_id=user_id,
+            token_type="access",
+            raw_token="test",
+            org_id=org_id,
+        ),
+    )
+
+    def fake_run_scenario_on_device(*_args, **kwargs):
+        assert kwargs.get("execution_id") is None
+        return {
+            "serial": serial,
+            "success": True,
+            "steps_executed": 1,
+            "step_results": [
+                {
+                    "index": 0,
+                    "type": "wait",
+                    "ok": True,
+                    "message": "waited",
+                }
+            ],
+            "failed_message": "",
+            "context": {},
+        }
+
+    monkeypatch.setattr(
+        scenario_routes,
+        "run_scenario_on_device",
+        fake_run_scenario_on_device,
+    )
+
+    app = FastAPI()
+    app.include_router(
+        build_scenarios_router(_FakeManager(_FakeDevice()), _DbConfig(), object()),
+        prefix="/api",
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            f"/api/devices/{serial}/scenario/preview-stream",
+            json={
+                "steps": [{"id": "generic_wait", "type": "wait", "seconds": 0}],
+                "variables": {"__ACCOUNT_ID__": account_id},
+            },
+        )
+
+    assert response.status_code == 200
+    assert '"event": "start"' in response.text
+
+    async with tenancy_session_factory() as db:
+        executions = (
+            await db.execute(
+                select(Execution).where(Execution.account_id == account_id)
+            )
+        ).scalars().all()
+
+    assert executions == []

@@ -89,6 +89,7 @@ export function AccountStateTransitionDialog({
   const statusLabel = (key: AccountStateKey) => {
     const map: Record<AccountStateKey, string> = {
       unassigned: tList('statusUnassigned'),
+      assigned: tList('statusAssigned'),
       active: tList('statusActive'),
       suspended: tList('statusVerifying'),
       banned: tList('statusBanned'),

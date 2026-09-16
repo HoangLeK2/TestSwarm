@@ -179,3 +179,43 @@ test('computeDeviceTransportCounts matches isDeviceOnlineForList per device', ()
   assert.equal(counts.online, 2);
   assert.equal(counts.offline, 0);
 });
+
+test('isDeviceOnlineForList trusts server transport_online for an allocated pool phone', () => {
+  // The managing agent lives in the pool workspace, so /relay-agents (org
+  // scoped) never returns it and relayMap cannot resolve anything. Without the
+  // server flag this phone reads offline while it is streaming.
+  const now = Date.now();
+  assert.equal(
+    isDeviceOnlineForList(
+      device({
+        serial: 'SN-ALLOCATED',
+        adb_serial: 'SN-ALLOCATED',
+        managed_by_relay_id: 'agt_pool_agent',
+        relay_id: 'agt_pool_agent',
+        transport_online: true,
+        last_seen: new Date(now - 7_200_000).toISOString()
+      }),
+      {},
+      now
+    ),
+    true
+  );
+});
+
+test('isDeviceOnlineForList stays false when the server reports no transport', () => {
+  const now = Date.now();
+  assert.equal(
+    isDeviceOnlineForList(
+      device({
+        serial: 'SN-ALLOCATED',
+        adb_serial: 'SN-ALLOCATED',
+        managed_by_relay_id: 'agt_pool_agent',
+        transport_online: false,
+        last_seen: new Date(now - 7_200_000).toISOString()
+      }),
+      {},
+      now
+    ),
+    false
+  );
+});

@@ -10,6 +10,10 @@ class ScenarioPreviewRequest(BaseModel):
     steps: List[Dict[str, Any]]
     variables: Dict[str, Any] = {}
     scenario_id: Optional[str] = None
+    # Only the account-login dialog should request durable account-login
+    # execution history. Generic previews may also carry __ACCOUNT_ID__ for
+    # variable resolution and must stay ephemeral.
+    persist_account_login_execution: bool = False
     # Inline per-device vars for preview/run. Useful before scenario is saved:
     # frontend can send draft vars directly. Keys use the same namespace as
     # global variables and override them at runtime.

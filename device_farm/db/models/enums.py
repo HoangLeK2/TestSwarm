@@ -70,9 +70,15 @@ class AccountState(StrEnum):
     ``accounts.cooldown_until``, checked independently of ``state`` by the
     campaign resolver and group pickers. Legacy ``cooldown`` rows normalize to
     ``active`` and keep their ``cooldown_until``.
+
+    ``unassigned`` → ``assigned`` → ``active`` is the acquisition ladder:
+    no device link → device linked → a verified platform session exists.
+    ``active`` means logged in, not merely usable — use ``DISPATCHABLE_STATES``
+    to pick accounts a run may drive.
     """
 
     UNASSIGNED = "unassigned"
+    ASSIGNED = "assigned"
     ACTIVE = "active"
     SUSPENDED = "suspended"
     BANNED = "banned"
@@ -80,6 +86,11 @@ class AccountState(StrEnum):
 
 
 AccountStatus = AccountState
+
+#: States a campaign/scenario run may pick an account in. ``assigned`` belongs
+#: here: an account has to be dispatchable *before* it can log in, otherwise the
+#: login scenario never receives its ``__ACCOUNT_*`` variables.
+DISPATCHABLE_STATES = frozenset({AccountState.ASSIGNED.value, AccountState.ACTIVE.value})
 
 
 class AccountEventType(StrEnum):

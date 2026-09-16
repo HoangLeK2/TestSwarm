@@ -380,3 +380,58 @@ async def test_system_templates_list_requires_read(session_factory):
         resp = await client.get("/api/scenarios/templates")
     assert resp.status_code == 200
     assert len(resp.json()) >= 5
+
+@pytest.mark.asyncio
+async def test_account_login_effective_creates_system_org_scenario_without_reusing_draft(session_factory):
+    await _seed_orgs(session_factory)
+    await _seed_system_templates(session_factory)
+    app = _build_app(session_factory)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        manual = await client.post(
+            "/api/scenarios",
+            json={
+                "name": "Đăng nhập Facebook 1",
+                "kind": "sequence",
+                "tags": ["login", "facebook"],
+                "body_json": {"steps": [{"id": "manual", "type": "input_wait.wait", "seconds": 1}]},
+            },
+        )
+        assert manual.status_code == 201
+        manual_id = manual.json()["id"]
+        before = await _count_org_scenarios(session_factory, ORG_A)
+        ensured = await client.post(
+            "/api/scenarios/account-login/effective",
+            json={"platform": "facebook"},
+        )
+        after = await _count_org_scenarios(session_factory, ORG_A)
+        again = await client.post(
+            "/api/scenarios/account-login/effective",
+            json={"platform": "facebook"},
+        )
+        final = await _count_org_scenarios(session_factory, ORG_A)
+        manual_after = await client.get(f"/api/scenarios/{manual_id}")
+
+    assert ensured.status_code == 200
+    data = ensured.json()
+    assert data["id"] != manual_id
+    assert data["status"] == "active"
+    assert data["kind"] == "sequence"
+    assert data["created_by"] is None
+    assert data["is_runnable"] is True
+    assert data["body_json"]["steps"]
+    assert {
+        "login",
+        "facebook",
+        "login-platform:facebook",
+        "account-login",
+        "login-override",
+        "system-account-login",
+    }.issubset(set(data["tags"]))
+    assert data["name"].endswith("(Account Login)")
+    assert after == before + 1
+    assert again.status_code == 200
+    assert again.json()["id"] == data["id"]
+    assert final == after
+    assert manual_after.json()["status"] == "draft"
+    assert "system-account-login" not in manual_after.json()["tags"]

@@ -929,6 +929,7 @@
       "badgeDev": "Dev",
       "testAccountHint": "Tài khoản có dấu hiệu môi trường thử — kiểm tra trước khi dùng trên production",
       "statusUnassigned": "Chưa gắn",
+      "statusAssigned": "Chưa đăng nhập",
       "statusActive": "Hoạt động",
       "statusVerifying": "Xác thực",
       "statusBanned": "Đã cấm",
@@ -4747,6 +4748,10 @@
       "toastError": "{label}: lỗi",
       "run": "Chạy",
       "cancel": "Huỷ"
+    },
+    "allocatedBanner": {
+      "title": "{count} phone được cấp đang chờ đăng ký",
+      "description": "Workspace admin đã phân bổ các phone này cho workspace hiện tại. Đăng ký một phone để claim trước khi chạy automation."
     }
   },
   "deviceStf": {
@@ -6070,7 +6075,9 @@
         "stale": "Quá hạn",
         "suspended": "Đã tạm dừng",
         "unassigned": "Chưa gán",
-        "unknown": "Không rõ"
+        "unknown": "Không rõ",
+        "in_pool": "Trong kho",
+        "allocated": "Đã cấp"
       }
     },
     "dashboard": {
@@ -6125,6 +6132,31 @@
       "scope": {
         "workspace": "Phạm vi quản trị",
         "allWorkspaces": "Tất cả workspace"
+      },
+      "setup": {
+        "title": "Thiết lập Device Pool",
+        "description": "Đi theo các bước này để biến phone trên relay host thành tài nguyên cho workspace: tạo pool, phát mã kích hoạt, enroll agent, rồi phân bổ phone cho workspace khách.",
+        "primaryAction": "Mở Agent",
+        "poolWorkspace": {
+          "title": "Tạo workspace pool",
+          "description": "Workspace pool sở hữu relay host và là nguồn phone có thể chia sẻ.",
+          "action": "Quản lý workspace"
+        },
+        "activation": {
+          "title": "Phát mã kích hoạt từ pool",
+          "description": "Tạo mã agent từ workspace pool để host có thể chia sẻ phone.",
+          "action": "Tạo mã"
+        },
+        "agent": {
+          "title": "Enroll relay agent",
+          "description": "Chạy agent bằng mã đó và chờ agent online, báo serial phone.",
+          "action": "Xem agent"
+        },
+        "allocate": {
+          "title": "Phân bổ phone",
+          "description": "Cấp phone trong pool cho workspace sẽ đăng ký, claim và chạy automation.",
+          "action": "Xem inventory"
+        }
       }
     },
     "workspaces": {
@@ -6210,7 +6242,8 @@
         "description": "Mô tả",
         "kind": "Loại",
         "kindPool": "Pool (chủ máy relay)",
-        "kindTenant": "Khách (nhận phone)"
+        "kindTenant": "Khách (nhận phone)",
+        "kindHint": "Workspace pool sở hữu relay host và có thể phân bổ phone cho workspace khác. Workspace khách nhận phone và dùng chúng để chạy automation."
       },
       "editDialog": {
         "title": "Sửa workspace",
@@ -6228,7 +6261,7 @@
         "kind": "Loại",
         "kindPool": "Pool (chủ máy relay)",
         "kindTenant": "Khách (nhận phone)",
-        "kindHint": "Chỉ workspace pool mới giữ được mã kích hoạt agent và phân bổ phone cho workspace khác. Chỉ superadmin đổi được."
+        "kindHint": "Workspace pool sở hữu relay host và có thể phân bổ phone cho workspace khác. Workspace khách nhận phone và dùng chúng để chạy automation."
       },
       "access": {
         "title": "Chi tiết workspace",
@@ -6307,7 +6340,17 @@
           "email": "Email"
         }
       },
-      "kindPoolBadge": "Pool"
+      "kindPoolBadge": "Pool",
+      "setup": {
+        "title": "Thiết lập pool trước khi phân bổ phone",
+        "description": "Dùng một workspace Pool để giữ relay host, tạo mã kích hoạt từ pool đó, rồi phân bổ phone agent báo về cho workspace khách.",
+        "stepPool": "Tạo hoặc đánh dấu workspace Pool",
+        "stepActivation": "Tạo mã kích hoạt từ pool đó",
+        "stepAllocation": "Phân bổ phone từ pool agent",
+        "activationAction": "Tạo mã kích hoạt",
+        "allocateAction": "Phân bổ phone",
+        "eyebrow": "Luồng Device Pool"
+      }
     },
     "workspaceAccess": {
       "title": "Phân quyền workspace",
@@ -6364,6 +6407,7 @@
       },
       "states": {
         "unassigned": "Chưa gắn",
+        "assigned": "Chưa đăng nhập",
         "active": "Hoạt động",
         "suspended": "Xác thực",
         "banned": "Đã cấm",
@@ -6592,7 +6636,8 @@
         "status": "Trạng thái",
         "online": "Trực tuyến",
         "offline": "Ngoại tuyến",
-        "disabled": "Đã vô hiệu hóa"
+        "disabled": "Đã vô hiệu hóa",
+        "workspaceImmutableHint": "Workspace của agent do activation code lúc enroll quyết định, không đổi được tại đây."
       },
       "phoneViewer": {
         "title": "Phone của agent",
@@ -6635,6 +6680,52 @@
         "toast": {
           "assigned": "Đã cấp phone cho workspace",
           "returned": "Đã thu hồi phone về pool"
+        },
+        "tenantLocked": "Agent này enroll bằng activation code của workspace {workspace} nên phone của nó thuộc riêng workspace đó. Muốn chia sẻ, hãy phát activation code mới từ pool workspace rồi enroll lại agent.",
+        "deviceNotFound": "Serial này chưa từng được đăng ký thành device.",
+        "assignToWorkspace": "Cấp {count} phone cho {workspace}",
+        "chooseTargetWorkspace": "Chọn workspace nhận",
+        "chooseTargetWorkspaceHint": "Chọn workspace nhận để bật nút cấp phone.",
+        "noTargetWorkspaces": "Không có workspace phù hợp",
+        "targetWorkspaceLabel": "Workspace nhận phone",
+        "targetWorkspaceHelp": "Chọn workspace sẽ nhận và đăng ký các phone đang tick.",
+        "targetWorkspaceSelected": "Workspace đích: {workspace}",
+        "noTargetWorkspacesHint": "Không có workspace nhận trong phạm vi quản trị của bạn. Hãy tạo hoặc cấp quyền cho workspace đích trước.",
+        "steps": {
+          "phones": {
+            "title": "Chọn phone",
+            "description": "Tick các serial phone cần phân bổ.",
+            "done": "Đã chọn {count} phone"
+          },
+          "workspace": {
+            "title": "Chọn workspace nhận",
+            "description": "Chọn workspace sẽ nhận các phone này."
+          }
+        },
+        "selectedPhonesTitle": "Phone đã chọn ({count})",
+        "nextToWorkspace": "Tiếp: chọn workspace ({count})",
+        "backToPhones": "Quay lại chọn phone"
+      },
+      "onboarding": {
+        "title": "Luồng phân bổ phone",
+        "description": "Chỉ agent enroll từ workspace Pool mới phân bổ phone được. Nếu host đã enroll từ workspace khách, hãy phát mã pool mới và enroll lại.",
+        "activationAction": "Tạo mã pool",
+        "allocateAction": "Phân bổ phone",
+        "stepPool": "1. Chọn workspace Pool",
+        "stepCode": "2. Tạo mã kích hoạt của pool",
+        "stepEnroll": "3. Enroll agent và chờ báo serial",
+        "stepAssign": "4. Cấp hoặc thu hồi phone trong dialog phân bổ"
+      },
+      "agentGroups": {
+        "pool": {
+          "title": "Agent cấp phone",
+          "description": "Agent enroll từ workspace Pool. Dùng nhóm này để phân bổ phone cho workspace.",
+          "empty": "Chưa có agent pool. Hãy tạo mã kích hoạt từ workspace Pool rồi enroll lại relay host."
+        },
+        "workspace": {
+          "title": "Agent workspace",
+          "description": "Agent của workspace khách. Phone của nhóm này ở lại trong workspace đó.",
+          "empty": "Không có agent workspace trong phạm vi này."
         }
       }
     },
@@ -6680,6 +6771,10 @@
         "title": "Chuyển thiết bị",
         "destinationWorkspace": "Workspace đích",
         "transfer": "Chuyển"
+      },
+      "actions": {
+        "transfer": "Chuyển",
+        "notTransferable": "Chỉ phone do pool quản lý mới chuyển được tại đây. Phone do workspace khách sở hữu cần enroll lại qua workspace pool."
       }
     },
     "platformApps": {

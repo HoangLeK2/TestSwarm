@@ -172,6 +172,8 @@ def _resolve_user_id_from_request(request: Request) -> Optional[str]:
 
 
 def _requested_account_id(body: ScenarioPreviewRequest) -> str:
+    if not body.persist_account_login_execution:
+        return ""
     return str((body.variables or {}).get("__ACCOUNT_ID__") or "").strip()
 
 
@@ -229,7 +231,7 @@ async def _create_account_login_stream_execution(
                 kind=ExecutionKind.SESSION.value,
                 organization_id=auth_ctx.org_id,
                 campaign_id=None,
-                scenario_id=body.scenario_id,
+                scenario_id=None,
                 user_id=auth_ctx.user_id,
                 account_id=str(account.id),
                 status=ExecutionStatus.RUNNING.value,
@@ -237,6 +239,7 @@ async def _create_account_login_stream_execution(
                     "source": "account_login_dialog",
                     "trace_id": trace_id,
                     "step_count": len(body.steps or []),
+                    "org_scenario_id": body.scenario_id,
                 },
                 device_config={"device_serial": serial},
             )

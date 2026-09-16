@@ -14,7 +14,11 @@ from db.models.device import Device
 from db.models.enums import AccountState, DevicePlatformSessionState
 from services.campaign.account_resolver import ResolvedDeviceAccount
 from services.campaign.dispatcher import _apply_platform_session_guard_to_accounts
-from services.device_platform_session import get_platform_session, mark_active
+from services.device_platform_session import (
+    get_platform_session,
+    mark_active,
+    mark_login_required,
+)
 from services.platform_readiness import PlatformReadinessResult, PlatformReadinessStatus
 from services.facebook_session_guard import (
     FacebookSessionGuardDecision,
@@ -254,6 +258,48 @@ async def test_confirmed_login_activates_account_state(session_factory):
     assert account.state == AccountState.ACTIVE.value
     assert account.status == AccountState.ACTIVE.value
     assert account.state_reason == "scenario_login_confirmed"
+
+
+@pytest.mark.asyncio
+async def test_lost_session_demotes_account_to_assigned(session_factory):
+    """`active` tracks the session, so losing it drops back to `assigned`."""
+    async with session_factory() as db:
+        with use_tenant_scope("org-1"):
+            db.add(
+                Account(
+                    id="account-1",
+                    org_id="org-1",
+                    platform="facebook",
+                    username="logged-out-user",
+                    status=AccountState.ASSIGNED.value,
+                    state=AccountState.ASSIGNED.value,
+                )
+            )
+            await db.flush()
+
+            await mark_active(
+                db,
+                org_id="org-1",
+                device_id="device-1",
+                account_id="account-1",
+                establishment_method="scenario_login",
+                reason="scenario_login_confirmed",
+            )
+            promoted = (await db.get(Account, "account-1")).state
+
+            await mark_login_required(
+                db,
+                org_id="org-1",
+                device_id="device-1",
+                reason="session_expired",
+            )
+            account = await db.get(Account, "account-1")
+
+    assert promoted == AccountState.ACTIVE.value
+    assert account is not None
+    assert account.state == AccountState.ASSIGNED.value
+    assert account.status == AccountState.ASSIGNED.value
+    assert account.state_reason == "session_expired"
 
 
 @pytest.mark.asyncio

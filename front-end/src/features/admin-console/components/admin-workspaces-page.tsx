@@ -88,6 +88,7 @@ import {
   type AdminUserCreate,
   type AdminUserOut,
   type AdminWorkspaceCreate,
+  type AdminWorkspaceKind,
   type AdminWorkspaceOut,
   formatAdminApiError
 } from '../services/admin-api';
@@ -180,6 +181,7 @@ export function AdminWorkspacesPage() {
   const searchParams = useSearchParams();
   const detailWorkspaceId = searchParams.get('workspaceId');
   const shouldOpenDetail = searchParams.get('detail') === '1';
+  const shouldOpenCreate = searchParams.get('create') === '1';
 
   const params = useMemo(
     () => ({
@@ -224,6 +226,10 @@ export function AdminWorkspacesPage() {
       setAccessWorkspace(deepLinkedWorkspace.data);
     }
   }, [deepLinkedWorkspace.data, shouldOpenDetail]);
+
+  useEffect(() => {
+    if (shouldOpenCreate) setCreateOpen(true);
+  }, [shouldOpenCreate]);
 
   const enterWorkspace = (workspace: AdminWorkspaceOut) => {
     setCurrentOrg(workspaceToOrganization(workspace));
@@ -367,6 +373,53 @@ export function AdminWorkspacesPage() {
           />
         </div>
 
+        <section className='rounded-lg border bg-background p-4 shadow-sm'>
+          <div className='flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between'>
+            <div className='min-w-0 space-y-3'>
+              <div>
+                <p className='text-xs font-medium uppercase tracking-wide text-muted-foreground'>
+                  {t('setup.eyebrow')}
+                </p>
+                <h2 className='mt-1 text-base font-semibold leading-6'>
+                  {t('setup.title')}
+                </h2>
+                <p className='mt-1 max-w-3xl text-sm leading-6 text-muted-foreground'>
+                  {t('setup.description')}
+                </p>
+              </div>
+              <div className='grid gap-2 md:grid-cols-3'>
+                {[
+                  t('setup.stepPool'),
+                  t('setup.stepActivation'),
+                  t('setup.stepAllocation')
+                ].map((label, index) => (
+                  <div
+                    key={label}
+                    className='flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm'
+                  >
+                    <span className='flex size-6 shrink-0 items-center justify-center rounded-full bg-background text-xs font-semibold text-foreground shadow-sm'>
+                      {index + 1}
+                    </span>
+                    <span className='min-w-0 text-muted-foreground'>
+                      {label}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className='flex shrink-0 flex-wrap gap-2'>
+              <Button asChild variant='outline' size='sm'>
+                <Link href={`${ROUTES.ADMIN.AGENTS}?tab=tokens`}>
+                  {t('setup.activationAction')}
+                </Link>
+              </Button>
+              <Button asChild size='sm'>
+                <Link href={ROUTES.ADMIN.AGENTS}>{t('setup.allocateAction')}</Link>
+              </Button>
+            </div>
+          </div>
+        </section>
+
         <div className='flex flex-col gap-3 rounded-md border bg-background p-3 md:flex-row'>
           <SearchField
             value={search}
@@ -507,47 +560,45 @@ export function AdminWorkspacesPage() {
                           <ShieldCheck className='mr-2 size-4' />
                           {t('actions.details')}
                         </Button>
-                        {isSuperadmin ? (
-                          <ActionTooltip
-                            label={
+                        <ActionTooltip
+                          label={
+                            workspace.kind === 'pool'
+                              ? t('actions.unmarkPool')
+                              : t('actions.markPool')
+                          }
+                        >
+                          <Button
+                            size='icon'
+                            variant='ghost'
+                            className='size-8'
+                            aria-label={
                               workspace.kind === 'pool'
                                 ? t('actions.unmarkPool')
                                 : t('actions.markPool')
                             }
+                            disabled={updateMutation.isPending}
+                            onClick={() =>
+                              updateMutation.mutate({
+                                id: workspace.id,
+                                body: {
+                                  kind:
+                                    workspace.kind === 'pool'
+                                      ? 'tenant'
+                                      : 'pool'
+                                }
+                              })
+                            }
                           >
-                            <Button
-                              size='icon'
-                              variant='ghost'
-                              className='size-8'
-                              aria-label={
+                            <Server
+                              className={cn(
+                                'size-4',
                                 workspace.kind === 'pool'
-                                  ? t('actions.unmarkPool')
-                                  : t('actions.markPool')
-                              }
-                              disabled={updateMutation.isPending}
-                              onClick={() =>
-                                updateMutation.mutate({
-                                  id: workspace.id,
-                                  body: {
-                                    kind:
-                                      workspace.kind === 'pool'
-                                        ? 'tenant'
-                                        : 'pool'
-                                  }
-                                })
-                              }
-                            >
-                              <Server
-                                className={cn(
-                                  'size-4',
-                                  workspace.kind === 'pool'
-                                    ? 'text-sky-600 dark:text-sky-400'
-                                    : undefined
-                                )}
-                              />
-                            </Button>
-                          </ActionTooltip>
-                        ) : null}
+                                  ? 'text-sky-600 dark:text-sky-400'
+                                  : undefined
+                              )}
+                            />
+                          </Button>
+                        </ActionTooltip>
                         <ActionTooltip label={t('actions.edit')}>
                           <Button
                             size='icon'
@@ -692,7 +743,8 @@ function WorkspaceCreateDialog({
     description: '',
     businessEmail: '',
     ownerEmail: '',
-    ownerName: ''
+    ownerName: '',
+    kind: 'tenant'
   });
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -737,22 +789,23 @@ function WorkspaceCreateDialog({
               onChange={(e) => setBody({ ...body, ownerName: e.target.value })}
             />
           </Field>
-          {isSuperadmin ? (
-            <Field label={t('kind')}>
-              <Select
-                value={body.kind ?? 'tenant'}
-                onValueChange={(value) => setBody({ ...body, kind: value })}
-              >
-                <SelectTrigger className='w-full'>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value='tenant'>{t('kindTenant')}</SelectItem>
-                  <SelectItem value='pool'>{t('kindPool')}</SelectItem>
-                </SelectContent>
-              </Select>
-            </Field>
-          ) : null}
+          <Field label={t('kind')}>
+            <Select
+              value={body.kind ?? 'tenant'}
+              onValueChange={(value) =>
+                setBody({ ...body, kind: value as AdminWorkspaceKind })
+              }
+            >
+              <SelectTrigger className='w-full'>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value='tenant'>{t('kindTenant')}</SelectItem>
+                <SelectItem value='pool'>{t('kindPool')}</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className='mt-1 text-xs text-muted-foreground'>{t('kindHint')}</p>
+          </Field>
           <Field label={t('description')} className='md:col-span-2'>
             <Textarea
               value={body.description}
@@ -839,6 +892,23 @@ function WorkspaceEditDialog({
                   <SelectItem value='archived'>{t('archived')}</SelectItem>
                 </SelectContent>
               </Select>
+            </Field>
+            <Field label={t('kind')}>
+              <Select
+                value={active.kind || 'tenant'}
+                onValueChange={(value) =>
+                  setDraft({ ...draft, kind: value as AdminWorkspaceKind })
+                }
+              >
+                <SelectTrigger className='w-full'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value='tenant'>{t('kindTenant')}</SelectItem>
+                  <SelectItem value='pool'>{t('kindPool')}</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className='mt-1 text-xs text-muted-foreground'>{t('kindHint')}</p>
             </Field>
             <Field label={t('description')} className='md:col-span-2'>
               <Textarea

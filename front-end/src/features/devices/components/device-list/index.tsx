@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import { Smartphone } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import type { DeviceOut, RelayAgentOut } from '../../services/manage-api';
-import { relayAgentsApi } from '../../services/manage-api';
+import { devicesApi, relayAgentsApi } from '../../services/manage-api';
 import { useDevices, useFleetStats } from '../../hooks/use-devices';
 import { useDeviceListRealtime } from '../../hooks/use-device-list-realtime';
 import { useLifecycleWsConnected } from '../../lib/lifecycle-ws-store';
@@ -65,6 +65,12 @@ export function DeviceList() {
   const { data: relayAgents } = useQuery<RelayAgentOut[]>({
     queryKey: ['relay-agents'],
     queryFn: relayAgentsApi.list,
+    staleTime: 15_000,
+    refetchInterval: 30_000
+  });
+  const { data: allocatedDevices = [] } = useQuery<DeviceOut[]>({
+    queryKey: ['devices', 'allocated', 'banner'],
+    queryFn: () => devicesApi.listAllocated({ limit: 20 }),
     staleTime: 15_000,
     refetchInterval: 30_000
   });
@@ -193,6 +199,25 @@ export function DeviceList() {
           />
         </Can>
       </div>
+
+      {allocatedDevices.length > 0 ? (
+        <Can object='devices' action='create'>
+          <section className='flex flex-col gap-3 rounded-md border bg-background p-4 md:flex-row md:items-center md:justify-between'>
+            <div>
+              <h3 className='text-sm font-semibold'>
+                {t('allocatedBanner.title', { count: allocatedDevices.length })}
+              </h3>
+              <p className='mt-1 text-sm text-muted-foreground'>
+                {t('allocatedBanner.description')}
+              </p>
+            </div>
+            <RegisterDeviceDialog
+              relayAgents={relayAgents ?? []}
+              registeredSerials={registeredSerials}
+            />
+          </section>
+        </Can>
+      ) : null}
 
       <FleetStatsSummary
         stats={fleetStats}

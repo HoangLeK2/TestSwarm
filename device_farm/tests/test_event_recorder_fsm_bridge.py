@@ -135,3 +135,46 @@ async def test_connected_event_does_not_release_busy_device(
 
     async with tenancy_session_factory() as db:
         assert await svc.get_state(db, dev.id) == DeviceFsmState.BUSY
+
+
+@pytest.mark.asyncio
+async def test_connected_event_promotes_device_without_tenant_context(
+    tenancy_session_factory, event_recorder_seed, monkeypatch
+):
+    """The runtime has no request behind it, so no current_org_id is set.
+
+    The two tests above pass only because the fixture leaves a tenant context
+    set; production never does. With the tenant-scoped ORM lookup, every
+    connect raised TENANCY_STRICT_MODE, ``_write_db`` swallowed it as a warning
+    and the device sat in UNKNOWN while physically online.
+    """
+    monkeypatch.setattr("db.database.AsyncSessionLocal", tenancy_session_factory)
+    svc = DeviceStateService()
+    async with tenancy_session_factory() as db:
+        with tenant_context(ORG_ID):
+            dev = await create_device(
+                db,
+                serial="runtime-ready-no-tenant",
+                user_id=USER_ID,
+                org_id=ORG_ID,
+            )
+            await db.commit()
+
+    set_current_org_id(None)
+    recorder = EventRecorder(db_enabled=True)
+    await recorder._write_db(
+        {
+            "id": "runtime-ready-event-no-tenant",
+            "serial": "runtime-ready-no-tenant",
+            "event": "connected",
+            "reason": None,
+            "old_state": "CONNECTING",
+            "new_state": "READY",
+            "device_model": None,
+            "device_brand": None,
+            "extra_data": None,
+        }
+    )
+
+    async with tenancy_session_factory() as db:
+        assert await svc.get_state(db, dev.id) == DeviceFsmState.ONLINE

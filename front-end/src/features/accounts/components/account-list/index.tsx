@@ -40,6 +40,7 @@ export function AccountList() {
   const columns = useMemo(() => {
     const statusLabel: Record<AccountStateKey, string> = {
       unassigned: t('statusUnassigned'),
+      assigned: t('statusAssigned'),
       active: t('statusActive'),
       suspended: t('statusVerifying'),
       banned: t('statusBanned'),

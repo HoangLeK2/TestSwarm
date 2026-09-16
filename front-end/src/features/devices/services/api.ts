@@ -555,7 +555,8 @@ export async function previewScenarioStream(
   variables?: Record<string, any>,
   accountGroupId?: string | null,
   scenarioId?: string | null,
-  scenarioDeviceVars?: Record<string, any> | null
+  scenarioDeviceVars?: Record<string, any> | null,
+  persistAccountLoginExecution = false
 ): Promise<void> {
   // Use farmApi's baseURL for the SSE endpoint
   const baseUrl = farmApi.defaults.baseURL || '';
@@ -572,6 +573,9 @@ export async function previewScenarioStream(
   if (scenarioId) body.scenario_id = scenarioId;
   if (scenarioDeviceVars && Object.keys(scenarioDeviceVars).length > 0) {
     body.scenario_device_vars = scenarioDeviceVars;
+  }
+  if (persistAccountLoginExecution) {
+    body.persist_account_login_execution = true;
   }
 
   const response = await fetch(url, {

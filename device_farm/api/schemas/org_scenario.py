@@ -15,6 +15,10 @@ class OrgScenarioCreate(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class AccountLoginScenarioEnsureIn(BaseModel):
+    platform: str = Field(min_length=1, max_length=100)
+
+
 class OrgScenarioUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     kind: Optional[Literal["sequence", "graph"]] = None

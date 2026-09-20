@@ -23,6 +23,14 @@ test('mergeLiveDeviceSnapshot keeps live devices across an empty transient snaps
   );
 });
 
+test('mergeLiveDeviceSnapshot drops ghosts when an empty snapshot is authoritative', () => {
+  const result = mergeLiveDeviceSnapshot([device('relay-1')], [], {
+    dropStaleOnEmpty: true
+  });
+
+  assert.deepEqual(result, []);
+});
+
 test('mergeLiveDeviceSnapshot drops devices with explicit offline evidence', () => {
   const result = mergeLiveDeviceSnapshot(
     [device('relay-1', 'DISCONNECTED')],

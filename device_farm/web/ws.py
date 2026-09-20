@@ -278,6 +278,7 @@ class WebSocketManager:
         self._ctrl_queues: Dict[str, asyncio.Queue] = {}
         self._conn_send_locks: Dict[str, asyncio.Lock] = {}
         self._user_ids: Dict[str, Optional[str]] = {}
+        self._org_ids: Dict[str, Optional[str]] = {}
         self._allowed_serials: Dict[str, Optional[set[str]]] = {}
         self._conn_sender_groups: Dict[str, list[asyncio.Task]] = {}
         self._pending_unwatch_tasks: Dict[tuple[str, str], asyncio.Task] = {}
@@ -478,6 +479,41 @@ class WebSocketManager:
             )
             return set()
 
+    async def _refresh_allowed_serials(self, conn_id: str) -> Optional[set[str]]:
+        """Reload a connection's allowlist and revoke stale stream/status access."""
+        if not self._db_enabled:
+            return self._allowed_serials.get(conn_id)
+
+        previous = self._allowed_serials.get(conn_id)
+        allowed_serials = await self._load_allowed_serials(
+            self._user_ids.get(conn_id),
+            org_id=self._org_ids.get(conn_id),
+        )
+
+        revoked: set[str] = set()
+        if previous is not None:
+            revoked = set(previous) - set(allowed_serials or set())
+
+        async with self._lock:
+            if conn_id in self._connections:
+                self._allowed_serials[conn_id] = allowed_serials
+                ctrl_q = self._ctrl_queues.get(conn_id)
+            else:
+                ctrl_q = None
+
+        if revoked:
+            for serial in revoked:
+                if ctrl_q is not None:
+                    device = self.manager.get_device(serial)
+                    if device is not None:
+                        try:
+                            device.unsubscribe_status(ctrl_q)
+                        except Exception:
+                            pass
+                await self._cancel_device_sender_tasks(conn_id, serial)
+
+        return allowed_serials
+
     async def connect(
         self,
         ws: WebSocket,
@@ -507,6 +543,7 @@ class WebSocketManager:
             self._connections[conn_id] = ws
             self._ctrl_queues[conn_id] = ctrl_q
             self._user_ids[conn_id] = user_id
+            self._org_ids[conn_id] = org_id
             self._allowed_serials[conn_id] = allowed_serials
             self._conn_sender_groups[conn_id] = []
             self._conn_send_locks[conn_id] = asyncio.Lock()
@@ -644,6 +681,7 @@ class WebSocketManager:
             self._connections.pop(conn_id, None)
             self._ctrl_queues.pop(conn_id, None)
             self._user_ids.pop(conn_id, None)
+            self._org_ids.pop(conn_id, None)
             self._allowed_serials.pop(conn_id, None)
             self._conn_sender_groups.pop(conn_id, None)
             self._conn_send_locks.pop(conn_id, None)
@@ -996,6 +1034,8 @@ class WebSocketManager:
                     ws.state.last_pong_at = time.monotonic()  # type: ignore[attr-defined]
                 except Exception:
                     pass
+                if conn_id is not None:
+                    await self._refresh_allowed_serials(conn_id)
                 if msg_type == "ping":
                     ok = await self._send_json_locked(
                         ws, ws_send_lock, {"type": "pong", "ts": time.time()}
@@ -1005,7 +1045,9 @@ class WebSocketManager:
                 continue
             if msg_type == "multi_action":
                 allowed_serials = (
-                    self._allowed_serials.get(conn_id) if conn_id is not None else None
+                    await self._refresh_allowed_serials(conn_id)
+                    if conn_id is not None
+                    else None
                 )
                 result = await self._multi_control.execute(
                     data,
@@ -1019,10 +1061,21 @@ class WebSocketManager:
             serial = data.get("serial")
             if conn_id is not None:
                 allowed_serials = self._allowed_serials.get(conn_id)
+                if msg_type in self.WRITE_MESSAGE_TYPES or msg_type in (
+                    "watch_serial",
+                    "request_idr",
+                ):
+                    allowed_serials = await self._refresh_allowed_serials(conn_id)
                 if allowed_serials is not None and serial not in allowed_serials:
-                    if msg_type == "watch_serial":
+                    should_log_deny = (
+                        msg_type in ("watch_serial", "request_idr")
+                        or msg_type in self.WRITE_MESSAGE_TYPES
+                    )
+                    if should_log_deny:
                         log.warning(
-                            "watch_serial denied for %s (not in user allowlist, size=%d)",
+                            "ws serial denied type=%s serial=%s "
+                            "(not in user allowlist, size=%d)",
+                            msg_type,
                             serial,
                             len(allowed_serials),
                         )

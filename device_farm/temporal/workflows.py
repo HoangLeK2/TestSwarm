@@ -290,6 +290,28 @@ def _branch_weight(branch: dict[str, Any]) -> int:
         return 1
 
 
+def _loop_random_range(low: Any, high: Any, cast) -> tuple:
+    """Twin of control_flow.py:_resolve_random_range — keep the two identical.
+
+    Half a range is a typo, not a shorthand: guessing which half the author
+    meant is how a loop quietly runs once instead of forty times.
+
+    Returns ``(bounds, error)``; both are ``None`` when the range is unset.
+    """
+    unset = (None, "")
+    if low in unset and high in unset:
+        return None, None
+    if low in unset or high in unset:
+        return None, "needs both min and max"
+    try:
+        lo, hi = cast(low), cast(high)
+    except (TypeError, ValueError):
+        return None, f"invalid bounds {low!r}..{high!r}"
+    if lo < 0 or hi < lo:
+        return None, f"invalid range {lo}..{hi}"
+    return (lo, hi), None
+
+
 def _error_policy(step: dict, cfg: dict) -> str:
     """Return error handling policy: 'pause' | 'continue' | 'stop'.
 
@@ -2815,7 +2837,34 @@ class ScenarioStepsWorkflow:
                 {"reason_code": LOOP_NO_NESTED_STEPS, "stopped_by": "config"},
             )
 
-        if count_raw is not None:
+        # Random ranges. Same contract as the executor copy: count_min/count_max
+        # win over `count` because the editor's loop form always writes a count,
+        # and wf_random keeps the pick replay-deterministic.
+        count_range, count_range_err = _loop_random_range(
+            step.get("count_min"), step.get("count_max"), int,
+        )
+        delay_range, delay_range_err = _loop_random_range(
+            step.get("delay_between_min"), step.get("delay_between_max"), float,
+        )
+        range_err = count_range_err or delay_range_err
+        if range_err:
+            return (
+                False,
+                f"loop: {range_err}",
+                [],
+                runtime_context,
+                {"reason_code": LOOP_INVALID_COUNT, "stopped_by": "config"},
+            )
+        if delay_range is not None:
+            delay_range = (min(delay_range[0], 300.0), min(delay_range[1], 300.0))
+        wf_random = _get_wf_random()
+
+        if count_range is not None:
+            # Picked once: every iteration of this run shares one budget.
+            iterations = wf_random.randint(*count_range)
+            runtime_vars["__LOOP_COUNT__"] = iterations
+            use_while = False
+        elif count_raw is not None:
             try:
                 # count is explicit — max_iterations applies to while-only loops.
                 iterations = int(count_raw)
@@ -3047,6 +3096,14 @@ class ScenarioStepsWorkflow:
                             },
                         )
 
+            # Re-picked every iteration: one value reused for the whole loop is
+            # just a fixed delay with extra fields. workflow.sleep, not
+            # time.sleep — a blocking sleep here stalls the whole worker.
+            if delay_range is not None and i < iterations - 1:
+                await workflow.sleep(
+                    timedelta(seconds=wf_random.uniform(*delay_range))
+                )
+
         ctx.pop("_loop_iter", None)
         _finish_sub_results(sub_results, sub_result_state)
         return (
@@ -3058,6 +3115,7 @@ class ScenarioStepsWorkflow:
                 "iterations_run": actual_iters,
                 "stopped_by": "count" if not use_while else "condition",
                 "idle_streak": idle_streak,
+                **({"count_chosen": iterations} if count_range is not None else {}),
             },
         )
 

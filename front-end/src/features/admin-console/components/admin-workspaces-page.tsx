@@ -16,8 +16,7 @@ import {
   ShieldCheck,
   Smartphone,
   Trash2,
-  UserCog,
-  Users
+  UserCog
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useSearchParams } from 'next/navigation';
@@ -117,33 +116,6 @@ function workspaceToOrganization(
   };
 }
 
-function WorkspaceOverviewCard({
-  label,
-  value,
-  detail,
-  icon
-}: {
-  label: string;
-  value: number;
-  detail?: string;
-  icon: ReactNode;
-}) {
-  return (
-    <div className='rounded-md border bg-background p-4'>
-      <div className='flex items-center justify-between gap-3'>
-        <p className='text-xs font-medium uppercase text-muted-foreground'>
-          {label}
-        </p>
-        <span className='text-muted-foreground'>{icon}</span>
-      </div>
-      <p className='mt-2 text-2xl font-semibold'>{value}</p>
-      {detail ? (
-        <p className='mt-1 text-xs text-muted-foreground'>{detail}</p>
-      ) : null}
-    </div>
-  );
-}
-
 function ActionTooltip({
   label,
   children
@@ -171,7 +143,7 @@ export function AdminWorkspacesPage() {
   const [editWorkspace, setEditWorkspace] = useState<AdminWorkspaceOut | null>(
     null
   );
-  const [archiveWorkspace, setArchiveWorkspace] =
+  const [deleteWorkspace, setDeleteWorkspace] =
     useState<AdminWorkspaceOut | null>(null);
   const [accessWorkspace, setAccessWorkspace] =
     useState<AdminWorkspaceOut | null>(null);
@@ -296,8 +268,18 @@ export function AdminWorkspacesPage() {
       return adminApi.archiveWorkspace(id);
     },
     onSuccess: () => {
-      setArchiveWorkspace(null);
       toast.success(t('toast.lifecycleUpdated'));
+      void qc.invalidateQueries({ queryKey: ['admin-workspaces'] });
+      void qc.invalidateQueries({ queryKey: ['admin-summary'] });
+    },
+    onError: (error) => toast.error(formatAdminApiError(error))
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (workspaceId: string) => adminApi.deleteWorkspace(workspaceId),
+    onSuccess: () => {
+      setDeleteWorkspace(null);
+      toast.success(t('toast.deleted'));
       void qc.invalidateQueries({ queryKey: ['admin-workspaces'] });
       void qc.invalidateQueries({ queryKey: ['admin-summary'] });
     },
@@ -338,73 +320,62 @@ export function AdminWorkspacesPage() {
         }
       />
       <div className='space-y-4 p-4 md:p-6'>
-        <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-4'>
-          <WorkspaceOverviewCard
-            label={t('overview.workspaces')}
-            value={workspaces.data?.total ?? summary.data?.totalWorkspaces ?? 0}
-            detail={t('overview.activeWorkspaces', {
-              count: summary.data?.activeWorkspaces ?? 0
-            })}
-            icon={<Users className='size-4' />}
-          />
-          <WorkspaceOverviewCard
-            label={t('overview.devices')}
-            value={summary.data?.totalDevices ?? 0}
-            detail={t('overview.unassignedDevices', {
-              count: summary.data?.unassignedDevices ?? 0
-            })}
-            icon={<Smartphone className='size-4' />}
-          />
-          <WorkspaceOverviewCard
-            label={t('overview.agents')}
-            value={summary.data?.totalAgents ?? 0}
-            detail={t('overview.onlineAgents', {
-              count: summary.data?.onlineAgents ?? 0
-            })}
-            icon={<Server className='size-4' />}
-          />
-          <WorkspaceOverviewCard
-            label={t('overview.admins')}
-            value={pageCounts.admins}
-            detail={t('overview.membersOnPage', {
-              count: pageCounts.members
-            })}
-            icon={<ShieldCheck className='size-4' />}
-          />
-        </div>
-
-        <section className='rounded-lg border bg-background p-4 shadow-sm'>
-          <div className='flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between'>
-            <div className='min-w-0 space-y-3'>
-              <div>
-                <p className='text-xs font-medium uppercase tracking-wide text-muted-foreground'>
-                  {t('setup.eyebrow')}
-                </p>
-                <h2 className='mt-1 text-base font-semibold leading-6'>
-                  {t('setup.title')}
-                </h2>
-                <p className='mt-1 max-w-3xl text-sm leading-6 text-muted-foreground'>
-                  {t('setup.description')}
+        <section className='overflow-hidden rounded-md border bg-background'>
+          <div className='grid border-b text-sm md:grid-cols-4'>
+            {[
+              {
+                label: t('overview.workspaces'),
+                value:
+                  workspaces.data?.total ?? summary.data?.totalWorkspaces ?? 0,
+                detail: t('overview.activeWorkspaces', {
+                  count: summary.data?.activeWorkspaces ?? 0
+                })
+              },
+              {
+                label: t('overview.devices'),
+                value: summary.data?.totalDevices ?? 0,
+                detail: t('overview.unassignedDevices', {
+                  count: summary.data?.unassignedDevices ?? 0
+                })
+              },
+              {
+                label: t('overview.agents'),
+                value: summary.data?.totalAgents ?? 0,
+                detail: t('overview.onlineAgents', {
+                  count: summary.data?.onlineAgents ?? 0
+                })
+              },
+              {
+                label: t('overview.admins'),
+                value: pageCounts.admins,
+                detail: t('overview.membersOnPage', {
+                  count: pageCounts.members
+                })
+              }
+            ].map((item) => (
+              <div
+                key={item.label}
+                className='border-b px-4 py-3 last:border-b-0 md:border-b-0 md:border-r md:last:border-r-0'
+              >
+                <div className='flex items-baseline justify-between gap-3'>
+                  <span className='font-medium'>{item.label}</span>
+                  <span className='text-lg font-semibold tabular-nums'>
+                    {item.value}
+                  </span>
+                </div>
+                <p className='mt-1 text-xs text-muted-foreground'>
+                  {item.detail}
                 </p>
               </div>
-              <div className='grid gap-2 md:grid-cols-3'>
-                {[
-                  t('setup.stepPool'),
-                  t('setup.stepActivation'),
-                  t('setup.stepAllocation')
-                ].map((label, index) => (
-                  <div
-                    key={label}
-                    className='flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm'
-                  >
-                    <span className='flex size-6 shrink-0 items-center justify-center rounded-full bg-background text-xs font-semibold text-foreground shadow-sm'>
-                      {index + 1}
-                    </span>
-                    <span className='min-w-0 text-muted-foreground'>
-                      {label}
-                    </span>
-                  </div>
-                ))}
+            ))}
+          </div>
+          <div className='flex flex-col gap-3 px-4 py-3 lg:flex-row lg:items-center lg:justify-between'>
+            <div className='min-w-0'>
+              <p className='text-sm font-medium'>{t('setup.title')}</p>
+              <div className='mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground'>
+                <span>{t('setup.stepPool')}</span>
+                <span>{t('setup.stepActivation')}</span>
+                <span>{t('setup.stepAllocation')}</span>
               </div>
             </div>
             <div className='flex shrink-0 flex-wrap gap-2'>
@@ -414,7 +385,9 @@ export function AdminWorkspacesPage() {
                 </Link>
               </Button>
               <Button asChild size='sm'>
-                <Link href={ROUTES.ADMIN.AGENTS}>{t('setup.allocateAction')}</Link>
+                <Link href={ROUTES.ADMIN.AGENTS}>
+                  {t('setup.allocateAction')}
+                </Link>
               </Button>
             </div>
           </div>
@@ -627,13 +600,14 @@ export function AdminWorkspacesPage() {
                             <KeyRound className='size-4' />
                           </Button>
                         </ActionTooltip>
-                        <ActionTooltip label={t('actions.archive')}>
+                        <ActionTooltip label={t('actions.delete')}>
                           <Button
                             size='icon'
                             variant='ghost'
                             className='size-8 text-destructive hover:text-destructive'
-                            aria-label={t('actions.archive')}
-                            onClick={() => setArchiveWorkspace(workspace)}
+                            aria-label={t('actions.delete')}
+                            disabled={deleteMutation.isPending}
+                            onClick={() => setDeleteWorkspace(workspace)}
                           >
                             <Trash2 className='size-4' />
                           </Button>
@@ -685,29 +659,29 @@ export function AdminWorkspacesPage() {
         onClose={() => setAccessWorkspace(null)}
       />
       <AlertDialog
-        open={!!archiveWorkspace}
-        onOpenChange={(open) => !open && setArchiveWorkspace(null)}
+        open={!!deleteWorkspace}
+        onOpenChange={(open) => !open && setDeleteWorkspace(null)}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{t('archive.title')}</AlertDialogTitle>
+            <AlertDialogTitle>{t('delete.title')}</AlertDialogTitle>
             <AlertDialogDescription>
-              {t('archive.description')}
+              {t('delete.description', {
+                name: deleteWorkspace?.businessName ?? ''
+              })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
             <AlertDialogAction
               className='bg-destructive text-destructive-foreground hover:bg-destructive/90'
+              disabled={deleteMutation.isPending}
               onClick={() =>
-                archiveWorkspace &&
-                lifecycleMutation.mutate({
-                  id: archiveWorkspace.id,
-                  action: 'archive'
-                })
+                deleteWorkspace && deleteMutation.mutate(deleteWorkspace.id)
               }
             >
-              {t('archive.confirm')}
+              {deleteMutation.isPending ? <SubmitSpinner /> : null}
+              {t('delete.confirm')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -804,7 +778,9 @@ function WorkspaceCreateDialog({
                 <SelectItem value='pool'>{t('kindPool')}</SelectItem>
               </SelectContent>
             </Select>
-            <p className='mt-1 text-xs text-muted-foreground'>{t('kindHint')}</p>
+            <p className='mt-1 text-xs text-muted-foreground'>
+              {t('kindHint')}
+            </p>
           </Field>
           <Field label={t('description')} className='md:col-span-2'>
             <Textarea
@@ -908,7 +884,9 @@ function WorkspaceEditDialog({
                   <SelectItem value='pool'>{t('kindPool')}</SelectItem>
                 </SelectContent>
               </Select>
-              <p className='mt-1 text-xs text-muted-foreground'>{t('kindHint')}</p>
+              <p className='mt-1 text-xs text-muted-foreground'>
+                {t('kindHint')}
+              </p>
             </Field>
             <Field label={t('description')} className='md:col-span-2'>
               <Textarea

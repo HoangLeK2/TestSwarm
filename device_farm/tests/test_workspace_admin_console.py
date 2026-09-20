@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -724,6 +724,114 @@ async def test_admin_create_workspace_keeps_existing_workspace_suffix(session_fa
 
     assert response.status_code == 201, response.text
     assert response.json()["businessName"] == "Customer Workspace"
+
+
+@pytest.mark.asyncio
+async def test_superadmin_can_delete_empty_workspace_without_deleting_owner_user(
+    session_factory,
+):
+    await _seed_workspace(session_factory)
+    app = _app(session_factory, _user(role="superadmin", org_role=""))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        created = await client.post(
+            "/api/admin/workspaces",
+            json={
+                "businessName": "Delete Me Workspace",
+                "ownerEmail": "delete-owner@example.com",
+                "ownerName": "Delete Owner",
+            },
+        )
+        assert created.status_code == 201, created.text
+        workspace_id = created.json()["id"]
+
+        deleted = await client.delete(f"/api/admin/workspaces/{workspace_id}")
+        listed = await client.get("/api/admin/workspaces")
+
+    assert deleted.status_code == 204, deleted.text
+    assert workspace_id not in {item["id"] for item in listed.json()["items"]}
+
+    set_current_org_id(None)
+    async with session_factory() as db:
+        org = await db.get(Organization, workspace_id)
+        owner = (
+            await db.execute(
+                text(
+                    "SELECT id, default_org_id FROM users "
+                    "WHERE email = 'delete-owner@example.com'"
+                )
+            )
+        ).first()
+        member_count = (
+            await db.execute(
+                text(
+                    "SELECT COUNT(*) FROM organization_members WHERE organization_id = :workspace_id"
+                ),
+                {"workspace_id": workspace_id},
+            )
+        ).scalar_one()
+
+    assert org is None
+    assert owner is not None
+    assert owner[1] is not None
+    assert owner[1] != workspace_id
+    async with session_factory() as db:
+        fallback_org = await db.get(Organization, owner[1])
+        fallback_member = (
+            await db.execute(
+                text(
+                    "SELECT role FROM organization_members "
+                    "WHERE organization_id = :organization_id AND user_id = :user_id"
+                ),
+                {"organization_id": owner[1], "user_id": owner[0]},
+            )
+        ).first()
+    assert fallback_org is not None
+    assert fallback_member is not None
+    assert fallback_member[0] == "owner"
+    assert member_count == 0
+
+
+@pytest.mark.asyncio
+async def test_superadmin_cannot_delete_workspace_with_operational_records(session_factory):
+    await _seed_workspace(session_factory)
+    app = _app(session_factory, _user(role="superadmin", org_role=""))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.delete("/api/admin/workspaces/org-1")
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["detail"]["code"] == "WORKSPACE_NOT_EMPTY"
+    assert body["detail"]["blockers"]["devices"] == 1
+    assert body["detail"]["blockers"]["relayAgents"] == 1
+
+
+@pytest.mark.asyncio
+async def test_workspace_admin_can_delete_empty_workspace_in_their_scope(
+    session_factory,
+):
+    await _seed_workspace(session_factory)
+    await _seed_workspace_admin_user(session_factory, user_id="admin-1", org_id="org-1")
+    app = _app(session_factory, _user(role="operator", org_role="admin", org_id="org-1"))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        created = await client.post(
+            "/api/admin/workspaces",
+            json={
+                "businessName": "Temporary Customer Workspace",
+                "ownerEmail": "temporary-owner@example.com",
+                "ownerName": "Temporary Owner",
+            },
+        )
+        assert created.status_code == 201, created.text
+        workspace_id = created.json()["id"]
+
+        deleted = await client.delete(f"/api/admin/workspaces/{workspace_id}")
+        listed = await client.get("/api/admin/workspaces")
+
+    assert deleted.status_code == 204, deleted.text
+    assert workspace_id not in {item["id"] for item in listed.json()["items"]}
 
 
 @pytest.mark.asyncio
@@ -1941,6 +2049,105 @@ async def test_admin_device_console_lists_tenant_phones_as_not_transferable(sess
     assert listed.status_code == 200
     assert [item["serial"] for item in listed.json()["items"]] == ["SN001"]
     assert listed.json()["items"][0]["transferable"] is True
+
+
+def test_agent_health_does_not_age_a_departed_agent_into_stale():
+    """`status` is the transport's verdict; only an 'online' row can be stale."""
+    just_left = NOW - timedelta(minutes=7)
+    # The agent dropped 7 minutes ago and `mark_relay_offline` already said so.
+    assert (
+        workspace_admin_routes._agent_health_values("offline", just_left, NOW)
+        == "offline"
+    )
+    # A row still claiming online with an aged heartbeat is the real stale case.
+    assert (
+        workspace_admin_routes._agent_health_values("online", just_left, NOW)
+        == "stale"
+    )
+    assert (
+        workspace_admin_routes._agent_health_values(
+            "online", NOW - timedelta(seconds=30), NOW
+        )
+        == "online"
+    )
+    assert (
+        workspace_admin_routes._agent_health_values("disabled", NOW, NOW) == "disabled"
+    )
+
+
+@pytest.mark.asyncio
+async def test_admin_deletes_pool_phone_so_its_serial_can_register_again(
+    session_factory,
+):
+    """A retired pool phone's row holds its serial hostage until admin drops it."""
+    await _seed_workspace(session_factory)
+
+    app = _app(session_factory, _user(role="superadmin", org_role=""))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        deleted = await client.delete("/api/admin/devices/dev-1")
+        listed = await client.get("/api/admin/devices")
+
+    assert deleted.status_code == 204
+    assert listed.json()["items"] == []
+
+    set_current_org_id(None)
+    async with session_factory() as db:
+        remaining = (
+            await db.execute(text("SELECT COUNT(*) FROM devices WHERE serial = 'SN001'"))
+        ).scalar_one()
+    assert remaining == 0
+
+
+@pytest.mark.asyncio
+async def test_admin_cannot_delete_a_phone_a_tenant_is_currently_using(
+    session_factory,
+):
+    """Deleting an allocated phone would yank it from the tenant mid-use."""
+    await _seed_workspace(session_factory)
+    await _seed_second_workspace(session_factory)
+    set_current_org_id(None)
+    async with session_factory() as db:
+        await db.execute(
+            text(
+                "UPDATE devices SET org_id = 'org-2', managed_by_org_id = 'org-1' "
+                "WHERE id = 'dev-1'"
+            )
+        )
+        await db.commit()
+
+    app = _app(session_factory, _user(role="superadmin", org_role=""))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        blocked = await client.delete("/api/admin/devices/dev-1")
+
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "DEVICE_ASSIGNED_TO_WORKSPACE"
+
+    set_current_org_id(None)
+    async with session_factory() as db:
+        remaining = (
+            await db.execute(text("SELECT COUNT(*) FROM devices WHERE serial = 'SN001'"))
+        ).scalar_one()
+    assert remaining == 1
+
+
+@pytest.mark.asyncio
+async def test_admin_cannot_delete_a_phone_owned_by_a_tenant_relay(session_factory):
+    """Only pool-managed phones are the admin's to drop — same rule as transfer."""
+    await _seed_workspace(session_factory)
+    await _seed_second_workspace(session_factory)
+    set_current_org_id(None)
+    async with session_factory() as db:
+        await db.execute(
+            text("UPDATE devices SET managed_by_org_id = 'org-2' WHERE id = 'dev-1'")
+        )
+        await db.commit()
+
+    app = _app(session_factory, _user(role="superadmin", org_role=""))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        blocked = await client.delete("/api/admin/devices/dev-1")
+
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "DEVICE_NOT_IN_POOL_WORKSPACE"
 
 
 @pytest.mark.asyncio

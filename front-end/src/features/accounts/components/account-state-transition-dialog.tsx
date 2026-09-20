@@ -14,7 +14,10 @@ import {
   type AccountStateKey
 } from '../lib/account-fsm';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Textarea } from '@/components/ui/textarea';
 import {
   Dialog,
@@ -35,6 +38,10 @@ import { formatFarmApiError } from '@/lib/format-farm-api-error';
 type FormData = {
   to: AccountStateKey;
   reason: string;
+  verificationPreset: 'one_week' | 'two_weeks' | 'custom';
+  customRemindAt: string;
+  notifyWeb: boolean;
+  notifyTelegram: boolean;
 };
 
 type Props = {
@@ -58,10 +65,35 @@ export function AccountStateTransitionDialog({
   const firstTarget =
     defaultTo && targets.includes(defaultTo) ? defaultTo : targets[0];
 
-  const schema = z.object({
-    to: z.enum(ACCOUNT_STATES),
-    reason: z.string().min(1).max(2000)
-  });
+  const schema = z
+    .object({
+      to: z.enum(ACCOUNT_STATES),
+      reason: z.string().min(1).max(2000),
+      verificationPreset: z.enum(['one_week', 'two_weeks', 'custom']),
+      customRemindAt: z.string(),
+      notifyWeb: z.boolean(),
+      notifyTelegram: z.boolean()
+    })
+    .superRefine((value, ctx) => {
+      if (value.to !== 'suspended') return;
+      if (value.verificationPreset !== 'custom') return;
+      if (!value.customRemindAt) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['customRemindAt'],
+          message: t('customDateRequired')
+        });
+        return;
+      }
+      const date = new Date(value.customRemindAt);
+      if (Number.isNaN(date.getTime()) || date <= new Date()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['customRemindAt'],
+          message: t('customDateFuture')
+        });
+      }
+    });
 
   const {
     register,
@@ -74,7 +106,11 @@ export function AccountStateTransitionDialog({
     resolver: zodResolver(schema),
     defaultValues: {
       to: firstTarget ?? 'active',
-      reason: ''
+      reason: '',
+      verificationPreset: 'one_week',
+      customRemindAt: '',
+      notifyWeb: true,
+      notifyTelegram: true
     }
   });
 
@@ -82,7 +118,14 @@ export function AccountStateTransitionDialog({
 
   useEffect(() => {
     if (open && firstTarget) {
-      reset({ to: firstTarget, reason: '' });
+      reset({
+        to: firstTarget,
+        reason: '',
+        verificationPreset: 'one_week',
+        customRemindAt: '',
+        notifyWeb: true,
+        notifyTelegram: true
+      });
     }
   }, [open, firstTarget, reset]);
 
@@ -102,7 +145,19 @@ export function AccountStateTransitionDialog({
     const body = {
       to: data.to,
       reason: data.reason.trim(),
-      expected_state_changed_at: account.state_changed_at ?? null
+      expected_state_changed_at: account.state_changed_at ?? null,
+      verification_hold:
+        data.to === 'suspended'
+          ? {
+              preset: data.verificationPreset,
+              remind_at:
+                data.verificationPreset === 'custom'
+                  ? new Date(data.customRemindAt).toISOString()
+                  : null,
+              notify_web: data.notifyWeb,
+              notify_telegram: data.notifyTelegram
+            }
+          : null
     };
     mutate(
       { accountId: account.id, body },
@@ -163,6 +218,76 @@ export function AccountStateTransitionDialog({
               </p>
             ) : null}
           </div>
+          {toValue === 'suspended' ? (
+            <div className='space-y-3 rounded-md border p-3'>
+              <div className='space-y-1'>
+                <Label>{t('verificationHold')}</Label>
+                <p className='text-xs text-muted-foreground'>
+                  {t('verificationHoldHint')}
+                </p>
+                <p className='text-xs font-medium text-muted-foreground'>
+                  {t('verificationHoldOutcome')}
+                </p>
+              </div>
+              <RadioGroup
+                value={watch('verificationPreset')}
+                onValueChange={(value) =>
+                  setValue(
+                    'verificationPreset',
+                    value as FormData['verificationPreset']
+                  )
+                }
+                className='grid gap-2'
+              >
+                {(['one_week', 'two_weeks', 'custom'] as const).map((value) => (
+                  <Label
+                    key={value}
+                    className='flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm'
+                  >
+                    <RadioGroupItem value={value} />
+                    {t(`holdPreset.${value}`)}
+                  </Label>
+                ))}
+              </RadioGroup>
+              {watch('verificationPreset') === 'custom' ? (
+                <div className='space-y-2'>
+                  <Label htmlFor='custom-remind-at'>
+                    {t('customRemindAt')}
+                  </Label>
+                  <Input
+                    id='custom-remind-at'
+                    type='datetime-local'
+                    {...register('customRemindAt')}
+                  />
+                  {errors.customRemindAt ? (
+                    <p className='text-xs text-destructive'>
+                      {errors.customRemindAt.message}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+              <div className='grid gap-2'>
+                <Label className='flex items-center gap-2 text-sm'>
+                  <Checkbox
+                    checked={watch('notifyWeb')}
+                    onCheckedChange={(value) =>
+                      setValue('notifyWeb', value === true)
+                    }
+                  />
+                  {t('notifyWeb')}
+                </Label>
+                <Label className='flex items-center gap-2 text-sm'>
+                  <Checkbox
+                    checked={watch('notifyTelegram')}
+                    onCheckedChange={(value) =>
+                      setValue('notifyTelegram', value === true)
+                    }
+                  />
+                  {t('notifyTelegram')}
+                </Label>
+              </div>
+            </div>
+          ) : null}
           {account.state_reason ? (
             <p className='text-xs text-muted-foreground'>
               {t('lastReason', { reason: account.state_reason })}

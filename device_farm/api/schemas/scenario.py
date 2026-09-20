@@ -691,6 +691,11 @@ class LoopStep(StepBase):
     type: Literal["loop"]
     steps: List[StepModel] = Field(min_length=1)
     count: Optional[IntOrVar] = None
+    # Random range; overrides count when both bounds are set.
+    count_min: Optional[NonNegativeIntOrVar] = None
+    count_max: Optional[NonNegativeIntOrVar] = None
+    delay_between_min: Optional[NonNegativeNumOrVar] = None
+    delay_between_max: Optional[NonNegativeNumOrVar] = None
     max_iterations: IntOrVar = 100
     loop_var: Optional[str] = Field(None, min_length=1)
     duration_seconds: NonNegativeNumOrVar = 0

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import case, delete, func, or_, select
 
 from api.auth.rbac import is_superadmin
 from api.deps import AdminUser, DB, require_permission
@@ -70,7 +70,27 @@ from api.schemas.workspace_admin import (
 from auth.password_policy import record_password_history, validate_password_strength
 from auth.password_service import hash_password
 from db import crud as repo
-from db.models import Account, ActivityLog, ContentItem, Device, DeviceFsmSnapshot, Organization, OrganizationMember, RelayAgent, RelayAgentToken, User
+from db.models import (
+    Account,
+    AccountGroup,
+    ActivityLog,
+    Campaign,
+    ContentItem,
+    Device,
+    DeviceFsmSnapshot,
+    DeviceGroup,
+    Execution,
+    ExternalEntity,
+    OrgScenario,
+    Organization,
+    OrganizationInvitation,
+    OrganizationMember,
+    RelayAgent,
+    RelayAgentToken,
+    Schedule,
+    TenantSettings,
+    User,
+)
 from db.models.utils import _now, _uuid
 from services.device_allocation import mark_allocated_unclaimed, move_device_to_workspace
 from services.organization_invite import create_and_email_invitation
@@ -325,6 +345,13 @@ def _agent_health_values(
     status_value = str(status or "").lower()
     if status_value == "disabled":
         return "disabled"
+    # `status` is the transport's own verdict: it flips to offline the moment the
+    # control stream drops (`mark_relay_offline`). Only a row still claiming
+    # `online` can be stale — stale means "says online, stopped heartbeating".
+    # Ageing an already-offline row into `stale` made a departed agent look like
+    # it was merely lagging for ten minutes after it left.
+    if status_value != "online":
+        return "offline"
     last = last_heartbeat_at
     if last is None:
         return "offline"
@@ -332,7 +359,7 @@ def _agent_health_values(
     if last.tzinfo is None:
         last = last.replace(tzinfo=timezone.utc)
     age = current - last
-    if status_value == "online" and age <= timedelta(minutes=2):
+    if age <= timedelta(minutes=2):
         return "online"
     if age <= timedelta(minutes=10):
         return "stale"
@@ -1811,6 +1838,134 @@ async def admin_workspace_dependencies(workspace_id: str, db: DB, user: AdminUse
         devices=int(counts.get("devices", 0)),
         members=int(counts.get("members", 0)),
     )
+
+
+async def _workspace_delete_blockers(db: DB, workspace_id: str) -> dict[str, int]:
+    direct_org_models = {
+        "accounts": Account,
+        "accountGroups": AccountGroup,
+        "campaigns": Campaign,
+        "contentItems": ContentItem,
+        "deviceGroups": DeviceGroup,
+        "executions": Execution,
+        "externalEntities": ExternalEntity,
+        "orgScenarios": OrgScenario,
+        "relayAgents": RelayAgent,
+        "relayAgentTokens": RelayAgentToken,
+        "schedules": Schedule,
+    }
+    blockers: dict[str, int] = {}
+    device_count = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(Device)
+                .where(
+                    or_(
+                        Device.org_id == workspace_id,
+                        Device.managed_by_org_id == workspace_id,
+                    )
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    if device_count:
+        blockers["devices"] = device_count
+    for label, model in direct_org_models.items():
+        count = int(
+            (
+                await db.execute(
+                    select(func.count())
+                    .select_from(model)
+                    .where(model.org_id == workspace_id)
+                )
+            ).scalar_one()
+            or 0
+        )
+        if count:
+            blockers[label] = count
+    return blockers
+
+
+async def _move_user_defaults_off_deleted_workspace(db: DB, workspace_id: str) -> None:
+    users = (
+        (
+            await db.execute(
+                select(User).where(User.default_org_id == workspace_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for target in users:
+        next_workspace_id = (
+            await db.execute(
+                select(OrganizationMember.organization_id)
+                .where(OrganizationMember.user_id == target.id)
+                .where(OrganizationMember.organization_id != workspace_id)
+                .order_by(OrganizationMember.created_at.asc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if next_workspace_id:
+            target.default_org_id = next_workspace_id
+            continue
+        fallback = await repo.create_organization(
+            db,
+            owner_id=target.id,
+            business_name=repo.make_personal_org_name(target.name, target.email),
+            business_email=target.email,
+        )
+        target.default_org_id = fallback.id
+    if users:
+        await db.flush()
+
+
+@router.delete(
+    "/workspaces/{workspace_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("organizations", "delete"))],
+)
+async def admin_delete_workspace(
+    workspace_id: str, request: Request, db: DB, user: AdminUser
+):
+    org = await _workspace_or_404(db, workspace_id, user)
+    blockers = await _workspace_delete_blockers(db, workspace_id)
+    if blockers:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "WORKSPACE_NOT_EMPTY", "blockers": blockers},
+        )
+    ip, ua = _client_meta(request)
+    await emit_security_event(
+        db,
+        action="workspace.deleted",
+        user_id=user.id,
+        org_id=workspace_id,
+        entity_type="organization",
+        entity_id=workspace_id,
+        ip_address=ip,
+        user_agent=ua,
+        details={"business_name": org.business_name},
+    )
+    await _move_user_defaults_off_deleted_workspace(db, workspace_id)
+    await db.execute(
+        delete(OrganizationInvitation).where(
+            OrganizationInvitation.organization_id == workspace_id
+        )
+    )
+    await db.execute(
+        delete(TenantSettings).where(TenantSettings.org_id == workspace_id)
+    )
+    await db.execute(
+        delete(OrganizationMember).where(
+            OrganizationMember.organization_id == workspace_id
+        )
+    )
+    await db.delete(org)
+    await db.commit()
+    return None
 
 
 @router.get(
@@ -3612,6 +3767,68 @@ async def admin_transfer_device_workspace(
         state_row.state if state_row else "unknown",
         orgs.get(str(device.managed_by_org_id)) if device.managed_by_org_id else None,
     )
+
+
+@router.delete(
+    "/devices/{device_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("devices", "delete"))],
+)
+async def admin_delete_device(
+    device_id: str,
+    request: Request,
+    db: DB,
+    user: AdminUser,
+):
+    """Drop a pool phone's row so its serial is free to register again.
+
+    A serial is claimed globally (``services/device_registration.py``), so a row
+    left behind by a retired pool agent blocks every other workspace from ever
+    registering that physical phone. Only the pool workspace that manages the
+    row can free it — the same rule the transfer endpoint enforces — and only
+    while the phone is back in its pool, so this can never yank a phone out from
+    under the tenant currently using it.
+    """
+    device = await _managed_device_or_404(db, device_id, user)
+    controlling_org_id = str(device.managed_by_org_id or device.org_id)
+    await _require_visible_workspace_scope(db, user, controlling_org_id)
+    manager = await _workspace_by_id_or_404(db, controlling_org_id)
+    if (getattr(manager, "kind", "tenant") or "tenant") != POOL_WORKSPACE_KIND:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "DEVICE_NOT_IN_POOL_WORKSPACE",
+                "workspaceId": controlling_org_id,
+            },
+        )
+    if str(device.org_id) != controlling_org_id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "DEVICE_ASSIGNED_TO_WORKSPACE",
+                "workspaceId": str(device.org_id),
+            },
+        )
+    serial = device.serial
+    org_id = str(device.org_id)
+    # `delete_device` reads the account links with a SELECT, which the tenant
+    # listener scopes to the session's org — the admin's, not the phone's.
+    with tenant_context(org_id):
+        await repo.delete_device(db, device.id)
+    ip, ua = _client_meta(request)
+    await emit_security_event(
+        db,
+        action="device.deleted",
+        user_id=user.id,
+        org_id=org_id,
+        entity_type="device",
+        entity_id=device_id,
+        ip_address=ip,
+        user_agent=ua,
+        details={"serial": serial, "managed_by_workspace_id": controlling_org_id},
+    )
+    await db.commit()
+    return None
 
 
 @router.get(

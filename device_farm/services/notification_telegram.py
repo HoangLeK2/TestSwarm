@@ -17,6 +17,7 @@ _EVENT_EMOJI: dict[str, str] = {
     "device.disconnect": "🔴",
     "account.rotated": "🔑",
     "account.locked": "🔒",
+    "account.verification_required": "🔐",
     "content.milestone": "📊",
     "mcp.action_sensitive": "🛡️",
     "dlq.threshold": "🚨",

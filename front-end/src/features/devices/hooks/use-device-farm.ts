@@ -46,6 +46,7 @@ export function useDeviceFarm(options: UseDeviceFarmOptions = {}) {
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
 
   const wsRef = useRef<ReturnType<typeof createWs> | null>(null);
+  const emptyLiveSnapshotsRef = useRef(0);
   const t = useTranslations('devicesFarm');
   const tCommon = useTranslations('common');
   const confirm = useConfirm();
@@ -69,7 +70,16 @@ export function useDeviceFarm(options: UseDeviceFarmOptions = {}) {
     );
     try {
       const live = await fetchLiveDevices({ orgId: currentOrgId });
-      setDevices((previous) => mergeLiveDeviceSnapshot(previous, live));
+      emptyLiveSnapshotsRef.current =
+        live.length === 0 ? emptyLiveSnapshotsRef.current + 1 : 0;
+      setDevices((previous) =>
+        mergeLiveDeviceSnapshot(previous, live, {
+          // One empty poll is a blip worth riding out; two in a row means the
+          // transport is gone for good (agent-boot off) and the tiles are ghosts.
+          dropStaleOnEmpty:
+            liveSnapshotAuthoritative && emptyLiveSnapshotsRef.current >= 2
+        })
+      );
       setDevicesReady(true);
       setRequestStatus('success');
       setError(null);
@@ -91,7 +101,7 @@ export function useDeviceFarm(options: UseDeviceFarmOptions = {}) {
       setError(message || t('backendErrorTitle'));
       setRequestStatus('error');
     }
-  }, [currentOrgId, t, tabActive]);
+  }, [currentOrgId, liveSnapshotAuthoritative, t, tabActive]);
 
   const refreshRegisteredDevices = useCallback(() => {
     if (!loadRegisteredDevices) return;

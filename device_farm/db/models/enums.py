@@ -162,6 +162,7 @@ class RunStatus(StrEnum):
 class ScheduleTargetType(StrEnum):
     CAMPAIGN = "campaign"
     TEMPLATE = "template"
+    ORG_SCENARIO = "org_scenario"
     FLEET = "fleet"
 
 

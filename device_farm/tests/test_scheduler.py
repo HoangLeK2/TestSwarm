@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch, call
 import pytest
@@ -722,6 +723,67 @@ class TestSchedulerCampaignDispatch:
                 )
 
 
+class TestSchedulerOrgScenarioDispatch:
+    @pytest.mark.asyncio
+    async def test_resolve_org_scenario_fleet_config_uses_registry(self):
+        from services.scheduler import _resolve_org_scenario_fleet_config
+
+        mock_db = AsyncMock()
+        registry = {
+            "by_id": {
+                "scenario-001": {
+                    "steps": [{"id": "step-1", "type": "wait", "seconds": 1}],
+                    "variables": {"from_body": "yes", "override": "body"},
+                    "name": "Warm up",
+                }
+            },
+            "by_campaign_name": {},
+            "by_template_name": {},
+        }
+
+        with patch(
+            "services.campaign.execution_runtime.build_org_scenario_registry",
+            return_value=registry,
+        ) as build_registry:
+            cfg = await _resolve_org_scenario_fleet_config(
+                mock_db,
+                {
+                    "target_id": "scenario-001",
+                    "org_id": "org-001",
+                    "inline_variables": {"override": "schedule"},
+                },
+            )
+
+        build_registry.assert_awaited_once_with(
+            mock_db,
+            "org-001",
+            [{"scenario_id": "scenario-001"}],
+        )
+        assert cfg["inline_steps"] == registry["by_id"]["scenario-001"]["steps"]
+        assert cfg["inline_variables"] == {
+            "from_body": "yes",
+            "override": "schedule",
+        }
+        assert cfg["_scenario_registry"] is registry
+
+    @pytest.mark.asyncio
+    async def test_dispatch_schedule_config_routes_org_scenario(self):
+        from services.scheduler import _dispatch_schedule_config
+
+        with patch(
+            "services.scheduler._dispatch_org_scenario",
+            return_value={"devices_dispatched": 1, "task_ids": ["task-1"]},
+        ) as dispatch_org:
+            result = await _dispatch_schedule_config(
+                {"target_type": "org_scenario", "target_id": "scenario-001"},
+                queue=object(),
+                manager=object(),
+            )
+
+        dispatch_org.assert_awaited_once()
+        assert result["devices_dispatched"] == 1
+
+
 # ── _compute_next_run helper ──────────────────────────────────────────────────
 
 
@@ -870,6 +932,17 @@ class TestScheduleCreateSchema:
                 target_id="camp-001",
                 cron_expression="*/30 * * * *",
             )
+
+    def test_org_scenario_target_type_is_valid(self):
+        from api.schemas.schedule import ScheduleCreate
+
+        data = ScheduleCreate(
+            name="Test",
+            target_type="org_scenario",
+            target_id="scenario-001",
+            cron_expression="*/30 * * * *",
+        )
+        assert data.target_type == "org_scenario"
 
     def test_delay_range_max_less_than_min_raises(self):
         from api.schemas.schedule import ScheduleCreate
@@ -1125,3 +1198,64 @@ class TestScheduleRunWorkflow:
 
         assert result.status == "failed"
         assert result.error == "Campaign not found"
+
+
+# ── Device targeting by explicit serials (DF-008 schedule device picker) ──────
+
+
+def _fleet_device(serial: str, state: str = "READY", model: str = "SM-A115"):
+    return SimpleNamespace(serial=serial, state=state, model=model)
+
+
+async def _resolve_with_devices(devices, **kwargs):
+    """Run _resolve_fleet_devices against a stubbed DeviceManager."""
+    import temporal.schedule_activities as acts
+
+    manager = MagicMock()
+    manager.all_devices.return_value = devices
+    params = {
+        "device_group_id": None,
+        "filter_state": "READY",
+        "filter_model": None,
+        "max_devices": None,
+    }
+    params.update(kwargs)
+    with patch.object(acts, "_manager_ref", manager):
+        return await acts._resolve_fleet_devices(**params)
+
+
+class TestResolveFleetDevicesBySerial:
+    """_resolve_fleet_devices: explicit serials replace the candidate set."""
+
+    @pytest.mark.asyncio
+    async def test_only_selected_serials_are_returned(self):
+        resolved = await _resolve_with_devices(
+            [_fleet_device("AAA"), _fleet_device("BBB"), _fleet_device("CCC")],
+            device_serials=["AAA", "CCC"],
+        )
+        assert [d.serial for d in resolved] == ["AAA", "CCC"]
+
+    @pytest.mark.asyncio
+    async def test_filter_state_and_max_devices_still_apply(self):
+        resolved = await _resolve_with_devices(
+            [
+                _fleet_device("AAA"),
+                _fleet_device("BBB", state="OFFLINE"),
+                _fleet_device("CCC"),
+                _fleet_device("DDD"),
+            ],
+            device_serials=["AAA", "BBB", "CCC", "DDD"],
+            max_devices=2,
+        )
+        # BBB dropped by state, then capped at 2.
+        assert [d.serial for d in resolved] == ["AAA", "CCC"]
+
+    @pytest.mark.asyncio
+    async def test_serials_win_over_device_group(self):
+        # Group lookup must not run — result comes straight from the serial list.
+        resolved = await _resolve_with_devices(
+            [_fleet_device("AAA"), _fleet_device("BBB")],
+            device_group_id="group-001",
+            device_serials=["BBB"],
+        )
+        assert [d.serial for d in resolved] == ["BBB"]

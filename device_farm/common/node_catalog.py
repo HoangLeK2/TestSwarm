@@ -130,6 +130,32 @@ NODE_FIELD_METADATA: dict[str, dict[str, dict[str, Any]]] = {
     # Bounds mirror control_flow.py:_handle_loop.
     # Do not add count/while/max_iterations here: they would then render twice.
     "loop": {
+        # count_min/count_max override count, so they belong next to it — but
+        # LoopConfigFields owns count and cannot render a range, so they come
+        # through here instead. Both must be set or the step fails as a config
+        # error; a half-configured range is a typo, not a shorthand.
+        "count_min": {
+            "type": "number",
+            "min": 0,
+            "label_key": "controlFlow.loopCountMinLabel",
+        },
+        "count_max": {
+            "type": "number",
+            "min": 0,
+            "label_key": "controlFlow.loopCountMaxLabel",
+        },
+        "delay_between_min": {
+            "type": "number",
+            "min": 0,
+            "max": 300,
+            "label_key": "controlFlow.loopDelayMinLabel",
+        },
+        "delay_between_max": {
+            "type": "number",
+            "min": 0,
+            "max": 300,
+            "label_key": "controlFlow.loopDelayMaxLabel",
+        },
         "duration_seconds": {
             "type": "number",
             "min": 0,

@@ -81,6 +81,7 @@ def _to_out(s) -> ScheduleOut:
         inline_steps=s.inline_steps,
         inline_variables=s.inline_variables or {},
         device_group_id=s.device_group_id,
+        device_serials=getattr(s, "device_serials", []) or [],
         filter_state=s.filter_state,
         filter_model=s.filter_model,
         max_devices=s.max_devices,
@@ -167,7 +168,7 @@ async def create_schedule_endpoint(
     user: CurrentUser,
 ):
     # Validate target consistency
-    if body.target_type in ("campaign", "template") and not body.target_id:
+    if body.target_type in ("campaign", "template", "org_scenario") and not body.target_id:
         raise HTTPException(
             status_code=400,
             detail=f"target_id is required when target_type={body.target_type!r}",
@@ -189,6 +190,7 @@ async def create_schedule_endpoint(
             inline_steps=body.inline_steps,
             inline_variables=body.inline_variables,
             device_group_id=body.device_group_id,
+            device_serials=body.device_serials,
             filter_state=body.filter_state,
             filter_model=body.filter_model,
             max_devices=body.max_devices,
@@ -299,6 +301,11 @@ async def update_schedule_endpoint(
 
     scheduler = _get_scheduler(request)
     patch = body.model_dump(exclude_none=True)
+
+    # exclude_none drops explicit nulls, so "switch back to all devices" could
+    # never clear the group. Let device_group_id through when it was sent.
+    if "device_group_id" in body.model_dump(exclude_unset=True):
+        patch["device_group_id"] = body.device_group_id
 
     # Remap timezone field to timezone_name for the service layer
     if "timezone" in patch:

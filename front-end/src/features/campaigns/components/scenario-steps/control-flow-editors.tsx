@@ -349,6 +349,20 @@ export function IfVariableFields({
   );
 }
 
+/**
+ * "10–50" when the loop runs a random number of iterations, else null.
+ *
+ * count_min/count_max override count at run time, so every place that shows a
+ * count has to say so — an editor reading "count: 10" next to a loop that
+ * actually runs 10–50 times is worse than no number at all.
+ */
+function randomCountLabel(step: FlowStep): string | null {
+  const min = step.count_min;
+  const max = step.count_max;
+  if (min == null || min === '' || max == null || max === '') return null;
+  return `${min}–${max}`;
+}
+
 function detectLoopMode(step: FlowStep): 'count' | 'while' {
   const whileCond = step.while;
   const hasWhile =
@@ -554,8 +568,9 @@ export function LoopConfigFields({
             onInsert={(token) => onUpdate({ count: token })}
           />
           <p className='text-[10px] text-muted-foreground'>
-            Chạy đúng N lần. Có thể dừng sớm bằng break_if hoặc extract
-            stop_if_no_new.
+            {randomCountLabel(step)
+              ? `Đang chạy ngẫu nhiên ${randomCountLabel(step)} vòng — số này bị bỏ qua (xóa min/max ở dưới để dùng lại).`
+              : 'Chạy đúng N lần. Có thể dừng sớm bằng break_if hoặc extract stop_if_no_new.'}
           </p>
         </div>
       ) : (
@@ -604,6 +619,14 @@ export function LoopFields({
   if (mode === 'while') {
     return (
       <span className={`${labelCls} text-[10px]`}>lặp theo điều kiện</span>
+    );
+  }
+  const randomLabel = randomCountLabel(step);
+  if (randomLabel) {
+    return (
+      <span className={`${labelCls} text-[10px]`}>
+        count: ngẫu nhiên {randomLabel} vòng
+      </span>
     );
   }
   return (

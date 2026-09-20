@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.device_group import DeviceGroup, DeviceGroupMember
@@ -123,6 +123,81 @@ async def list_group_devices(
         .order_by(Device.created_at)
     )
     return list(result.scalars().all())
+
+
+async def list_available_group_devices(
+    db: AsyncSession,
+    group_id: str,
+    *,
+    org_id: str | None = None,
+    user_id: str | None = None,
+    include_managed_by_org: bool = False,
+    search: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> tuple[list[Device], int]:
+    """Return visible devices that are not already members of a group."""
+    member_device_ids = select(DeviceGroupMember.device_id).where(
+        DeviceGroupMember.group_id == group_id
+    )
+    filters = [Device.id.not_in(member_device_ids)]
+
+    if org_id:
+        from db.crud.organization import list_organization_members
+
+        member_rows = await list_organization_members(db, org_id)
+        member_ids = [
+            str(member.user_id)
+            for member, _ in member_rows
+            if getattr(member, "user_id", None)
+        ]
+        if member_ids:
+            org_conditions = [
+                Device.org_id == org_id,
+                and_(Device.org_id.is_(None), Device.user_id.in_(member_ids)),
+            ]
+            if include_managed_by_org:
+                org_conditions.append(Device.managed_by_org_id == org_id)
+            filters.append(or_(*org_conditions))
+        else:
+            org_conditions = [Device.org_id == org_id]
+            if include_managed_by_org:
+                org_conditions.append(Device.managed_by_org_id == org_id)
+            filters.append(or_(*org_conditions))
+    elif user_id:
+        filters.append(Device.user_id == user_id)
+
+    term = (search or "").strip()
+    if term:
+        pattern = f"%{term}%"
+        filters.append(
+            or_(
+                Device.name.ilike(pattern),
+                Device.serial.ilike(pattern),
+                Device.device_serial.ilike(pattern),
+                Device.adb_serial.ilike(pattern),
+                Device.relay_serial.ilike(pattern),
+                Device.brand.ilike(pattern),
+                Device.model.ilike(pattern),
+            )
+        )
+
+    total = int(
+        (
+            await db.execute(
+                select(func.count()).select_from(Device).where(*filters)
+            )
+        ).scalar_one()
+        or 0
+    )
+    result = await db.execute(
+        select(Device)
+        .where(*filters)
+        .order_by(Device.created_at, Device.id)
+        .offset(offset)
+        .limit(limit)
+    )
+    return list(result.scalars().all()), total
 
 
 async def get_group_device_ids(

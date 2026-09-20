@@ -840,6 +840,10 @@ _STEP_SCHEMA_BASE: Dict[str, Dict[str, Any]] = {
         "required": ["steps"],
         "optional": [
             "count",
+            "count_min",
+            "count_max",
+            "delay_between_min",
+            "delay_between_max",
             "while",
             "max_iterations",
             "loop_var",
@@ -850,6 +854,10 @@ _STEP_SCHEMA_BASE: Dict[str, Dict[str, Any]] = {
         "description": (
             "Lặp lại steps theo count hoặc while-condition. "
             "count: số lần lặp cố định (chạy đúng N lần, không bị max_iterations cắt). "
+            "count_min + count_max: số vòng ngẫu nhiên trong khoảng, bốc 1 lần mỗi lần "
+            "vào loop — ĐÈ LÊN count (phải khai cả hai, nếu chỉ khai 1 thì step lỗi config). "
+            "delay_between_min + delay_between_max: nghỉ ngẫu nhiên bấy nhiêu giây sau mỗi "
+            "vòng (0–300, bốc lại mỗi vòng, không nghỉ sau vòng cuối). "
             "duration_seconds: nếu > 0, dừng loop khi hết thời lượng kể cả chưa hết count. "
             "while: condition dict (element_exists | variable_equals) — lặp khi condition đúng. "
             "max_iterations: giới hạn an toàn chỉ khi dùng while (không có count, default 100). "

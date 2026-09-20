@@ -165,6 +165,42 @@ async def test_add_devices_filters_other_users(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_available_devices_supports_search_and_pagination(session_factory):
+    await _seed_devices(session_factory, ["d1", "d2", "d3", "d4"])
+    app = _build_app(session_factory)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
+        gid = (await ac.post("/api/device-groups", json={"name": "G"})).json()["id"]
+        await ac.post(f"/api/device-groups/{gid}/devices", json={"device_ids": ["d1"]})
+
+        first_page = await ac.get(
+            f"/api/device-groups/{gid}/available-devices",
+            params={"limit": 2, "offset": 0},
+        )
+        assert first_page.status_code == 200, first_page.text
+        first_body = first_page.json()
+        assert first_body["total"] == 3
+        assert first_body["offset"] == 0
+        assert first_body["limit"] == 2
+        assert [d["id"] for d in first_body["items"]] == ["d2", "d3"]
+
+        second_page = await ac.get(
+            f"/api/device-groups/{gid}/available-devices",
+            params={"limit": 2, "offset": 2},
+        )
+        assert second_page.status_code == 200
+        assert [d["id"] for d in second_page.json()["items"]] == ["d4"]
+
+        searched = await ac.get(
+            f"/api/device-groups/{gid}/available-devices",
+            params={"q": "SERIAL_d3", "limit": 2},
+        )
+        assert searched.status_code == 200
+        searched_body = searched.json()
+        assert searched_body["total"] == 1
+        assert [d["id"] for d in searched_body["items"]] == ["d3"]
+
+
+@pytest.mark.asyncio
 async def test_remove_device_from_group(session_factory):
     await _seed_devices(session_factory, ["d1", "d2"])
     app = _build_app(session_factory)

@@ -19,7 +19,7 @@ from .utils import _now, _uuid
 
 
 class Schedule(TenantScopedModel, Base):
-    """A recurring cron-based schedule that triggers campaign/template/fleet execution."""
+    """A recurring cron-based schedule that triggers campaign/template/org-scenario/fleet execution."""
 
     __tablename__ = "schedules"
 
@@ -30,7 +30,7 @@ class Schedule(TenantScopedModel, Base):
     # ── Target: what to run ───────────────────────────────────────────────────
     target_type: Mapped[str] = mapped_column(
         String(20), nullable=False
-    )  # campaign | template | fleet
+    )  # campaign | template | org_scenario | fleet
     target_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     inline_steps: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     inline_variables: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -42,6 +42,7 @@ class Schedule(TenantScopedModel, Base):
         nullable=True,
         index=True,
     )
+    device_serials: Mapped[list] = mapped_column(JSON, default=list)
     filter_state: Mapped[str] = mapped_column(String(20), default="READY")
     filter_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     max_devices: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

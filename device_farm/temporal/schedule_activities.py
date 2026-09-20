@@ -102,6 +102,7 @@ class ScheduleActivities:
                 "inline_variables": schedule.inline_variables or {},
                 "user_id": str(schedule.user_id) if schedule.user_id else None,
                 "device_group_id": schedule.device_group_id,
+                "device_serials": getattr(schedule, "device_serials", []) or [],
                 "filter_state": schedule.filter_state,
                 "filter_model": schedule.filter_model,
                 "max_devices": schedule.max_devices,
@@ -148,6 +149,7 @@ class ScheduleActivities:
         Handles three target_types:
         - campaign: delegates to enqueue_campaign_run_temporal (Temporal workflow)
         - template: resolves template steps then dispatches as fleet (TaskQueue)
+        - org_scenario: resolves org scenario body then dispatches as fleet
         - fleet: dispatches inline_steps to matching devices (TaskQueue)
         """
         activity.heartbeat("dispatch_start")
@@ -168,6 +170,10 @@ class ScheduleActivities:
                     )
                 elif target_type == "template":
                     result = await self._dispatch_template(
+                        schedule_config, stagger, stagger_interval
+                    )
+                elif target_type == "org_scenario":
+                    result = await self._dispatch_org_scenario(
                         schedule_config, stagger, stagger_interval
                     )
                 elif target_type == "fleet":
@@ -322,6 +328,20 @@ class ScheduleActivities:
         fleet_cfg = {**cfg, "inline_steps": template.steps, "inline_variables": template.variables or {}}
         return await self._dispatch_fleet(fleet_cfg, stagger, stagger_interval)
 
+    async def _dispatch_org_scenario(
+        self,
+        cfg: dict[str, Any],
+        stagger: bool,
+        stagger_interval: int,
+    ) -> dict[str, Any]:
+        """Resolve org scenario body then dispatch as fleet."""
+        from db.database import activity_session
+        from services.scheduler import _resolve_org_scenario_fleet_config
+
+        async with activity_session() as db:
+            fleet_cfg = await _resolve_org_scenario_fleet_config(db, cfg)
+        return await self._dispatch_fleet(fleet_cfg, stagger, stagger_interval)
+
     async def _dispatch_fleet(
         self,
         cfg: dict[str, Any],
@@ -341,6 +361,7 @@ class ScheduleActivities:
 
         variables = cfg.get("inline_variables") or {}
         device_group_id = cfg.get("device_group_id")
+        device_serials = cfg.get("device_serials") or []
         filter_state = cfg.get("filter_state", "READY")
         filter_model = cfg.get("filter_model")
         max_devices = cfg.get("max_devices")
@@ -348,6 +369,7 @@ class ScheduleActivities:
         # Resolve devices — async to avoid event-loop conflicts with asyncpg.
         devices = await _resolve_fleet_devices(
             device_group_id=device_group_id,
+            device_serials=device_serials,
             filter_state=filter_state,
             filter_model=filter_model,
             max_devices=max_devices,
@@ -361,6 +383,12 @@ class ScheduleActivities:
             templates = await list_templates(db)
 
         registry = _build_scenario_registry([], templates)
+        extra_registry = cfg.get("_scenario_registry")
+        if isinstance(extra_registry, dict):
+            for key in ("by_id", "by_campaign_name", "by_template_name"):
+                values = extra_registry.get(key)
+                if isinstance(values, dict):
+                    registry.setdefault(key, {}).update(values)
 
         queue = _queue_ref
         if queue is None:
@@ -464,13 +492,24 @@ async def _resolve_fleet_devices(
     filter_model: str | None,
     max_devices: int | None,
     org_id: str | None = None,
+    device_serials: list[str] | None = None,
 ):
-    """Resolve devices from DeviceManager (async to avoid asyncpg event-loop conflicts)."""
+    """Resolve devices from DeviceManager (async to avoid asyncpg event-loop conflicts).
+
+    An explicit `device_serials` list wins over `device_group_id`: it replaces the
+    candidate set, then the usual state/model/max filters still apply.
+    """
     manager = _manager_ref
     if manager is None:
         return []
 
-    if device_group_id:
+    if device_serials:
+        wanted = set(device_serials)
+        devices = [
+            c for c in manager.all_devices()
+            if c.serial in wanted and c.state == filter_state
+        ]
+    elif device_group_id:
         from db.database import activity_session
         from db.crud.device_group import list_group_devices
         from tenancy.context import get_current_org_id, tenant_context

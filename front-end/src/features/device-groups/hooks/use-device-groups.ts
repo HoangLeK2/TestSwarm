@@ -2,13 +2,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   deviceGroupsApi,
+  type AvailableGroupDevicesParams,
   type DeviceGroupCreate,
   type DeviceGroupUpdate
 } from '../services/api';
 
 const KEYS = {
   list: ['device-groups'] as const,
-  detail: (id: string) => ['device-groups', id] as const
+  detail: (id: string) => ['device-groups', id] as const,
+  availableDevices: (id: string, params: AvailableGroupDevicesParams) =>
+    ['device-groups', id, 'available-devices', params] as const
 };
 const DEVICE_GROUPS_STALE_MS = 30_000;
 
@@ -28,6 +31,19 @@ export function useDeviceGroup(
     queryKey: KEYS.detail(groupId),
     queryFn: () => deviceGroupsApi.get(groupId),
     enabled: !!groupId && (options?.enabled ?? true)
+  });
+}
+
+export function useAvailableGroupDevices(
+  groupId: string,
+  params: AvailableGroupDevicesParams,
+  options?: { enabled?: boolean }
+) {
+  return useQuery({
+    queryKey: KEYS.availableDevices(groupId, params),
+    queryFn: () => deviceGroupsApi.availableDevices(groupId, params),
+    enabled: !!groupId && (options?.enabled ?? true),
+    placeholderData: (previous) => previous
   });
 }
 
@@ -52,6 +68,9 @@ export function useUpdateDeviceGroup() {
     onSuccess: (_, { groupId }) => {
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.detail(groupId) });
+      qc.invalidateQueries({
+        queryKey: ['device-groups', groupId, 'available-devices']
+      });
     }
   });
 }
@@ -77,6 +96,9 @@ export function useAddDevicesToGroup() {
     onSuccess: (_, { groupId }) => {
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.detail(groupId) });
+      qc.invalidateQueries({
+        queryKey: ['device-groups', groupId, 'available-devices']
+      });
     }
   });
 }
@@ -94,6 +116,9 @@ export function useRemoveDeviceFromGroup() {
     onSuccess: (_, { groupId }) => {
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.detail(groupId) });
+      qc.invalidateQueries({
+        queryKey: ['device-groups', groupId, 'available-devices']
+      });
     }
   });
 }

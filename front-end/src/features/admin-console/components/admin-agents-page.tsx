@@ -1,17 +1,7 @@
 'use client';
 
+import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import {
-  type FormEvent,
-  type ReactNode,
-  useEffect,
-  useMemo,
-  useState
-} from 'react';
-import {
-  ArrowLeft,
-  ArrowRight,
-  ArrowRightLeft,
-  Check,
   Pencil,
   Plus,
   Power,
@@ -26,22 +16,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle
-} from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList
-} from '@/components/ui/command';
 import {
   Dialog,
   DialogContent,
@@ -95,12 +70,18 @@ import {
   SubmitSpinner
 } from './admin-shared';
 import { cn } from '@/lib/utils';
+import {
+  canAssignPhones,
+  selectedWorkspaceName,
+  showReturnToPoolAction
+} from '../lib/phone-allocation-ui-model';
 import { useAdminWorkspaceScope } from '../hooks/use-admin-workspace-scope';
 import {
   adminApi,
   adminApiErrorCode,
   type AdminAgentOut,
   type AdminAgentPhoneOut,
+  type AdminAssignableWorkspaceOut,
   type AdminAgentUpdate,
   formatAdminApiError
 } from '../services/admin-api';
@@ -118,17 +99,6 @@ const WORKSPACE_SEARCH_LIMIT = 50;
 const TOGGLE_POLL_MS = 2_000;
 /** Past this, the relay host itself is the problem — stop implying we are working. */
 const TOGGLE_WAIT_TIMEOUT_MS = 90_000;
-
-function StepNumber({ children }: { children: ReactNode }) {
-  return (
-    <Badge
-      variant='secondary'
-      className='size-5 shrink-0 justify-center rounded-full p-0 text-[11px]'
-    >
-      {children}
-    </Badge>
-  );
-}
 
 function dateLabel(value?: string | null) {
   return value ? new Date(value).toLocaleString() : '-';
@@ -212,6 +182,14 @@ function PhoneAllocationAction({
   );
 }
 
+function AgentWorkspaceKindBadge({ agent }: { agent: AdminAgentOut }) {
+  const t = useTranslations('adminConsole.agents');
+  if (agent.workspaceKind === 'pool') {
+    return <Badge variant='secondary'>{t('workspaceKinds.pool')}</Badge>;
+  }
+  return <Badge variant='outline'>{t('workspaceKinds.tenant')}</Badge>;
+}
+
 export function AdminAgentsPage() {
   const t = useTranslations('adminConsole.agents');
   const qc = useQueryClient();
@@ -219,7 +197,6 @@ export function AdminAgentsPage() {
   const searchParams = useSearchParams();
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState(ALL);
-  const [agentGroup, setAgentGroup] = useState<'pool' | 'workspace'>('pool');
   const [offset, setOffset] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
   const [editAgent, setEditAgent] = useState<AdminAgentOut | null>(null);
@@ -389,30 +366,10 @@ export function AdminAgentsPage() {
   });
 
   const agentItems = useMemo(() => agents.data?.items ?? [], [agents.data]);
-  const poolAgentCount = agentItems.filter(
-    (agent) => agent.workspaceKind === 'pool'
-  ).length;
-  const workspaceAgentCount = agentItems.filter(
-    (agent) => agent.workspaceKind !== 'pool'
-  ).length;
-  const visibleAgents = useMemo(
-    () =>
-      agentItems.filter((agent) =>
-        agentGroup === 'pool'
-          ? agent.workspaceKind === 'pool'
-          : agent.workspaceKind !== 'pool'
-      ),
-    [agentGroup, agentItems]
-  );
-
-  useEffect(() => {
-    setSelectedAgentIds(new Set());
-  }, [agentGroup]);
-
   useEffect(() => {
     if (!pendingToggle) return;
     const wanted = pendingToggle.action === 'enable';
-    const agent = visibleAgents.find(
+    const agent = agentItems.find(
       (item) => item.relay_id === pendingToggle.relayId
     );
     // A deleted or filtered-out agent counts as "no longer connected".
@@ -428,14 +385,14 @@ export function AdminAgentsPage() {
         wanted ? t('toast.enableTimeout') : t('toast.disableTimeout')
       );
     }
-  }, [pendingToggle, t, visibleAgents]);
-  const selectedVisibleCount = visibleAgents.filter((agent) =>
+  }, [agentItems, pendingToggle, t]);
+  const selectedVisibleCount = agentItems.filter((agent) =>
     selectedAgentIds.has(agent.relay_id)
   ).length;
   const allVisibleSelected =
-    visibleAgents.length > 0 && selectedVisibleCount === visibleAgents.length;
+    agentItems.length > 0 && selectedVisibleCount === agentItems.length;
   const someVisibleSelected =
-    selectedVisibleCount > 0 && selectedVisibleCount < visibleAgents.length;
+    selectedVisibleCount > 0 && selectedVisibleCount < agentItems.length;
   const selectedCount = selectedAgentIds.size;
   const lifecycleBusy =
     lifecycleMutation.isPending || bulkDeleteMutation.isPending;
@@ -457,9 +414,9 @@ export function AdminAgentsPage() {
     setSelectedAgentIds((prev) => {
       const next = new Set(prev);
       if (allVisibleSelected) {
-        for (const agent of visibleAgents) next.delete(agent.relay_id);
+        for (const agent of agentItems) next.delete(agent.relay_id);
       } else {
-        for (const agent of visibleAgents) next.add(agent.relay_id);
+        for (const agent of agentItems) next.add(agent.relay_id);
       }
       return next;
     });
@@ -502,37 +459,7 @@ export function AdminAgentsPage() {
           </div>
 
           <TabsContent value='agents' className='space-y-3'>
-            <div className='space-y-3 rounded-md border bg-background p-3'>
-              <div className='grid gap-2 md:grid-cols-2'>
-                {(['pool', 'workspace'] as const).map((group) => {
-                  const active = agentGroup === group;
-                  const count =
-                    group === 'pool' ? poolAgentCount : workspaceAgentCount;
-                  return (
-                    <button
-                      key={group}
-                      type='button'
-                      className={`rounded-md border px-3 py-2 text-left ${
-                        active ? 'border-primary bg-primary/5' : 'bg-muted/20'
-                      }`}
-                      onClick={() => {
-                        setAgentGroup(group);
-                        setOffset(0);
-                      }}
-                    >
-                      <span className='flex items-center justify-between gap-3 text-sm font-medium'>
-                        <span>{t(`agentGroups.${group}.title`)}</span>
-                        <span className='rounded-full bg-background px-2 py-0.5 text-xs text-muted-foreground'>
-                          {count}
-                        </span>
-                      </span>
-                      <span className='mt-1 block text-xs text-muted-foreground'>
-                        {t(`agentGroups.${group}.description`)}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+            <div className='rounded-md border bg-background p-3'>
               <div className='grid gap-2 lg:grid-cols-[minmax(260px,1fr)_190px]'>
                 <SearchField
                   value={search}
@@ -617,13 +544,14 @@ export function AdminAgentsPage() {
                                 ? 'indeterminate'
                                 : false
                           }
-                          disabled={visibleAgents.length === 0 || lifecycleBusy}
+                          disabled={agentItems.length === 0 || lifecycleBusy}
                           aria-label={t('bulk.selectVisible')}
                           onCheckedChange={toggleVisibleAgents}
                         />
                       </TableHead>
                       <TableHead>{t('table.agent')}</TableHead>
                       <TableHead>{t('table.workspace')}</TableHead>
+                      <TableHead>{t('table.kind')}</TableHead>
                       <TableHead>{t('table.health')}</TableHead>
                       <TableHead>{t('table.lastSeen')}</TableHead>
                       <TableHead>{t('table.version')}</TableHead>
@@ -635,9 +563,9 @@ export function AdminAgentsPage() {
                   </TableHeader>
                   <TableBody>
                     {agents.isLoading ? (
-                      <AdminTableSkeleton columns={8} />
+                      <AdminTableSkeleton columns={9} />
                     ) : null}
-                    {visibleAgents.map((agent) => (
+                    {agentItems.map((agent) => (
                       <TableRow
                         key={agent.relay_id}
                         data-state={
@@ -672,6 +600,9 @@ export function AdminAgentsPage() {
                           {agent.workspaceName || agent.workspaceId}
                         </TableCell>
                         <TableCell className='py-2'>
+                          <AgentWorkspaceKindBadge agent={agent} />
+                        </TableCell>
+                        <TableCell className='py-2'>
                           <StatusBadge value={agent.health} />
                         </TableCell>
                         <TableCell className='py-2 text-sm text-muted-foreground'>
@@ -688,8 +619,7 @@ export function AdminAgentsPage() {
                         </TableCell>
                         <TableCell className='py-2'>
                           <div className='flex flex-nowrap justify-end gap-1'>
-                            {PHONE_ALLOCATION_ENABLED &&
-                            agentGroup === 'pool' ? (
+                            {PHONE_ALLOCATION_ENABLED ? (
                               <PhoneAllocationAction
                                 agent={agent}
                                 onOpen={() => setPhoneAgent(agent)}
@@ -748,13 +678,13 @@ export function AdminAgentsPage() {
                         </TableCell>
                       </TableRow>
                     ))}
-                    {!agents.isLoading && visibleAgents.length === 0 ? (
+                    {!agents.isLoading && agentItems.length === 0 ? (
                       <TableRow>
                         <TableCell
-                          colSpan={8}
+                          colSpan={9}
                           className='h-28 text-center text-sm text-muted-foreground'
                         >
-                          {t(`agentGroups.${agentGroup}.empty`)}
+                          {t('empty')}
                         </TableCell>
                       </TableRow>
                     ) : null}
@@ -764,7 +694,7 @@ export function AdminAgentsPage() {
               <AdminPagination
                 offset={offset}
                 limit={ADMIN_PAGE_SIZE}
-                total={visibleAgents.length}
+                total={agents.data?.total ?? 0}
                 onOffsetChange={setOffset}
               />
             </div>
@@ -1296,9 +1226,6 @@ function AgentPhoneAllocationDialog({
   const [phoneSearch, setPhoneSearch] = useState('');
   const [phoneOffset, setPhoneOffset] = useState(0);
   const [workspaceSearch, setWorkspaceSearch] = useState('');
-  const [allocationStep, setAllocationStep] = useState<'phones' | 'workspace'>(
-    'phones'
-  );
 
   useEffect(() => {
     setSelected(new Set());
@@ -1307,7 +1234,6 @@ function AgentPhoneAllocationDialog({
     setPhoneSearch('');
     setPhoneOffset(0);
     setWorkspaceSearch('');
-    setAllocationStep('phones');
   }, [agent?.relay_id]);
 
   useEffect(() => {
@@ -1383,7 +1309,6 @@ function AgentPhoneAllocationDialog({
       setSelected(new Set());
       setTargetWorkspaceId('');
       setWorkspaceSearch('');
-      setAllocationStep('phones');
       toast.success(t('toast.assigned'));
       invalidate();
     },
@@ -1407,13 +1332,20 @@ function AgentPhoneAllocationDialog({
   const assignableWorkspaceItems = assignableWorkspaces.data?.items ?? [];
   const busy = assignMutation.isPending || unassignMutation.isPending;
   const selectedCount = selected.size;
-  const targetWorkspaceName = assignableWorkspaceItems.find(
-    (workspace) => workspace.id === targetWorkspaceId
-  )?.businessName;
-  const assignLabel = targetWorkspaceId
+  const targetWorkspaceName = selectedWorkspaceName(
+    assignableWorkspaceItems,
+    targetWorkspaceId
+  );
+  const canAssign = canAssignPhones({
+    selectedCount,
+    targetWorkspaceId,
+    targetWorkspaceName
+  });
+  const showReturnToPool = showReturnToPoolAction(selectedCount);
+  const assignLabel = canAssign
     ? t('assignToWorkspace', {
         count: selectedCount,
-        workspace: targetWorkspaceName || targetWorkspaceId
+        workspace: targetWorkspaceName
       })
     : t('chooseTargetWorkspace');
   const selectedSerials = Array.from(selected);
@@ -1470,67 +1402,60 @@ function AgentPhoneAllocationDialog({
               </div>
             </div>
 
-            <div className='border-b p-3'>
-              <Tabs
-                value={allocationStep}
-                onValueChange={(step) =>
-                  setAllocationStep(step as 'phones' | 'workspace')
-                }
-              >
-                <TabsList className='w-full'>
-                  <TabsTrigger value='phones'>
-                    <StepNumber>1</StepNumber>
-                    {t('steps.phones.title')}
-                    {selectedCount > 0 ? (
-                      <Badge variant='secondary'>{selectedCount}</Badge>
-                    ) : null}
-                  </TabsTrigger>
-                  <TabsTrigger value='workspace' disabled={selectedCount === 0}>
-                    <StepNumber>2</StepNumber>
-                    {t('steps.workspace.title')}
-                  </TabsTrigger>
-                </TabsList>
-              </Tabs>
-              <p className='mt-2 text-xs text-muted-foreground'>
-                {allocationStep === 'phones'
-                  ? t('steps.phones.description')
-                  : t('steps.workspace.description')}
+            <div className='border-b bg-muted/20 px-5 py-3'>
+              <p className='text-sm font-medium'>{t('simpleTitle')}</p>
+              <p className='mt-1 text-xs text-muted-foreground'>
+                {t('simpleDescription')}
               </p>
             </div>
 
-            {allocationStep === 'phones' ? (
-              <>
-                <div className='grid gap-2 border-b p-3 sm:grid-cols-[minmax(220px,1fr)_170px_auto]'>
-                  <SearchField
-                    value={phoneSearch}
-                    onChange={setPhoneSearch}
-                    placeholder={t('searchPlaceholder')}
-                  />
-                  <Select value={filter} onValueChange={setFilter}>
-                    <SelectTrigger className='w-full'>
-                      <SelectValue placeholder={t('filter')} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={ALL}>{t('allPhones')}</SelectItem>
-                      <SelectItem value={UNASSIGNED_PHONE_FILTER}>
-                        {t('poolPhones')}
-                      </SelectItem>
-                      {assignableWorkspaceItems.map((workspace) => (
-                        <SelectItem key={workspace.id} value={workspace.id}>
-                          {workspace.businessName}
+            <div className='grid min-h-0 flex-1 gap-0 md:grid-cols-[minmax(0,1.2fr)_minmax(300px,0.8fr)]'>
+              <section className='flex min-h-0 flex-col border-b md:border-b-0 md:border-r'>
+                <div className='space-y-2 border-b p-3'>
+                  <div className='flex items-center justify-between gap-2'>
+                    <div>
+                      <p className='text-sm font-medium'>
+                        {t('phonePickerTitle')}
+                      </p>
+                      <p className='text-xs text-muted-foreground'>
+                        {selectedCount > 0
+                          ? t('phonePickerSelected', { count: selectedCount })
+                          : t('phonePickerHint')}
+                      </p>
+                    </div>
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      disabled={displayedPhones.length === 0}
+                      onClick={selectDisplayed}
+                    >
+                      {t('selectVisible')}
+                    </Button>
+                  </div>
+                  <div className='grid gap-2 sm:grid-cols-[minmax(160px,1fr)_150px]'>
+                    <SearchField
+                      value={phoneSearch}
+                      onChange={setPhoneSearch}
+                      placeholder={t('searchPlaceholder')}
+                    />
+                    <Select value={filter} onValueChange={setFilter}>
+                      <SelectTrigger className='w-full'>
+                        <SelectValue placeholder={t('filter')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={ALL}>{t('allPhones')}</SelectItem>
+                        <SelectItem value={UNASSIGNED_PHONE_FILTER}>
+                          {t('poolPhones')}
                         </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Button
-                    type='button'
-                    variant='outline'
-                    className='h-10 whitespace-nowrap px-3'
-                    disabled={displayedPhones.length === 0}
-                    onClick={selectDisplayed}
-                  >
-                    {t('selectVisible')}
-                  </Button>
+                        {assignableWorkspaceItems.map((workspace) => (
+                          <SelectItem key={workspace.id} value={workspace.id}>
+                            {workspace.businessName}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
 
                 {phones.isError ? (
@@ -1549,14 +1474,12 @@ function AgentPhoneAllocationDialog({
                         <TableRow>
                           <TableHead className='w-[42px]' />
                           <TableHead>{t('table.phone')}</TableHead>
-                          <TableHead>{t('table.status')}</TableHead>
                           <TableHead>{t('table.assignedTo')}</TableHead>
-                          <TableHead>{t('table.lastSeen')}</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {phones.isLoading ? (
-                          <AdminTableSkeleton columns={5} />
+                          <AdminTableSkeleton columns={3} />
                         ) : null}
                         {displayedPhones.map((phone) => (
                           <AgentPhoneRow
@@ -1569,7 +1492,7 @@ function AgentPhoneAllocationDialog({
                         {!phones.isLoading && displayedPhones.length === 0 ? (
                           <TableRow>
                             <TableCell
-                              colSpan={5}
+                              colSpan={3}
                               className='h-24 text-center text-sm text-muted-foreground'
                             >
                               {t('empty')}
@@ -1588,145 +1511,122 @@ function AgentPhoneAllocationDialog({
                     ) : null}
                   </div>
                 </div>
-              </>
-            ) : (
-              <div className='min-h-0 flex-1 overflow-auto p-3'>
-                <div className='grid gap-3 lg:grid-cols-[minmax(0,1fr)_320px]'>
-                  <Card className='gap-3 py-4'>
-                    <CardHeader className='px-4'>
-                      <CardTitle className='text-base'>
-                        {t('targetWorkspaceLabel')}
-                      </CardTitle>
-                      <CardDescription>
-                        {t('targetWorkspaceHelp')}
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent className='px-4'>
-                      {/* Server-side search: cmdk must not re-filter the page it gets. */}
-                      <Command shouldFilter={false} className='border'>
-                        <CommandInput
-                          value={workspaceSearch}
-                          onValueChange={setWorkspaceSearch}
-                          placeholder={t('workspaceSearchPlaceholder')}
-                        />
-                        <CommandList>
-                          <CommandEmpty>
-                            {workspaceSearch
-                              ? t('noTargetWorkspaces')
-                              : t('noTargetWorkspacesHint')}
-                          </CommandEmpty>
-                          <CommandGroup>
-                            {assignableWorkspaceItems.map((workspace) => (
-                              <CommandItem
-                                key={workspace.id}
-                                value={workspace.id}
-                                onSelect={() =>
-                                  setTargetWorkspaceId(workspace.id)
-                                }
-                                className='gap-3'
-                              >
-                                <Check
-                                  className={cn(
-                                    workspace.id === targetWorkspaceId
-                                      ? 'opacity-100'
-                                      : 'opacity-0'
-                                  )}
-                                />
-                                <span className='min-w-0'>
-                                  <span className='block truncate text-sm font-medium'>
-                                    {workspace.businessName}
-                                  </span>
-                                  <span className='block truncate text-xs text-muted-foreground'>
-                                    {workspace.id}
-                                  </span>
-                                </span>
-                              </CommandItem>
-                            ))}
-                          </CommandGroup>
-                        </CommandList>
-                      </Command>
-                    </CardContent>
-                  </Card>
+              </section>
 
-                  <Card className='gap-3 py-4'>
-                    <CardHeader className='px-4'>
-                      <CardTitle className='text-base'>
-                        {t('selectedPhonesTitle', { count: selectedCount })}
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className='flex flex-wrap gap-1.5 px-4'>
-                      {selectedSerials.slice(0, 12).map((serial) => (
-                        <Badge
-                          key={serial}
-                          variant='secondary'
-                          className='font-mono'
-                        >
-                          {serial}
-                        </Badge>
-                      ))}
-                      {selectedSerials.length > 12 ? (
-                        <Badge variant='outline'>
-                          +{selectedSerials.length - 12}
-                        </Badge>
-                      ) : null}
-                    </CardContent>
-                  </Card>
+              <section className='flex min-h-0 flex-col'>
+                <div className='space-y-2 border-b p-3'>
+                  <div>
+                    <p className='text-sm font-medium'>
+                      {t('workspacePickerTitle')}
+                    </p>
+                    <p className='text-xs text-muted-foreground'>
+                      {targetWorkspaceName
+                        ? t('workspacePickerSelected', {
+                            workspace: targetWorkspaceName
+                          })
+                        : t('workspacePickerHint')}
+                    </p>
+                  </div>
+                  <SearchField
+                    value={workspaceSearch}
+                    onChange={setWorkspaceSearch}
+                    placeholder={t('workspaceSearchPlaceholder')}
+                  />
                 </div>
-              </div>
-            )}
 
-            <DialogFooter className='border-t p-3 sm:justify-between'>
-              {allocationStep === 'phones' ? (
-                <Button
-                  type='button'
-                  variant='outline'
-                  disabled={busy || selectedCount === 0}
-                  onClick={() => unassignMutation.mutate()}
-                >
-                  {unassignMutation.isPending ? (
-                    <SubmitSpinner />
-                  ) : (
-                    <RotateCcw />
-                  )}
-                  {t('returnToPool', { count: selectedCount })}
-                </Button>
-              ) : (
-                <Button
-                  type='button'
-                  variant='outline'
-                  onClick={() => setAllocationStep('phones')}
-                >
-                  <ArrowLeft />
-                  {t('backToPhones')}
-                </Button>
-              )}
+                {assignableWorkspaces.isError ? (
+                  <div className='p-4'>
+                    <AdminErrorState
+                      message={formatAdminApiError(assignableWorkspaces.error)}
+                      onRetry={() => void assignableWorkspaces.refetch()}
+                    />
+                  </div>
+                ) : null}
+
+                <div className='min-h-0 flex-1 overflow-auto p-3'>
+                  <div className='overflow-hidden rounded-md border'>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className='w-[42px]' />
+                          <TableHead>{t('workspaceTable.workspace')}</TableHead>
+                          <TableHead>{t('workspaceTable.status')}</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {assignableWorkspaces.isLoading ? (
+                          <AdminTableSkeleton columns={3} />
+                        ) : null}
+                        {assignableWorkspaceItems.map((workspace) => (
+                          <WorkspaceTargetRow
+                            key={workspace.id}
+                            workspace={workspace}
+                            selected={workspace.id === targetWorkspaceId}
+                            onSelect={() => setTargetWorkspaceId(workspace.id)}
+                          />
+                        ))}
+                        {!assignableWorkspaces.isLoading &&
+                        assignableWorkspaceItems.length === 0 ? (
+                          <TableRow>
+                            <TableCell
+                              colSpan={3}
+                              className='h-24 text-sm text-muted-foreground'
+                            >
+                              {workspaceSearch
+                                ? t('noTargetWorkspaces')
+                                : t('noTargetWorkspacesHint')}
+                            </TableCell>
+                          </TableRow>
+                        ) : null}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <DialogFooter className='border-t p-3 sm:items-center sm:justify-between'>
+              <div className='text-sm text-muted-foreground'>
+                {selectedCount > 0 && targetWorkspaceName
+                  ? t('allocationSummary', {
+                      count: selectedCount,
+                      workspace: targetWorkspaceName
+                    })
+                  : selectedCount > 0
+                    ? t('chooseTargetWorkspaceHint')
+                    : t('phonePickerHint')}
+              </div>
               <div className='flex gap-2'>
                 <Button type='button' variant='ghost' onClick={onClose}>
                   {tCommon('cancel')}
                 </Button>
-                {allocationStep === 'phones' ? (
+                {showReturnToPool ? (
                   <Button
                     type='button'
-                    disabled={selectedCount === 0}
-                    onClick={() => setAllocationStep('workspace')}
+                    variant='outline'
+                    disabled={busy}
+                    onClick={() => unassignMutation.mutate()}
                   >
-                    {t('nextToWorkspace', { count: selectedCount })}
-                    <ArrowRight />
-                  </Button>
-                ) : (
-                  <Button
-                    type='button'
-                    disabled={busy || selectedCount === 0 || !targetWorkspaceId}
-                    onClick={() => assignMutation.mutate()}
-                  >
-                    {assignMutation.isPending ? (
+                    {unassignMutation.isPending ? (
                       <SubmitSpinner />
                     ) : (
-                      <ArrowRightLeft />
+                      <RotateCcw />
                     )}
-                    {assignLabel}
+                    {t('returnToPool', { count: selectedCount })}
                   </Button>
-                )}
+                ) : null}
+                <Button
+                  type='button'
+                  disabled={busy || !canAssign}
+                  onClick={() => assignMutation.mutate()}
+                >
+                  {assignMutation.isPending ? (
+                    <SubmitSpinner />
+                  ) : (
+                    <Smartphone />
+                  )}
+                  {assignLabel}
+                </Button>
               </div>
             </DialogFooter>
           </div>
@@ -1791,11 +1691,9 @@ function AgentPhoneRow({
   return (
     <TableRow>
       <TableCell>
-        <input
-          type='checkbox'
-          className='size-4'
+        <Checkbox
           checked={checked}
-          onChange={onToggle}
+          onCheckedChange={onToggle}
           aria-label={phone.serial}
         />
       </TableCell>
@@ -1807,12 +1705,6 @@ function AgentPhoneRow({
           <p className='font-mono text-xs text-muted-foreground'>
             {phone.serial}
           </p>
-        </div>
-      </TableCell>
-      <TableCell>
-        <div className='flex flex-wrap gap-1'>
-          <StatusBadge value={phone.registered ? phone.status : 'ready'} />
-          <StatusBadge value={phone.state} />
         </div>
       </TableCell>
       <TableCell>
@@ -1828,8 +1720,52 @@ function AgentPhoneRow({
           </p>
         </div>
       </TableCell>
-      <TableCell className='text-sm text-muted-foreground'>
-        {dateLabel(phone.last_seen)}
+    </TableRow>
+  );
+}
+
+function WorkspaceTargetRow({
+  workspace,
+  selected,
+  onSelect
+}: {
+  workspace: AdminAssignableWorkspaceOut;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const t = useTranslations('adminConsole.agents.phoneAllocation');
+  return (
+    <TableRow
+      tabIndex={0}
+      aria-selected={selected}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+      className={cn(
+        'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+        selected && 'bg-primary/5 text-primary'
+      )}
+    >
+      <TableCell>
+        <Checkbox
+          checked={selected}
+          aria-label={t('selectWorkspace', {
+            workspace: workspace.businessName
+          })}
+          onCheckedChange={onSelect}
+        />
+      </TableCell>
+      <TableCell>
+        <span className='block max-w-[260px] truncate font-medium'>
+          {workspace.businessName}
+        </span>
+      </TableCell>
+      <TableCell>
+        <StatusBadge value={workspace.status} />
       </TableCell>
     </TableRow>
   );

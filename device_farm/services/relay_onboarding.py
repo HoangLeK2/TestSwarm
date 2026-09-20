@@ -260,6 +260,7 @@ async def claim_relay_serial(db: AsyncSession, relay_row, *, serial: str, user_i
             display_name=display_name,
             user_id=user_id,
             org_id=org_id,
+            allow_relay_reclaim=True,
         )
     except DeviceRegistrationError as exc:
         raise RelayOnboardingError(exc.status_code, exc.detail) from exc

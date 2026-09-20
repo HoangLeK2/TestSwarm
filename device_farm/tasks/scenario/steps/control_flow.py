@@ -148,6 +148,30 @@ def _restore_trace(sc: ScenarioContext, parent_trace: Dict[str, Any]) -> None:
 _DELIBERATE_NO_ACTION_OUTCOMES = frozenset({"rate_limited", "paced", "cooldown"})
 
 
+def _resolve_random_range(low: Any, high: Any, cast) -> tuple:
+    """Bounds for a random pick, or an error describing the misconfiguration.
+
+    Half a range is a typo, not a shorthand. Guessing which half the author
+    meant is how a loop quietly runs once instead of forty times, and a loop
+    that runs the wrong number of times fails silently — nothing errors, the
+    run just does less work than the scenario asked for.
+
+    Returns ``(bounds, error)``; both are ``None`` when the range is unset.
+    """
+    unset = (None, "")
+    if low in unset and high in unset:
+        return None, None
+    if low in unset or high in unset:
+        return None, "needs both min and max"
+    try:
+        lo, hi = cast(low), cast(high)
+    except (TypeError, ValueError):
+        return None, f"invalid bounds {low!r}..{high!r}"
+    if lo < 0 or hi < lo:
+        return None, f"invalid range {lo}..{hi}"
+    return (lo, hi), None
+
+
 def _walk_step_results(nested_result: Dict[str, Any]):
     """Every step result in an iteration, however deeply branches nest it.
 
@@ -253,7 +277,37 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
         result["message"] = "loop: no nested steps"
         return
 
-    if count is not None:
+    # Random ranges. A fixed count replays the same shape every run; a range
+    # lets each run pick its own. count_min/count_max deliberately win over
+    # `count`: the editor's loop form always writes a count (default 10), so
+    # letting count win would leave a configured range silently dead.
+    count_range, count_range_err = _resolve_random_range(
+        sc.var_ctx.resolve(step.get("count_min"), step_index=idx),
+        sc.var_ctx.resolve(step.get("count_max"), step_index=idx),
+        int,
+    )
+    delay_range, delay_range_err = _resolve_random_range(
+        sc.var_ctx.resolve(step.get("delay_between_min"), step_index=idx),
+        sc.var_ctx.resolve(step.get("delay_between_max"), step_index=idx),
+        float,
+    )
+    range_err = count_range_err or delay_range_err
+    if range_err:
+        result["ok"] = False
+        result["reason_code"] = LOOP_INVALID_COUNT
+        result["stopped_by"] = "config"
+        result["message"] = f"loop: {range_err}"
+        return
+    if delay_range is not None:
+        delay_range = (min(delay_range[0], 300.0), min(delay_range[1], 300.0))
+
+    if count_range is not None:
+        # Picked once, here: every iteration of this run shares one budget.
+        iterations = random.randint(*count_range)
+        result["count_chosen"] = iterations
+        sc.var_ctx.set("__LOOP_COUNT__", iterations)
+        use_while = False
+    elif count is not None:
         # count is explicit — do not cap with max_iterations (that field is while-only).
         try:
             iterations = int(count)
@@ -385,6 +439,18 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
         if sc.ctx.pop("_break", False):
             log.info(f"[{sc.serial}] loop: break at iteration {i}")
             break
+        # Re-picked every iteration on purpose: one value reused for the whole
+        # loop is just a fixed delay with extra fields.
+        if delay_range is not None and i < iterations - 1:
+            delay_s = random.uniform(*delay_range)
+            result["last_delay_seconds"] = round(delay_s, 3)
+            if sc.cancel_event is not None:
+                sc.cancel_event.wait(delay_s)
+                if _cancelled(sc):
+                    _mark_cancelled(result, "loop: cancelled by user")
+                    break
+            else:
+                time.sleep(delay_s)
 
     sc.ctx.pop("_loop_iter", None)
     _finish_sub_results(sub_results, sub_result_state)

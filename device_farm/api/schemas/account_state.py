@@ -6,6 +6,10 @@ from typing import Optional
 from pydantic import BaseModel, Field, field_validator
 
 from db.models.enums import AccountState
+from services.account_verification_hold import (
+    AccountVerificationHoldBody,
+    AccountVerificationHoldOut,
+)
 
 
 class AccountStateTransitionBody(BaseModel):
@@ -14,6 +18,13 @@ class AccountStateTransitionBody(BaseModel):
     expected_state_changed_at: Optional[datetime] = Field(
         None,
         description="Optimistic lock: must match current state_changed_at",
+    )
+    verification_hold: Optional[AccountVerificationHoldBody] = Field(
+        default=None,
+        description=(
+            "Optional reminder window when moving an account into suspended/"
+            "verification-required state."
+        ),
     )
 
     @field_validator("to")
@@ -34,3 +45,4 @@ class AccountStateTransitionOut(BaseModel):
     state_reason: Optional[str]
     state_changed_at: Optional[datetime]
     cooldown_until: Optional[datetime]
+    verification_hold: Optional[AccountVerificationHoldOut] = None

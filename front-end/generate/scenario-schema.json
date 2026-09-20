@@ -644,7 +644,7 @@
       "type": "extract"
     },
     {
-      "description": "Lặp lại steps theo count hoặc while-condition. count: số lần lặp cố định (chạy đúng N lần, không bị max_iterations cắt). duration_seconds: nếu > 0, dừng loop khi hết thời lượng kể cả chưa hết count. while: condition dict (element_exists | variable_equals) — lặp khi condition đúng. max_iterations: giới hạn an toàn chỉ khi dùng while (không có count, default 100). loop_var: tên biến runtime nhận index hiện tại để nested loop không ghi đè nhau. stall_after: dừng sau N vòng liên tiếp không thao tác được gì (0 = tắt). idle_delay_seconds: chờ bấy nhiêu giây sau một vòng không thao tác (0–300). ⚠ Vòng lặp dài có thể dừng sớm với reason_code=loop_history_limit khi run hết ngân sách event history — các vòng đã xong vẫn được giữ. Khác 'repeat': 'loop' kiểm tra ctx['_break'] sau mỗi vòng — cho phép step 'extract' với stop_if_no_new=True dừng sớm, hoặc step 'break_if' dừng khi đủ điều kiện. ${__LOOP_INDEX__} = chỉ số vòng lặp hiện tại (0-based).",
+      "description": "Lặp lại steps theo count hoặc while-condition. count: số lần lặp cố định (chạy đúng N lần, không bị max_iterations cắt). count_min + count_max: số vòng ngẫu nhiên trong khoảng, bốc 1 lần mỗi lần vào loop — ĐÈ LÊN count (phải khai cả hai, nếu chỉ khai 1 thì step lỗi config). delay_between_min + delay_between_max: nghỉ ngẫu nhiên bấy nhiêu giây sau mỗi vòng (0–300, bốc lại mỗi vòng, không nghỉ sau vòng cuối). duration_seconds: nếu > 0, dừng loop khi hết thời lượng kể cả chưa hết count. while: condition dict (element_exists | variable_equals) — lặp khi condition đúng. max_iterations: giới hạn an toàn chỉ khi dùng while (không có count, default 100). loop_var: tên biến runtime nhận index hiện tại để nested loop không ghi đè nhau. stall_after: dừng sau N vòng liên tiếp không thao tác được gì (0 = tắt). idle_delay_seconds: chờ bấy nhiêu giây sau một vòng không thao tác (0–300). ⚠ Vòng lặp dài có thể dừng sớm với reason_code=loop_history_limit khi run hết ngân sách event history — các vòng đã xong vẫn được giữ. Khác 'repeat': 'loop' kiểm tra ctx['_break'] sau mỗi vòng — cho phép step 'extract' với stop_if_no_new=True dừng sớm, hoặc step 'break_if' dừng khi đủ điều kiện. ${__LOOP_INDEX__} = chỉ số vòng lặp hiện tại (0-based).",
       "group": "control",
       "inspector_hints": [],
       "recorder_evidence": [],
@@ -2420,9 +2420,51 @@
           "idle_delay_seconds": 0,
           "stall_after": 0
         },
-        "description": "Lặp lại steps theo count hoặc while-condition. count: số lần lặp cố định (chạy đúng N lần, không bị max_iterations cắt). duration_seconds: nếu > 0, dừng loop khi hết thời lượng kể cả chưa hết count. while: condition dict (element_exists | variable_equals) — lặp khi condition đúng. max_iterations: giới hạn an toàn chỉ khi dùng while (không có count, default 100). loop_var: tên biến runtime nhận index hiện tại để nested loop không ghi đè nhau. stall_after: dừng sau N vòng liên tiếp không thao tác được gì (0 = tắt). idle_delay_seconds: chờ bấy nhiêu giây sau một vòng không thao tác (0–300). ⚠ Vòng lặp dài có thể dừng sớm với reason_code=loop_history_limit khi run hết ngân sách event history — các vòng đã xong vẫn được giữ. Khác 'repeat': 'loop' kiểm tra ctx['_break'] sau mỗi vòng — cho phép step 'extract' với stop_if_no_new=True dừng sớm, hoặc step 'break_if' dừng khi đủ điều kiện. ${__LOOP_INDEX__} = chỉ số vòng lặp hiện tại (0-based).",
+        "description": "Lặp lại steps theo count hoặc while-condition. count: số lần lặp cố định (chạy đúng N lần, không bị max_iterations cắt). count_min + count_max: số vòng ngẫu nhiên trong khoảng, bốc 1 lần mỗi lần vào loop — ĐÈ LÊN count (phải khai cả hai, nếu chỉ khai 1 thì step lỗi config). delay_between_min + delay_between_max: nghỉ ngẫu nhiên bấy nhiêu giây sau mỗi vòng (0–300, bốc lại mỗi vòng, không nghỉ sau vòng cuối). duration_seconds: nếu > 0, dừng loop khi hết thời lượng kể cả chưa hết count. while: condition dict (element_exists | variable_equals) — lặp khi condition đúng. max_iterations: giới hạn an toàn chỉ khi dùng while (không có count, default 100). loop_var: tên biến runtime nhận index hiện tại để nested loop không ghi đè nhau. stall_after: dừng sau N vòng liên tiếp không thao tác được gì (0 = tắt). idle_delay_seconds: chờ bấy nhiêu giây sau một vòng không thao tác (0–300). ⚠ Vòng lặp dài có thể dừng sớm với reason_code=loop_history_limit khi run hết ngân sách event history — các vòng đã xong vẫn được giữ. Khác 'repeat': 'loop' kiểm tra ctx['_break'] sau mỗi vòng — cho phép step 'extract' với stop_if_no_new=True dừng sớm, hoặc step 'break_if' dừng khi đủ điều kiện. ${__LOOP_INDEX__} = chỉ số vòng lặp hiện tại (0-based).",
         "display_name": "Loop",
         "fields": [
+          {
+            "advanced": false,
+            "group": "options",
+            "label": "Count Min",
+            "label_key": "controlFlow.loopCountMinLabel",
+            "min": 0,
+            "name": "count_min",
+            "required": false,
+            "type": "number"
+          },
+          {
+            "advanced": false,
+            "group": "options",
+            "label": "Count Max",
+            "label_key": "controlFlow.loopCountMaxLabel",
+            "min": 0,
+            "name": "count_max",
+            "required": false,
+            "type": "number"
+          },
+          {
+            "advanced": false,
+            "group": "options",
+            "label": "Delay Between Min",
+            "label_key": "controlFlow.loopDelayMinLabel",
+            "max": 300,
+            "min": 0,
+            "name": "delay_between_min",
+            "required": false,
+            "type": "number"
+          },
+          {
+            "advanced": false,
+            "group": "options",
+            "label": "Delay Between Max",
+            "label_key": "controlFlow.loopDelayMaxLabel",
+            "max": 300,
+            "min": 0,
+            "name": "delay_between_max",
+            "required": false,
+            "type": "number"
+          },
           {
             "advanced": false,
             "group": "options",
@@ -2470,6 +2512,10 @@
         "node_type": "loop",
         "optional": [
           "count",
+          "count_min",
+          "count_max",
+          "delay_between_min",
+          "delay_between_max",
           "while",
           "max_iterations",
           "loop_var",
@@ -3501,8 +3547,30 @@
       ]
     },
     "loop": {
-      "description": "Lặp lại steps theo count hoặc while-condition. count: số lần lặp cố định (chạy đúng N lần, không bị max_iterations cắt). duration_seconds: nếu > 0, dừng loop khi hết thời lượng kể cả chưa hết count. while: condition dict (element_exists | variable_equals) — lặp khi condition đúng. max_iterations: giới hạn an toàn chỉ khi dùng while (không có count, default 100). loop_var: tên biến runtime nhận index hiện tại để nested loop không ghi đè nhau. stall_after: dừng sau N vòng liên tiếp không thao tác được gì (0 = tắt). idle_delay_seconds: chờ bấy nhiêu giây sau một vòng không thao tác (0–300). ⚠ Vòng lặp dài có thể dừng sớm với reason_code=loop_history_limit khi run hết ngân sách event history — các vòng đã xong vẫn được giữ. Khác 'repeat': 'loop' kiểm tra ctx['_break'] sau mỗi vòng — cho phép step 'extract' với stop_if_no_new=True dừng sớm, hoặc step 'break_if' dừng khi đủ điều kiện. ${__LOOP_INDEX__} = chỉ số vòng lặp hiện tại (0-based).",
+      "description": "Lặp lại steps theo count hoặc while-condition. count: số lần lặp cố định (chạy đúng N lần, không bị max_iterations cắt). count_min + count_max: số vòng ngẫu nhiên trong khoảng, bốc 1 lần mỗi lần vào loop — ĐÈ LÊN count (phải khai cả hai, nếu chỉ khai 1 thì step lỗi config). delay_between_min + delay_between_max: nghỉ ngẫu nhiên bấy nhiêu giây sau mỗi vòng (0–300, bốc lại mỗi vòng, không nghỉ sau vòng cuối). duration_seconds: nếu > 0, dừng loop khi hết thời lượng kể cả chưa hết count. while: condition dict (element_exists | variable_equals) — lặp khi condition đúng. max_iterations: giới hạn an toàn chỉ khi dùng while (không có count, default 100). loop_var: tên biến runtime nhận index hiện tại để nested loop không ghi đè nhau. stall_after: dừng sau N vòng liên tiếp không thao tác được gì (0 = tắt). idle_delay_seconds: chờ bấy nhiêu giây sau một vòng không thao tác (0–300). ⚠ Vòng lặp dài có thể dừng sớm với reason_code=loop_history_limit khi run hết ngân sách event history — các vòng đã xong vẫn được giữ. Khác 'repeat': 'loop' kiểm tra ctx['_break'] sau mỗi vòng — cho phép step 'extract' với stop_if_no_new=True dừng sớm, hoặc step 'break_if' dừng khi đủ điều kiện. ${__LOOP_INDEX__} = chỉ số vòng lặp hiện tại (0-based).",
       "fields": {
+        "count_max": {
+          "label_key": "controlFlow.loopCountMaxLabel",
+          "min": 0,
+          "type": "number"
+        },
+        "count_min": {
+          "label_key": "controlFlow.loopCountMinLabel",
+          "min": 0,
+          "type": "number"
+        },
+        "delay_between_max": {
+          "label_key": "controlFlow.loopDelayMaxLabel",
+          "max": 300,
+          "min": 0,
+          "type": "number"
+        },
+        "delay_between_min": {
+          "label_key": "controlFlow.loopDelayMinLabel",
+          "max": 300,
+          "min": 0,
+          "type": "number"
+        },
         "duration_seconds": {
           "label_key": "controlFlow.loopDurationSecondsLabel",
           "min": 0,
@@ -3530,6 +3598,10 @@
       },
       "optional": [
         "count",
+        "count_min",
+        "count_max",
+        "delay_between_min",
+        "delay_between_max",
         "while",
         "max_iterations",
         "loop_var",

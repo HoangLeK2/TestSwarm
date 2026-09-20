@@ -748,3 +748,75 @@ def test_a_lost_run_still_stops_within_the_configured_window():
     assert result["outcome"] == "stalled"
     assert run_nested.call_count == 40
     assert sum(slept) == 1200, "~20 minutes, not 8 hours and not 2 minutes"
+
+
+def test_loop_random_count_range_overrides_fixed_count():
+    """The editor always writes a `count`, so the range has to win.
+
+    If `count` won, a scenario configured with a range would silently run the
+    editor's default 10 iterations and nothing would report a problem.
+    """
+    from tasks.scenario.steps.control_flow import handle_loop
+
+    sc = _make_sc()
+    step = {
+        "type": "loop", "count": 1, "count_min": 3, "count_max": 5,
+        "steps": [{"type": "wait"}],
+    }
+    result = {"index": 0, "type": "loop", "ok": True}
+
+    with patch(
+        "tasks.scenario.steps.control_flow._run_nested",
+        return_value={"success": True},
+    ) as run_nested:
+        handle_loop(sc, step, 0, result)
+
+    assert result["ok"] is True
+    assert 3 <= result["iterations"] <= 5
+    assert result["count_chosen"] == result["iterations"] == run_nested.call_count
+
+
+def test_loop_half_configured_random_range_fails_as_config_error():
+    """Only one bound is a typo. Guessing the other one runs the wrong scenario."""
+    from tasks.scenario.steps.control_flow import handle_loop
+
+    sc = _make_sc()
+    step = {"type": "loop", "count": 2, "count_max": 50, "steps": [{"type": "wait"}]}
+    result = {"index": 0, "type": "loop", "ok": True}
+
+    with patch(
+        "tasks.scenario.steps.control_flow._run_nested",
+        return_value={"success": True},
+    ) as run_nested:
+        handle_loop(sc, step, 0, result)
+
+    assert result["ok"] is False
+    assert result["stopped_by"] == "config"
+    assert "min and max" in result["message"]
+    assert run_nested.call_count == 0
+
+
+def test_loop_random_delay_is_repicked_per_iteration_and_skips_the_last():
+    """One value reused for every iteration is a fixed delay, not a random one."""
+    from tasks.scenario.steps.control_flow import handle_loop
+
+    sc = _make_sc()
+    slept: list[float] = []
+    step = {
+        "type": "loop", "count": 4,
+        "delay_between_min": 2, "delay_between_max": 9,
+        "steps": [{"type": "wait"}],
+    }
+    result = {"index": 0, "type": "loop", "ok": True}
+
+    with patch(
+        "tasks.scenario.steps.control_flow._run_nested",
+        return_value={"success": True},
+    ), patch(
+        "tasks.scenario.steps.control_flow.time.sleep", side_effect=slept.append
+    ):
+        handle_loop(sc, step, 0, result)
+
+    assert len(slept) == 3, "no pause after the last iteration"
+    assert all(2 <= value <= 9 for value in slept)
+    assert len(set(slept)) > 1, "re-picked per iteration, not once"

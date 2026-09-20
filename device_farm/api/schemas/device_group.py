@@ -57,5 +57,12 @@ class DeviceGroupDetailOut(DeviceGroupOut):
     devices: list[DeviceOut] = []
 
 
+class DeviceGroupAvailableDevicesOut(BaseModel):
+    items: list[DeviceOut]
+    total: int
+    offset: int
+    limit: int
+
+
 class UpdateTagsBody(BaseModel):
     tags: str  # comma-separated e.g. "fast,wifi,samsung"

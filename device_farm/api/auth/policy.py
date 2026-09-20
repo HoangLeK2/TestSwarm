@@ -11,10 +11,11 @@ from typing import Optional
 from fastapi import HTTPException, status
 
 from api.auth.context import AuthContext
-from api.org_scope import resource_visible_to_user
+from api.org_scope import device_visible_to_user, resource_visible_to_user
 from db import crud as repo
 from db.database import AsyncSessionLocal
 from tenancy.background import lookup_device_by_serial
+from tenancy.resolve import get_user_default_org_id
 
 
 async def assert_org_resource(
@@ -61,16 +62,12 @@ async def assert_owns_device(ctx: AuthContext, serial: str) -> None:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to control this device",
             )
-        org_id = getattr(user, "org_id", None)
+        org_id = ctx.org_id or get_user_default_org_id(user)
+        user.org_id = org_id  # type: ignore[attr-defined]
         user.org_role = await repo.get_organization_role_for_user(  # type: ignore[attr-defined]
             db, user.id, org_id
         )
-        visible = await resource_visible_to_user(
-            db,
-            user,
-            owner_user_id=ref.user_id,
-            org_id=ref.org_id,
-        )
+        visible = await device_visible_to_user(db, user, ref)
     if not visible:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

@@ -35,6 +35,12 @@ const KEYS = {
   list: ACCOUNTS_LIST_KEY,
   detail: (id: string) => ['accounts', id] as const,
   devices: (id: string) => ['accounts', id, 'devices'] as const,
+  availableDevices: (
+    id: string,
+    params: { q?: string; limit?: number; offset?: number }
+  ) => ['accounts', id, 'available-devices', params] as const,
+  availableDevicesBase: (id: string) =>
+    ['accounts', id, 'available-devices'] as const,
   deviceAccounts: (id: string) => ['devices', id, 'accounts'] as const,
   facebookSession: (id: string) =>
     ['devices', id, 'platform-sessions', 'facebook'] as const,
@@ -294,6 +300,19 @@ export function useAccountDevices(accountId: string) {
   });
 }
 
+export function useAvailableAccountDevices(
+  accountId: string,
+  params: { q?: string; limit?: number; offset?: number },
+  opts?: { enabled?: boolean }
+) {
+  return useQuery({
+    queryKey: KEYS.availableDevices(accountId, params),
+    queryFn: () => accountsApi.listAvailableDevices(accountId, params),
+    enabled: !!accountId && (opts?.enabled ?? true),
+    placeholderData: (previous) => previous
+  });
+}
+
 export function useAssignDeviceToAccount() {
   const qc = useQueryClient();
   return useMutation({
@@ -308,6 +327,7 @@ export function useAssignDeviceToAccount() {
     }) => accountsApi.assignDevice(accountId, deviceId, isPrimary),
     onSuccess: (_, { accountId, deviceId }) => {
       qc.invalidateQueries({ queryKey: KEYS.devices(accountId) });
+      qc.invalidateQueries({ queryKey: KEYS.availableDevicesBase(accountId) });
       qc.invalidateQueries({ queryKey: KEYS.facebookSession(deviceId) });
       qc.invalidateQueries({ queryKey: KEYS.list });
     }
@@ -326,6 +346,7 @@ export function useUnassignDeviceFromAccount() {
     }) => accountsApi.unassignDevice(accountId, deviceId),
     onSuccess: (_, { accountId, deviceId }) => {
       qc.invalidateQueries({ queryKey: KEYS.devices(accountId) });
+      qc.invalidateQueries({ queryKey: KEYS.availableDevicesBase(accountId) });
       qc.invalidateQueries({ queryKey: KEYS.deviceAccounts(deviceId) });
       qc.invalidateQueries({ queryKey: KEYS.facebookSession(deviceId) });
       qc.invalidateQueries({ queryKey: KEYS.list });

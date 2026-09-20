@@ -4,6 +4,16 @@ import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -12,6 +22,7 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
   Select,
@@ -52,8 +63,18 @@ function dateLabel(value?: string | null) {
   return value ? new Date(value).toLocaleString() : '-';
 }
 
+function normalizeWorkspaceSearch(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .toLowerCase();
+}
+
 export function AdminDevicesPage() {
   const t = useTranslations('adminConsole.devices');
+  const tCommon = useTranslations('adminConsole.devices.common');
   const qc = useQueryClient();
   const scope = useAdminWorkspaceScope();
   const [search, setSearch] = useState('');
@@ -63,6 +84,7 @@ export function AdminDevicesPage() {
   const [transferDevice, setTransferDevice] = useState<AdminDeviceOut | null>(
     null
   );
+  const [deleteTarget, setDeleteTarget] = useState<AdminDeviceOut | null>(null);
 
   const workspaceParams = { offset: 0, limit: 100 };
   const workspaces = useQuery({
@@ -101,6 +123,17 @@ export function AdminDevicesPage() {
     onSuccess: () => {
       setTransferDevice(null);
       toast.success(t('toast.assignmentUpdated'));
+      void qc.invalidateQueries({ queryKey: ['admin-devices'] });
+      void qc.invalidateQueries({ queryKey: ['admin-summary'] });
+    },
+    onError: (error) => toast.error(formatAdminApiError(error))
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (deviceId: string) => adminApi.deleteDevice(deviceId),
+    onSuccess: () => {
+      setDeleteTarget(null);
+      toast.success(t('toast.deleted'));
       void qc.invalidateQueries({ queryKey: ['admin-devices'] });
       void qc.invalidateQueries({ queryKey: ['admin-summary'] });
     },
@@ -229,20 +262,39 @@ export function AdminDevicesPage() {
                       {dateLabel(device.last_seen)}
                     </TableCell>
                     <TableCell className='text-right'>
-                      <Button
-                        type='button'
-                        size='sm'
-                        variant='outline'
-                        disabled={!device.transferable}
-                        title={
-                          device.transferable
-                            ? t('actions.transfer')
-                            : t('actions.notTransferable')
-                        }
-                        onClick={() => setTransferDevice(device)}
-                      >
-                        {t('actions.transfer')}
-                      </Button>
+                      <div className='flex justify-end gap-2'>
+                        <Button
+                          type='button'
+                          size='sm'
+                          variant='outline'
+                          disabled={!device.transferable}
+                          title={
+                            device.transferable
+                              ? t('actions.transfer')
+                              : t('actions.notTransferable')
+                          }
+                          onClick={() => setTransferDevice(device)}
+                        >
+                          {t('actions.transfer')}
+                        </Button>
+                        <Button
+                          type='button'
+                          size='sm'
+                          variant='outline'
+                          className='text-destructive hover:text-destructive'
+                          disabled={!device.transferable || !device.pooled}
+                          title={
+                            !device.transferable
+                              ? t('actions.notTransferable')
+                              : device.pooled
+                                ? t('actions.delete')
+                                : t('actions.notDeletableAssigned')
+                          }
+                          onClick={() => setDeleteTarget(device)}
+                        >
+                          {t('actions.delete')}
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -276,6 +328,36 @@ export function AdminDevicesPage() {
           transferMutation.mutate({ deviceId, workspaceId: targetWorkspaceId })
         }
       />
+      <AlertDialog
+        open={!!deleteTarget}
+        onOpenChange={(next) => !next && setDeleteTarget(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('deleteDialog.title')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('deleteDialog.description', {
+                serial: deleteTarget?.serial ?? ''
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>
+              {tCommon('cancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleteMutation.isPending}
+              onClick={(event) => {
+                event.preventDefault();
+                if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
+              }}
+            >
+              {deleteMutation.isPending ? <SubmitSpinner /> : null}
+              {t('actions.delete')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -296,50 +378,111 @@ function DeviceTransferDialog({
   const t = useTranslations('adminConsole.devices.transferDialog');
   const tCommon = useTranslations('adminConsole.devices.common');
   const [workspaceId, setWorkspaceId] = useState('');
+  const [workspaceSearch, setWorkspaceSearch] = useState('');
   useEffect(() => {
     setWorkspaceId('');
+    setWorkspaceSearch('');
   }, [device?.id]);
-  const target = workspaceId || device?.workspaceId || '';
+  const currentWorkspaceName = device
+    ? device.workspaceName || device.workspaceId
+    : '';
+  const destinationWorkspaces = useMemo(
+    () =>
+      workspaces.filter((workspace) => workspace.id !== device?.workspaceId),
+    [device?.workspaceId, workspaces]
+  );
+  const visibleWorkspaces = useMemo(() => {
+    const query = normalizeWorkspaceSearch(workspaceSearch.trim());
+    if (!query) return destinationWorkspaces;
+    return destinationWorkspaces.filter((workspace) =>
+      normalizeWorkspaceSearch(workspace.businessName).includes(query)
+    );
+  }, [destinationWorkspaces, workspaceSearch]);
+  const selectedWorkspace = destinationWorkspaces.find(
+    (workspace) => workspace.id === workspaceId
+  );
+  const targetChanged = Boolean(device && selectedWorkspace);
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (device && target) onSubmit(device.id, target);
+    if (device && targetChanged) onSubmit(device.id, workspaceId);
   };
   return (
     <Dialog open={!!device} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent>
+      <DialogContent className='sm:max-w-lg'>
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
+          <p className='text-sm text-muted-foreground'>{t('subtitle')}</p>
         </DialogHeader>
         {device ? (
           <form className='space-y-4' onSubmit={submit}>
             <div className='rounded-md border bg-muted/30 p-3 text-sm'>
               <p className='font-medium'>{device.name || device.serial}</p>
               <p className='text-xs text-muted-foreground'>
-                {device.workspaceName || device.workspaceId}
+                {t('currentWorkspace', { workspace: currentWorkspaceName })}
               </p>
             </div>
-            <div>
-              <Label className='mb-2 block'>{t('destinationWorkspace')}</Label>
-              <Select value={target} onValueChange={setWorkspaceId}>
-                <SelectTrigger className='w-full'>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {workspaces.map((workspace) => (
-                    <SelectItem key={workspace.id} value={workspace.id}>
-                      {workspace.businessName}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+
+            <div className='space-y-2'>
+              <Label className='block'>{t('destinationWorkspace')}</Label>
+              <Input
+                value={workspaceSearch}
+                onChange={(event) => setWorkspaceSearch(event.target.value)}
+                placeholder={t('searchPlaceholder')}
+              />
+              <div className='max-h-56 overflow-y-auto rounded-md border'>
+                {visibleWorkspaces.length > 0 ? (
+                  visibleWorkspaces.map((workspace) => {
+                    const selected = workspace.id === workspaceId;
+                    return (
+                      <button
+                        key={workspace.id}
+                        type='button'
+                        className={`flex w-full items-center justify-between gap-3 border-b p-3 text-left text-sm last:border-b-0 hover:bg-muted/50 ${
+                          selected ? 'bg-primary/5 text-primary' : 'bg-background'
+                        }`}
+                        aria-pressed={selected}
+                        onClick={() => setWorkspaceId(workspace.id)}
+                      >
+                        <span className='font-medium'>
+                          {workspace.businessName}
+                        </span>
+                        {selected ? (
+                          <span className='rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary'>
+                            {t('selectedBadge')}
+                          </span>
+                        ) : null}
+                      </button>
+                    );
+                  })
+                ) : (
+                  <div className='p-4 text-sm text-muted-foreground'>
+                    {t('noResults')}
+                  </div>
+                )}
+              </div>
             </div>
+
+            {selectedWorkspace ? (
+              <div className='rounded-md border border-primary/30 bg-primary/5 p-3 text-sm'>
+                {t('transferSummary', {
+                  device: device.name || device.serial,
+                  from: currentWorkspaceName,
+                  to: selectedWorkspace.businessName
+                })}
+              </div>
+            ) : (
+              <p className='text-sm text-muted-foreground'>{t('noChangeHint')}</p>
+            )}
+
             <DialogFooter>
               <Button type='button' variant='outline' onClick={onClose}>
                 {tCommon('cancel')}
               </Button>
-              <Button type='submit' disabled={pending || !target}>
+              <Button type='submit' disabled={pending || !targetChanged}>
                 {pending ? <SubmitSpinner /> : null}
-                {t('transfer')}
+                {selectedWorkspace
+                  ? t('transferTo', { workspace: selectedWorkspace.businessName })
+                  : t('transfer')}
               </Button>
             </DialogFooter>
           </form>

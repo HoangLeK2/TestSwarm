@@ -169,6 +169,24 @@ def test_campaign_notification_templates_include_operational_payload():
     assert "Device: serial-1" in rendered_warning.body
     assert "Campaign continues" in rendered_warning.body
 
+    verification = parse_domain_event(
+        {
+            "type": "account.verification_required",
+            "org_id": ORG_A,
+            "account_id": "acc-a-1",
+            "resource_name": "fb-user",
+            "summary": "facebook:fb-user is held in verification until 2026-09-27T12:00:00+00:00.",
+            "remind_at": "2026-09-27T12:00:00+00:00",
+        }
+    )
+    rendered_verification = render_notification(
+        verification,
+        locale="vi",
+        app_base_url="https://farm.example",
+    )
+    assert rendered_verification.title == "Tai khoan fb-user can xac thuc"
+    assert "Nhac lai: 2026-09-27T12:00:00+00:00" in rendered_verification.body
+
     assert lint_templates() == []
 
 

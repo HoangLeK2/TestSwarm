@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
+import { Z_CAMPAIGN_MONITOR } from '@/lib/z-index';
 
 import { useAccountRunTaskLog, useAccountRuns } from '../hooks/use-accounts';
 import {
@@ -263,7 +264,7 @@ export function AccountStepTraceDialog({
           non-responsive class loses to it at every width that matters. Without
           the prefix the dialog stays 512px and the failure message — the one
           line this view exists to show — is clipped. */}
-      <DialogContent className='sm:max-w-5xl'>
+      <DialogContent className='sm:max-w-5xl' zIndex={Z_CAMPAIGN_MONITOR}>
         <DialogHeader>
           <DialogTitle>
             {t('title', {

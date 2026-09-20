@@ -213,6 +213,7 @@ class SchedulerService:
         inline_steps: Optional[list] = None,
         inline_variables: Optional[dict] = None,
         device_group_id: Optional[str] = None,
+        device_serials: Optional[list] = None,
         filter_state: str = "READY",
         filter_model: Optional[str] = None,
         max_devices: Optional[int] = None,
@@ -265,6 +266,7 @@ class SchedulerService:
             inline_steps=inline_steps,
             inline_variables=inline_variables,
             device_group_id=device_group_id,
+            device_serials=device_serials,
             filter_state=filter_state,
             filter_model=filter_model,
             max_devices=max_devices,
@@ -664,11 +666,13 @@ class SchedulerService:
             "inline_variables": schedule.inline_variables or {},
             "user_id": str(schedule.user_id) if schedule.user_id else None,
             "device_group_id": schedule.device_group_id,
+            "device_serials": schedule.device_serials or [],
             "filter_state": schedule.filter_state,
             "filter_model": schedule.filter_model,
             "max_devices": schedule.max_devices,
             "stagger_devices": schedule.stagger_devices,
             "stagger_interval_seconds": schedule.stagger_interval_seconds,
+            "org_id": schedule.org_id,
         }
 
         try:
@@ -959,11 +963,13 @@ class SchedulerEngine:
             "inline_variables": schedule.inline_variables or {},
             "user_id": str(schedule.user_id) if schedule.user_id else None,
             "device_group_id": schedule.device_group_id,
+            "device_serials": schedule.device_serials or [],
             "filter_state": schedule.filter_state,
             "filter_model": schedule.filter_model,
             "max_devices": schedule.max_devices,
             "stagger_devices": schedule.stagger_devices,
             "stagger_interval_seconds": schedule.stagger_interval_seconds,
+            "org_id": schedule.org_id,
         }
 
         try:
@@ -1030,6 +1036,8 @@ async def _dispatch_schedule_config(
         )
     elif target_type == "template":
         return await _dispatch_template(cfg, queue, manager)
+    elif target_type == "org_scenario":
+        return await _dispatch_org_scenario(cfg, queue, manager)
     elif target_type == "fleet":
         return await _dispatch_fleet(cfg, queue, manager)
     else:
@@ -1165,6 +1173,69 @@ async def _dispatch_template(
     return await _dispatch_fleet(fleet_cfg, queue, manager)
 
 
+async def _resolve_org_scenario_fleet_config(db, cfg: dict) -> dict[str, Any]:
+    """Load an org scenario body and registry so schedules can reuse fleet dispatch."""
+    from db.crud import org_scenario as org_scenario_repo
+    from services.campaign.execution_runtime import build_org_scenario_registry
+
+    target_id = cfg.get("target_id")
+    if not target_id:
+        raise ValueError("org_scenario dispatch requires target_id")
+
+    org_id = str(cfg.get("org_id") or "").strip()
+    if not org_id:
+        org_id = str(await org_scenario_repo.lookup_org_scenario_org_id(db, target_id) or "")
+    if not org_id:
+        raise ValueError(f"OrgScenario {target_id!r} not found")
+
+    registry = await build_org_scenario_registry(
+        db, org_id, [{"scenario_id": str(target_id)}]
+    )
+    entry = (registry.get("by_id") or {}).get(str(target_id))
+    if not entry:
+        raise ValueError(f"OrgScenario {target_id!r} not found")
+    steps = entry.get("steps") or []
+    if not steps:
+        raise ValueError(f"OrgScenario {target_id!r} has no runnable steps")
+
+    return {
+        **cfg,
+        "org_id": org_id,
+        "inline_steps": steps,
+        "inline_variables": {
+            **dict(entry.get("variables") or {}),
+            **dict(cfg.get("inline_variables") or {}),
+        },
+        "_scenario_registry": registry,
+    }
+
+
+async def _dispatch_org_scenario(
+    cfg: dict,
+    queue,
+    manager,
+) -> dict[str, Any]:
+    """Load org scenario steps then dispatch as fleet."""
+    from db.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        fleet_cfg = await _resolve_org_scenario_fleet_config(db, cfg)
+    return await _dispatch_fleet(fleet_cfg, queue, manager)
+
+
+def _merge_scenario_registry(
+    base: dict[str, Any],
+    extra: Any,
+) -> dict[str, Any]:
+    if not isinstance(extra, dict):
+        return base
+    for key in ("by_id", "by_campaign_name", "by_template_name"):
+        values = extra.get(key)
+        if isinstance(values, dict):
+            base.setdefault(key, {}).update(values)
+    return base
+
+
 async def _dispatch_fleet(
     cfg: dict,
     queue,
@@ -1185,15 +1256,19 @@ async def _dispatch_fleet(
 
     variables = cfg.get("inline_variables") or {}
     device_group_id = cfg.get("device_group_id")
+    device_serials = cfg.get("device_serials") or []
     filter_state = cfg.get("filter_state", "READY")
     filter_model = cfg.get("filter_model")
     max_devices = cfg.get("max_devices")
     stagger = cfg.get("stagger_devices", False)
     stagger_interval = int(cfg.get("stagger_interval_seconds", 60))
 
-    # Resolve devices
+    # Resolve devices — explicit serials win over the group when both are set.
     all_devices = list(manager.all_devices()) if manager else []
-    if device_group_id:
+    if device_serials:
+        serials = set(device_serials)
+        devices = [d for d in all_devices if d.serial in serials and d.state == filter_state]
+    elif device_group_id:
         async with AsyncSessionLocal() as db:
             group_devices = await list_group_devices(db, device_group_id)
         serials = {d.serial for d in group_devices}
@@ -1211,7 +1286,10 @@ async def _dispatch_fleet(
 
     async with AsyncSessionLocal() as db:
         templates = await list_templates(db)
-    registry = _build_scenario_registry([], templates)
+    registry = _merge_scenario_registry(
+        _build_scenario_registry([], templates),
+        cfg.get("_scenario_registry"),
+    )
 
     if queue is None:
         raise RuntimeError("No task queue available")

@@ -1,6 +1,6 @@
 import { farmApi } from '@/lib/farm-api';
 import type {
-  AccountOut,
+  AccountOut as GeneratedAccountOut,
   AccountCreate,
   AccountUpdate,
   AccountWithLinksOut,
@@ -8,11 +8,26 @@ import type {
   AccountStateTransitionBody,
   AccountStateTransitionOut,
   AccountVerificationOut,
+  DeviceOut,
   DeviceAccountOut,
   BulkImportBody,
   BulkImportResult,
   RoundRobinBody
 } from '../../device-farm/services/generated/DeviceFarmApi';
+
+export type AccountVerificationHold = {
+  preset: 'one_week' | 'two_weeks' | 'custom';
+  remind_at: string;
+  created_at?: string | null;
+  notify_web: boolean;
+  notify_telegram: boolean;
+  created_by_user_id?: string | null;
+};
+
+export type AccountOut = GeneratedAccountOut & {
+  verification_hold?: AccountVerificationHold | null;
+  verification_hold_until?: string | null;
+};
 
 export type AccountEventOut = {
   id: string;
@@ -82,6 +97,13 @@ export type AccountActionSummaryOut = {
   succeeded: number;
   failed: number;
   current_activity: string | null;
+};
+
+export type AccountAvailableDevicesOut = {
+  items: DeviceOut[];
+  total: number;
+  offset: number;
+  limit: number;
 };
 
 /** One run performed by an account. Subset of ExecutionOut we actually render. */
@@ -201,7 +223,6 @@ export type FacebookCandidateRecomputeOut = {
 };
 
 export type {
-  AccountOut,
   AccountCreate,
   AccountUpdate,
   AccountWithLinksOut,
@@ -210,6 +231,7 @@ export type {
   AccountStateTransitionOut,
   AccountVerificationOut,
   DeviceAccountOut,
+  DeviceOut,
   BulkImportResult
 };
 
@@ -284,6 +306,16 @@ export const accountsApi = {
   listDevices: (accountId: string) =>
     farmApi
       .get<DeviceAccountOut[]>(`/accounts/${accountId}/devices`)
+      .then((r) => r.data),
+  listAvailableDevices: (
+    accountId: string,
+    query?: { q?: string; limit?: number; offset?: number }
+  ) =>
+    farmApi
+      .get<AccountAvailableDevicesOut>(
+        `/accounts/${accountId}/available-devices`,
+        { params: query }
+      )
       .then((r) => r.data),
   assignDevice: (accountId: string, deviceId: string, isPrimary = false) =>
     farmApi

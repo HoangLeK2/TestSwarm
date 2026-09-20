@@ -12,14 +12,22 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # ── Request schemas ───────────────────────────────────────────────────────────
 
 
+def _clean_device_serials(v: Optional[list[str]]) -> Optional[list[str]]:
+    """Strip, drop blanks, de-duplicate — order preserved."""
+    if v is None:
+        return v
+    return list(dict.fromkeys(s.strip() for s in v if s and s.strip()))
+
+
 class ScheduleCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: str = ""
-    target_type: str = Field(..., pattern="^(campaign|template|fleet)$")
+    target_type: str = Field(..., pattern="^(campaign|template|org_scenario|fleet)$")
     target_id: Optional[str] = None
     inline_steps: Optional[list[dict[str, Any]]] = None
     inline_variables: dict[str, Any] = Field(default_factory=dict)
     device_group_id: Optional[str] = None
+    device_serials: list[str] = Field(default_factory=list, max_length=500)
     filter_state: str = "READY"
     filter_model: Optional[str] = None
     max_devices: Optional[int] = Field(default=None, gt=0)
@@ -68,10 +76,15 @@ class ScheduleCreate(BaseModel):
             raise ValueError("random_delay_max must be >= random_delay_min")
         return v
 
+    @field_validator("device_serials")
+    @classmethod
+    def normalize_device_serials(cls, v: list[str]) -> list[str]:
+        return _clean_device_serials(v)
+
     @field_validator("target_type")
     @classmethod
     def validate_target_consistency(cls, v: str, info) -> str:
-        if v in ("campaign", "template") and not info.data.get("target_id"):
+        if v in ("campaign", "template", "org_scenario") and not info.data.get("target_id"):
             # Will be caught in route handler — schema can't access other fields here easily
             pass
         return v
@@ -80,11 +93,12 @@ class ScheduleCreate(BaseModel):
 class SchedulePatch(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     description: Optional[str] = None
-    target_type: Optional[str] = Field(default=None, pattern="^(campaign|template|fleet)$")
+    target_type: Optional[str] = Field(default=None, pattern="^(campaign|template|org_scenario|fleet)$")
     target_id: Optional[str] = None
     inline_steps: Optional[list[dict[str, Any]]] = None
     inline_variables: Optional[dict[str, Any]] = None
     device_group_id: Optional[str] = None
+    device_serials: Optional[list[str]] = Field(default=None, max_length=500)
     filter_state: Optional[str] = None
     filter_model: Optional[str] = None
     max_devices: Optional[int] = Field(default=None, gt=0)
@@ -117,6 +131,11 @@ class SchedulePatch(BaseModel):
             pass
         return v
 
+    @field_validator("device_serials")
+    @classmethod
+    def normalize_device_serials(cls, v: Optional[list[str]]) -> Optional[list[str]]:
+        return _clean_device_serials(v)
+
 
 # ── Response schemas ──────────────────────────────────────────────────────────
 
@@ -130,6 +149,7 @@ class ScheduleOut(BaseModel):
     inline_steps: Optional[list[dict[str, Any]]]
     inline_variables: dict[str, Any]
     device_group_id: Optional[str]
+    device_serials: list[str]
     filter_state: str
     filter_model: Optional[str]
     max_devices: Optional[int]
@@ -216,7 +236,7 @@ class ScheduleConflictOut(BaseModel):
 
 
 class SchedulePreviewIn(BaseModel):
-    target_type: str = Field(..., pattern="^(campaign|template|fleet)$")
+    target_type: str = Field(..., pattern="^(campaign|template|org_scenario|fleet)$")
     target_id: Optional[str] = None
     cron_expression: Optional[str] = Field(default=None, min_length=1, max_length=100)
     timezone: str = "Asia/Ho_Chi_Minh"

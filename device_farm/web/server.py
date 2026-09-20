@@ -849,6 +849,9 @@ def create_app(
                         )
                         from db import crud as _ctrl_repo
                         from db.database import AsyncSessionLocal as _AslCtrl
+                        from services.device_registration import (
+                            claim_relay_reported_serials as _claim_relay_reported_serials,
+                        )
                         from tenancy.context import tenant_context
 
                         def _relay_ownership_required() -> bool:
@@ -930,6 +933,21 @@ def create_app(
                                         await _ctrl_repo.upsert_relay_agent(
                                             _db, org_id=org_id, name=token_name, **payload
                                         )
+                                        if enrollment_token:
+                                            try:
+                                                await _claim_relay_reported_serials(
+                                                    _db,
+                                                    serials=list(payload.get("serials") or []),
+                                                    user_id=str(payload.get("user_id") or ""),
+                                                    org_id=org_id,
+                                                    relay_id=resolved_relay_id,
+                                                )
+                                            except Exception as claim_exc:
+                                                log.warning(
+                                                    "relay register auto-claim failed relay_id=%s: %s",
+                                                    resolved_relay_id,
+                                                    claim_exc,
+                                                )
                                         await _db.commit()
                                     return str(payload.get("relay_id", ""))
                                 except Exception as _exc:

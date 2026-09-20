@@ -876,6 +876,9 @@
       "title": "Thêm thiết bị vào nhóm",
       "loading": "Đang tải...",
       "loadError": "Không thể tải phân công. Hãy thử lại trước khi thay đổi.",
+      "searchPlaceholder": "Tìm thiết bị...",
+      "searchLabel": "Tìm thiết bị",
+      "searchClear": "Xóa tìm kiếm",
       "noDevices": "Không có thiết bị khả dụng",
       "adding": "Đang thêm...",
       "submit": "Thêm {count} thiết bị"
@@ -935,7 +938,10 @@
       "statusBanned": "Đã cấm",
       "statusRetired": "Ngưng dùng",
       "restingUntil": "Tạm nghỉ đến {time}",
-      "stepTrace": "Dấu vết step"
+      "verificationHoldUntil": "Chờ setup xác thực đến {time}",
+      "stepTrace": "Dấu vết step",
+      "setupVerification": "Setup xác thực",
+      "viewVerificationSetup": "Xem lịch setup xác thực"
     },
     "stateDialog": {
       "trigger": "Đổi trạng thái",
@@ -944,10 +950,23 @@
       "currentState": "Hiện tại: {status}",
       "targetState": "Trạng thái mới",
       "reason": "Lý do",
+      "verificationHold": "Nhắc user setup xác thực",
+      "verificationHoldHint": "Account sẽ tạm dừng chạy chiến dịch. Chọn khi nào hệ thống nhắc lại và nơi gửi thông báo để user quay lại setup.",
+      "holdPreset": {
+        "one_week": "Setup sau 1 tuần",
+        "two_weeks": "Setup sau 2 tuần",
+        "custom": "Tùy chọn ngày giờ"
+      },
+      "customRemindAt": "Ngày giờ nhắc setup",
+      "customDateRequired": "Chọn ngày nhắc.",
+      "customDateFuture": "Chọn một ngày trong tương lai.",
+      "notifyWeb": "Báo trong web",
+      "notifyTelegram": "Báo qua Telegram",
       "lastReason": "Ghi chú gần nhất: {reason}",
       "submit": "Áp dụng",
       "submitting": "Đang áp dụng...",
-      "submitFailed": "Không thể đổi trạng thái"
+      "submitFailed": "Không thể đổi trạng thái",
+      "verificationHoldOutcome": "Sau khi áp dụng: account ngừng chạy, hệ thống nhắc user quay lại setup theo thời gian bạn chọn."
     },
     "createDialog": {
       "trigger": "Tạo tài khoản",
@@ -1238,6 +1257,23 @@
         "topLevelOnly": "chỉ còn step cấp cao (event đã hết hạn lưu)",
         "truncated": "đang hiện các event gần nhất"
       }
+    },
+    "verificationSetup": {
+      "trigger": "Xem lịch setup xác thực",
+      "title": "Lịch setup xác thực",
+      "description": "Account {username} đang chờ user quay lại setup xác thực.",
+      "reminderTime": "Thời gian nhắc setup",
+      "preset": "Cách nhắc",
+      "presetValues": {
+        "one_week": "Setup sau 1 tuần",
+        "two_weeks": "Setup sau 2 tuần",
+        "custom": "Tùy chọn ngày giờ"
+      },
+      "channels": "Kênh thông báo",
+      "channelWeb": "Web",
+      "channelTelegram": "Telegram",
+      "noChannels": "Chưa chọn kênh thông báo",
+      "notSet": "Chưa có lịch setup"
     }
   },
   "accountGroupsFeature": {
@@ -3009,6 +3045,10 @@
       "advancedFieldsTitle": "Cài đặt nâng cao",
       "advancedDefaultOk": "Mặc định đủ dùng",
       "controlFlow": {
+        "loopCountMinLabel": "Số vòng ngẫu nhiên — tối thiểu (đè lên count)",
+        "loopCountMaxLabel": "Số vòng ngẫu nhiên — tối đa",
+        "loopDelayMinLabel": "Nghỉ ngẫu nhiên giữa các vòng — tối thiểu (giây)",
+        "loopDelayMaxLabel": "Nghỉ ngẫu nhiên giữa các vòng — tối đa (giây)",
         "loopDurationSecondsLabel": "Ngân sách thời gian (giây)",
         "loopStallAfterLabel": "Dừng sau N vòng không thao tác",
         "loopIdleDelayLabel": "Chờ sau một vòng không thao tác (giây)",
@@ -5428,15 +5468,31 @@
       "targetTypeLabel": "Loại mục tiêu",
       "targetCampaign": "Chiến dịch",
       "targetTemplate": "Mẫu kịch bản",
+      "targetOrgScenario": "Kịch bản tổ chức",
       "targetFleet": "Kịch bản tùy chỉnh",
       "targetLabel": "Mục tiêu",
       "pickCampaign": "Chọn chiến dịch",
       "selectCampaign": "Chọn chiến dịch",
       "pickTemplate": "Chọn mẫu kịch bản",
       "selectTemplate": "Chọn mẫu kịch bản",
+      "pickOrgScenario": "Chọn kịch bản tổ chức",
+      "targetSearchPlaceholder": "Tìm theo tên hoặc ID",
+      "targetNoResults": "Không tìm thấy mục tiêu phù hợp",
+      "targetPageStatus": "Trang {page}/{total}",
+      "targetPreviousPage": "Trang trước",
+      "targetNextPage": "Trang sau",
       "inlineStepsLabel": "Các bước thực thi ({count} bước)",
       "timezoneLabel": "Múi giờ",
       "timezonePlaceholder": "Asia/Ho_Chi_Minh",
+      "deviceModeLabel": "Thiết bị chạy",
+      "deviceModeAll": "Tất cả thiết bị sẵn sàng",
+      "deviceModeGroup": "Theo nhóm",
+      "deviceModeDevices": "Chọn thiết bị cụ thể",
+      "devicePickerPlaceholder": "Chọn thiết bị để chạy",
+      "devicePickerSearch": "Tìm theo serial, tên hoặc model…",
+      "devicePickerEmpty": "Không có thiết bị phù hợp",
+      "devicePickerSelected": "Đã chọn {count} thiết bị",
+      "devicePickerClear": "Bỏ chọn tất cả",
       "deviceGroupLabel": "Nhóm thiết bị (không bắt buộc)",
       "allReadyDevices": "Tất cả thiết bị sẵn sàng",
       "filterStateLabel": "Trạng thái thiết bị",
@@ -5460,6 +5516,7 @@
       "errorCronRequired": "Lịch cron là bắt buộc",
       "errorTargetIdRequired": "Vui lòng chọn mục tiêu chạy",
       "errorInlineStepsRequired": "Vui lòng thêm ít nhất một bước thực thi",
+      "errorDevicesRequired": "Vui lòng chọn ít nhất một thiết bị",
       "errorRandomDelay": "Độ trễ tối đa phải lớn hơn hoặc bằng tối thiểu",
       "createSuccess": "Đã tạo lịch chạy",
       "createFailed": "Tạo lịch chạy thất bại",
@@ -6175,6 +6232,7 @@
       "toast": {
         "created": "Đã tạo workspace",
         "updated": "Đã cập nhật workspace",
+        "deleted": "Đã xoá workspace",
         "ownerPasswordReset": "Đã cấp lại mật khẩu owner",
         "lifecycleUpdated": "Đã cập nhật vòng đời workspace"
       },
@@ -6220,6 +6278,7 @@
         "edit": "Sửa workspace",
         "resetOwnerPassword": "Cấp lại mật khẩu owner",
         "archive": "Lưu trữ workspace",
+        "delete": "Xoá workspace",
         "markPool": "Đánh dấu là workspace pool",
         "unmarkPool": "Bỏ đánh dấu pool"
       },
@@ -6227,6 +6286,11 @@
         "title": "Lưu trữ workspace?",
         "description": "Thao tác này đổi trạng thái workspace sang đã lưu trữ. Agent, thiết bị và thành viên liên quan sẽ không bị xóa ngầm.",
         "confirm": "Lưu trữ"
+      },
+      "delete": {
+        "title": "Xoá workspace?",
+        "description": "Thao tác này xoá vĩnh viễn \"{name}\". Chỉ xoá được sau khi phone, agent, campaign, account và dữ liệu workspace liên quan đã được chuyển hoặc xoá. User không bị xoá.",
+        "confirm": "Xoá"
       },
       "secret": {
         "title": "Mật khẩu tạm thời",
@@ -6570,6 +6634,7 @@
       "table": {
         "agent": "Agent",
         "workspace": "Workspace",
+        "kind": "Loại",
         "health": "Sức khỏe",
         "lastSeen": "Lần thấy cuối",
         "version": "Phiên bản",
@@ -6588,6 +6653,10 @@
         "delete": "Xóa",
         "enableWaiting": "Đang chờ agent…",
         "disableWaiting": "Đang ngắt…"
+      },
+      "workspaceKinds": {
+        "pool": "Pool",
+        "tenant": "Khách"
       },
       "bulk": {
         "selected": "Đã chọn {count} agent",
@@ -6677,6 +6746,10 @@
           "assignedTo": "Workspace sử dụng",
           "lastSeen": "Lần thấy cuối"
         },
+        "workspaceTable": {
+          "workspace": "Workspace",
+          "status": "Trạng thái"
+        },
         "toast": {
           "assigned": "Đã cấp phone cho workspace",
           "returned": "Đã thu hồi phone về pool"
@@ -6704,7 +6777,18 @@
         },
         "selectedPhonesTitle": "Phone đã chọn ({count})",
         "nextToWorkspace": "Tiếp: chọn workspace ({count})",
-        "backToPhones": "Quay lại chọn phone"
+        "backToPhones": "Quay lại chọn phone",
+        "simpleTitle": "Kho phone của agent này",
+        "simpleDescription": "Chọn phone trong kho, chọn workspace nhận, rồi xác nhận. Phone được cấp sẽ rời pool và xuất hiện trong workspace nhận.",
+        "phonePickerTitle": "Phone trong kho",
+        "phonePickerHint": "Chọn phone cần cấp cho workspace.",
+        "phonePickerSelected": "Đã chọn {count} phone",
+        "workspacePickerTitle": "Workspace nhận",
+        "workspacePickerHint": "Chọn workspace sẽ nhận các phone đã tick.",
+        "workspacePickerSelected": "Sẽ cấp cho {workspace}",
+        "allocationSummary": "{count} phone sẽ được cấp cho {workspace}.",
+        "selectWorkspace": "Chọn {workspace}",
+        "selectedBadge": "Đã chọn"
       },
       "onboarding": {
         "title": "Luồng phân bổ phone",
@@ -6738,7 +6822,8 @@
         "cancel": "Hủy"
       },
       "toast": {
-        "assignmentUpdated": "Đã cập nhật gán thiết bị"
+        "assignmentUpdated": "Đã cập nhật gán thiết bị",
+        "deleted": "Đã xoá phone — serial được giải phóng để đăng ký lại"
       },
       "filters": {
         "workspace": "Workspace",
@@ -6770,11 +6855,25 @@
       "transferDialog": {
         "title": "Chuyển thiết bị",
         "destinationWorkspace": "Workspace đích",
-        "transfer": "Chuyển"
+        "transfer": "Chuyển",
+        "currentWorkspace": "Hiện tại: {workspace}",
+        "noChangeHint": "Chọn workspace nhận thiết bị để tiếp tục.",
+        "searchPlaceholder": "Tìm workspace...",
+        "selectedBadge": "Đã chọn",
+        "noResults": "Không tìm thấy workspace phù hợp",
+        "transferSummary": "{device} sẽ chuyển từ {from} sang {to}.",
+        "subtitle": "Chọn workspace nhận thiết bị. Thiết bị chỉ được chuyển sau khi bạn xác nhận.",
+        "transferTo": "Chuyển sang {workspace}"
       },
       "actions": {
         "transfer": "Chuyển",
-        "notTransferable": "Chỉ phone do pool quản lý mới chuyển được tại đây. Phone do workspace khách sở hữu cần enroll lại qua workspace pool."
+        "notTransferable": "Chỉ phone do pool quản lý mới chuyển được tại đây. Phone do workspace khách sở hữu cần enroll lại qua workspace pool.",
+        "delete": "Xoá",
+        "notDeletableAssigned": "Phone này đang giao cho workspace khác. Hãy thu hồi về pool trước khi xoá."
+      },
+      "deleteDialog": {
+        "title": "Xoá phone này?",
+        "description": "Serial {serial} sẽ bị gỡ khỏi pool cùng lịch sử của nó. Máy vật lý sau đó có thể đăng ký lại từ bất kỳ workspace nào."
       }
     },
     "platformApps": {

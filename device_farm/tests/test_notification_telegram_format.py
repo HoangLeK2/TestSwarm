@@ -100,6 +100,23 @@ def test_format_telegram_device_online():
     assert "vivo V2352A is online" in text
 
 
+def test_format_telegram_account_verification_required():
+    text = format_telegram_message(
+        event="account.verification_required",
+        title="Account fb-user needs verification",
+        body=(
+            "facebook:fb-user is held in verification until "
+            "2026-09-27T12:00:00+00:00.\n"
+            "Reminder: 2026-09-27T12:00:00+00:00\n"
+            "Open: http://localhost:3000/dashboard/accounts"
+        ),
+        data={"deep_link": "http://localhost:3000/dashboard/accounts"},
+    )
+    assert text.startswith("🔐 <b>Account fb-user needs verification</b>")
+    assert "• <b>Reminder:</b> 2026-09-27T12:00:00+00:00" in text
+    assert "Open dashboard" in text
+
+
 def test_format_telegram_vietnamese_link_label():
     event = parse_domain_event(
         {

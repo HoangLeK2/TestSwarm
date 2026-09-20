@@ -11,6 +11,7 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu';
 import {
+  CalendarClock,
   Footprints,
   History,
   MoreHorizontal,
@@ -34,6 +35,7 @@ import type { ColumnDef } from '@tanstack/react-table';
 import type { AccountOut } from '../../services/api';
 import { EditAccountDialog } from '../edit-account-dialog';
 import { AccountStateTransitionDialog } from '../account-state-transition-dialog';
+import { AccountVerificationSetupDialog } from '../account-verification-setup-dialog';
 import { AccountDevicesDialog } from '../account-devices-dialog';
 import { AccountLoginDialog } from '../account-login-dialog';
 import { AccountStepTraceDialog } from '../account-step-trace-dialog';
@@ -201,6 +203,19 @@ export function getAccountColumns(
                 })}
               </span>
             ) : null}
+            {account.verification_hold_until ? (
+              <span className='text-[10px] text-muted-foreground'>
+                {t('verificationHoldUntil', {
+                  time: formatDistanceToNow(
+                    new Date(account.verification_hold_until),
+                    {
+                      addSuffix: true,
+                      locale: dateLocale
+                    }
+                  )
+                })}
+              </span>
+            ) : null}
             {account.state_reason ? (
               <span className='max-w-[180px] truncate text-[10px] text-muted-foreground'>
                 {account.state_reason}
@@ -250,6 +265,8 @@ export function getAccountColumns(
         const account = row.original;
         const current = account.state || account.status;
         const targets = allowedTransitionTargets(current);
+        const canSetupVerification = targets.includes('suspended');
+        const hasVerificationSetup = Boolean(account.verification_hold_until);
         return (
           <div className='flex items-center gap-1'>
             <AccountLoginDialog account={account} canUpdate={perms.canUpdate} />
@@ -306,6 +323,33 @@ export function getAccountColumns(
                         >
                           <RefreshCw className='mr-2 size-4' />
                           {t('transition')}
+                        </DropdownMenuItem>
+                      }
+                    />
+                  ) : null}
+                  {perms.canUpdate && canSetupVerification ? (
+                    <AccountStateTransitionDialog
+                      account={account}
+                      defaultTo='suspended'
+                      trigger={
+                        <DropdownMenuItem
+                          onSelect={(event) => event.preventDefault()}
+                        >
+                          <CalendarClock className='mr-2 size-4' />
+                          {t('setupVerification')}
+                        </DropdownMenuItem>
+                      }
+                    />
+                  ) : null}
+                  {hasVerificationSetup ? (
+                    <AccountVerificationSetupDialog
+                      account={account}
+                      trigger={
+                        <DropdownMenuItem
+                          onSelect={(event) => event.preventDefault()}
+                        >
+                          <CalendarClock className='mr-2 size-4' />
+                          {t('viewVerificationSetup')}
                         </DropdownMenuItem>
                       }
                     />

@@ -1,12 +1,11 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { Plus } from 'lucide-react';
+import { useState } from 'react';
+import { Plus, Search, X } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import { useDevices } from '@/features/devices/hooks/use-devices';
 import {
   useAddDevicesToGroup,
-  useDeviceGroup
+  useAvailableGroupDevices
 } from '../hooks/use-device-groups';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -17,31 +16,36 @@ import {
   DialogTitle,
   DialogTrigger
 } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { TablePaginationControls } from '@/components/ui/table/data-table-pagination';
 import type { DeviceOut } from '@/features/devices/services/manage-api';
 
 interface Props {
   groupId: string;
 }
 
+const AVAILABLE_DEVICES_PAGE_SIZE = 5;
+
 export function AddDevicesToGroupDialog({ groupId }: Props) {
   const t = useTranslations('deviceGroupsFeature.addDevicesDialog');
   const [open, setOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [pageIndex, setPageIndex] = useState(0);
   const [selected, setSelected] = useState<string[]>([]);
-  const { data: devices } = useDevices();
-  const { data: group, isLoading: groupLoading } = useDeviceGroup(groupId, {
-    enabled: open
-  });
   const { mutate, isPending } = useAddDevicesToGroup();
-
-  const existingDeviceIds = useMemo(
-    () => new Set((group?.devices ?? []).map((d) => d.id)),
-    [group?.devices]
+  const availableDevicesQuery = useAvailableGroupDevices(
+    groupId,
+    {
+      q: searchQuery.trim() || undefined,
+      limit: AVAILABLE_DEVICES_PAGE_SIZE,
+      offset: pageIndex * AVAILABLE_DEVICES_PAGE_SIZE
+    },
+    { enabled: open }
   );
 
-  const available = useMemo(
-    () => (devices ?? []).filter((d) => !existingDeviceIds.has(d.id)),
-    [devices, existingDeviceIds]
-  );
+  const available = availableDevicesQuery.data?.items ?? [];
+  const total = availableDevicesQuery.data?.total ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / AVAILABLE_DEVICES_PAGE_SIZE));
 
   const toggle = (id: string) => {
     setSelected((prev) =>
@@ -64,7 +68,11 @@ export function AddDevicesToGroupDialog({ groupId }: Props) {
 
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
-    if (!next) setSelected([]);
+    if (!next) {
+      setSelected([]);
+      setSearchQuery('');
+      setPageIndex(0);
+    }
   };
 
   return (
@@ -79,14 +87,48 @@ export function AddDevicesToGroupDialog({ groupId }: Props) {
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
         </DialogHeader>
+        <div className='relative pt-2'>
+          <Search className='pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground' />
+          <Input
+            value={searchQuery}
+            onChange={(event) => {
+              setSearchQuery(event.target.value);
+              setPageIndex(0);
+            }}
+            placeholder={t('searchPlaceholder')}
+            aria-label={t('searchLabel')}
+            className='h-9 pl-8 pr-8'
+          />
+          {searchQuery ? (
+            <Button
+              type='button'
+              variant='ghost'
+              size='icon'
+              className='absolute right-1 top-1/2 size-7 -translate-y-1/2 text-muted-foreground'
+              onClick={() => {
+                setSearchQuery('');
+                setPageIndex(0);
+              }}
+              aria-label={t('searchClear')}
+            >
+              <X className='size-3.5' />
+            </Button>
+          ) : null}
+        </div>
         <div className='max-h-64 space-y-2 overflow-y-auto pt-2'>
-          {groupLoading && (
+          {availableDevicesQuery.isLoading && (
             <p className='text-sm text-muted-foreground'>{t('loading')}</p>
           )}
-          {!groupLoading && available.length === 0 && (
-            <p className='text-sm text-muted-foreground'>{t('noDevices')}</p>
+          {availableDevicesQuery.isError && (
+            <p className='text-sm text-destructive'>{t('loadError')}</p>
           )}
-          {!groupLoading &&
+          {!availableDevicesQuery.isLoading &&
+            !availableDevicesQuery.isError &&
+            available.length === 0 && (
+              <p className='text-sm text-muted-foreground'>{t('noDevices')}</p>
+            )}
+          {!availableDevicesQuery.isLoading &&
+            !availableDevicesQuery.isError &&
             available.map((d: DeviceOut) => (
               <label
                 key={d.id}
@@ -107,9 +149,27 @@ export function AddDevicesToGroupDialog({ groupId }: Props) {
               </label>
             ))}
         </div>
+        <TablePaginationControls
+          pageIndex={pageIndex}
+          pageCount={pageCount}
+          pageSize={AVAILABLE_DEVICES_PAGE_SIZE}
+          total={total}
+          showRowsPerPage={false}
+          className='px-0 py-1'
+          onPageIndexChange={(nextPage) => {
+            if (availableDevicesQuery.isFetching) return;
+            setPageIndex(Math.max(0, Math.min(pageCount - 1, nextPage)));
+          }}
+          onPageSizeChange={() => undefined}
+        />
         <Button
           onClick={handleSubmit}
-          disabled={isPending || groupLoading || selected.length === 0}
+          disabled={
+            isPending ||
+            availableDevicesQuery.isLoading ||
+            availableDevicesQuery.isError ||
+            selected.length === 0
+          }
           className='w-full'
         >
           {isPending ? t('adding') : t('submit', { count: selected.length })}

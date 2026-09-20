@@ -2,9 +2,18 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
+import {
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsUpDown,
+  Search
+} from 'lucide-react';
 import { useCreateSchedule, useUpdateSchedule } from '../hooks/use-schedules';
 import { useCampaigns } from '@/features/campaigns/hooks/use-campaigns';
+import { useOrgScenarios } from '@/features/org-scenarios/hooks/use-org-scenarios';
+import { isOrgScenarioVisibleInCampaignPicker } from '@/features/org-scenarios/lib/campaign-scenario-eligibility';
 import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-scenario-templates';
 import { useDeviceGroups } from '@/features/device-groups/hooks/use-device-groups';
 import type {
@@ -14,6 +23,12 @@ import type {
 } from '../services/api';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { CronBuilder } from './cron-builder';
+import { ScheduleDevicePicker } from './schedule-device-picker';
+import {
+  buildScheduleDeviceTarget,
+  resolveScheduleDeviceMode,
+  type ScheduleDeviceMode
+} from './schedule-device-target';
 import { VariableEditor } from '@/components/variable-editor';
 import { FlowEditor } from '@/features/campaigns/components/flow-editor/flow-editor';
 import { canPersistScenario } from '@/features/campaigns/components/flow-editor/nested-step-edit';
@@ -38,11 +53,209 @@ import {
   SelectValue
 } from '@/components/ui/select';
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger
+} from '@/components/ui/popover';
+import { cn } from '@/lib/utils';
+import {
   ScheduleCalendarPreview,
   type ScheduleCalendarPreviewItem
 } from './schedule-calendar-preview';
 
 type Mode = 'create' | 'edit';
+type ScheduleTargetType = 'campaign' | 'template' | 'org_scenario' | 'fleet';
+
+type TargetOption = {
+  value: string;
+  label: string;
+};
+
+const TARGET_PICKER_PAGE_SIZE = 8;
+const SCHEDULE_FORM_COPY_FALLBACKS = {
+  deviceModeLabel: {
+    en: 'Target devices',
+    vi: 'Thiết bị chạy'
+  },
+  deviceModeAll: {
+    en: 'All ready devices',
+    vi: 'Tất cả thiết bị sẵn sàng'
+  },
+  deviceModeGroup: {
+    en: 'By group',
+    vi: 'Theo nhóm'
+  },
+  deviceModeDevices: {
+    en: 'Pick devices',
+    vi: 'Chọn thiết bị cụ thể'
+  }
+} as const;
+
+type ScheduleFormCopyKey = keyof typeof SCHEDULE_FORM_COPY_FALLBACKS;
+
+function translateScheduleFormCopy(
+  t: (key: string) => string,
+  locale: string,
+  key: ScheduleFormCopyKey
+) {
+  try {
+    const translated = t(key);
+    if (
+      translated &&
+      translated !== key &&
+      translated !== `schedulesFeature.form.${key}`
+    ) {
+      return translated;
+    }
+  } catch {
+    // Use a readable fallback if the runtime message bundle is stale.
+  }
+
+  return SCHEDULE_FORM_COPY_FALLBACKS[key][locale === 'en' ? 'en' : 'vi'];
+}
+
+function normalizeTargetText(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .toLowerCase();
+}
+
+function PaginatedTargetPicker({
+  value,
+  onValueChange,
+  options,
+  placeholder,
+  searchPlaceholder,
+  noResultsText,
+  pageStatusText,
+  previousText,
+  nextText
+}: {
+  value: string | null;
+  onValueChange: (value: string | null) => void;
+  options: TargetOption[];
+  placeholder: string;
+  searchPlaceholder: string;
+  noResultsText: string;
+  pageStatusText: (page: number, total: number) => string;
+  previousText: string;
+  nextText: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [page, setPage] = useState(0);
+
+  useEffect(() => {
+    setPage(0);
+  }, [options, query]);
+
+  const filteredOptions = useMemo(() => {
+    const needle = normalizeTargetText(query.trim());
+    if (!needle) return options;
+    return options.filter((option) => {
+      const haystack = `${option.label} ${option.value}`;
+      return normalizeTargetText(haystack).includes(needle);
+    });
+  }, [options, query]);
+
+  const pageCount = Math.max(
+    1,
+    Math.ceil(filteredOptions.length / TARGET_PICKER_PAGE_SIZE)
+  );
+  const currentPage = Math.min(page, pageCount - 1);
+  const visibleOptions = filteredOptions.slice(
+    currentPage * TARGET_PICKER_PAGE_SIZE,
+    currentPage * TARGET_PICKER_PAGE_SIZE + TARGET_PICKER_PAGE_SIZE
+  );
+  const selected = options.find((option) => option.value === value);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant='outline'
+          role='combobox'
+          aria-expanded={open}
+          className='w-full justify-between'
+        >
+          <span className='truncate'>{selected?.label ?? placeholder}</span>
+          <ChevronsUpDown className='size-4 opacity-50' />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align='start'
+        className='z-[10001] w-[var(--radix-popover-trigger-width)] p-2'
+      >
+        <div className='relative'>
+          <Search className='pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground' />
+          <Input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={searchPlaceholder}
+            className='h-8 pl-8'
+          />
+        </div>
+        <div className='mt-2 max-h-64 overflow-y-auto'>
+          {visibleOptions.length ? (
+            visibleOptions.map((option) => (
+              <button
+                key={option.value}
+                type='button'
+                className={cn(
+                  'flex h-9 w-full items-center gap-2 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground',
+                  value === option.value && 'bg-accent/70'
+                )}
+                onClick={() => {
+                  onValueChange(option.value);
+                  setOpen(false);
+                }}
+              >
+                <span className='min-w-0 flex-1 truncate'>{option.label}</span>
+                {value === option.value && <Check className='size-4' />}
+              </button>
+            ))
+          ) : (
+            <p className='px-2 py-6 text-center text-sm text-muted-foreground'>
+              {noResultsText}
+            </p>
+          )}
+        </div>
+        {pageCount > 1 && (
+          <div className='mt-2 flex items-center justify-between border-t pt-2 text-xs text-muted-foreground'>
+            <Button
+              type='button'
+              variant='ghost'
+              size='icon'
+              className='size-7'
+              aria-label={previousText}
+              disabled={currentPage === 0}
+              onClick={() => setPage((prev) => Math.max(0, prev - 1))}
+            >
+              <ChevronLeft className='size-4' />
+            </Button>
+            <span>{pageStatusText(currentPage + 1, pageCount)}</span>
+            <Button
+              type='button'
+              variant='ghost'
+              size='icon'
+              className='size-7'
+              aria-label={nextText}
+              disabled={currentPage >= pageCount - 1}
+              onClick={() =>
+                setPage((prev) => Math.min(pageCount - 1, prev + 1))
+              }
+            >
+              <ChevronRight className='size-4' />
+            </Button>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 export function ScheduleFormDialog({
   open,
@@ -58,14 +271,15 @@ export function ScheduleFormDialog({
   const [childStepEditorOpen, setChildStepEditorOpen] = useState(false);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [targetType, setTargetType] =
-    useState<ScheduleCreate['target_type']>('campaign');
+  const [targetType, setTargetType] = useState<ScheduleTargetType>('campaign');
   const [targetId, setTargetId] = useState<string | null>(null);
 
   const [cronExpression, setCronExpression] = useState('*/30 * * * *');
   const [timezone, setTimezone] = useState('Asia/Ho_Chi_Minh');
 
+  const [deviceMode, setDeviceMode] = useState<ScheduleDeviceMode>('all');
   const [deviceGroupId, setDeviceGroupId] = useState<string | null>(null);
+  const [deviceSerials, setDeviceSerials] = useState<string[]>([]);
 
   const [filterState, setFilterState] = useState('READY');
   const [filterModel, setFilterModel] = useState<string>('');
@@ -85,17 +299,38 @@ export function ScheduleFormDialog({
 
   const { data: campaigns } = useCampaigns();
   const { data: templates } = useScenarioTemplates();
+  const { data: orgScenarios } = useOrgScenarios();
   const { data: groups } = useDeviceGroups();
 
   const createMutation = useCreateSchedule();
   const updateMutation = useUpdateSchedule();
 
   const t = useTranslations('schedulesFeature.form');
+  const locale = useLocale();
 
   const title =
     mode === 'create'
       ? t('titleCreate')
       : t('titleEdit', { name: schedule?.name ?? '' });
+  const deviceModeLabel = translateScheduleFormCopy(
+    t,
+    locale,
+    'deviceModeLabel'
+  );
+  const deviceModeOptions = [
+    {
+      value: 'all',
+      label: translateScheduleFormCopy(t, locale, 'deviceModeAll')
+    },
+    {
+      value: 'group',
+      label: translateScheduleFormCopy(t, locale, 'deviceModeGroup')
+    },
+    {
+      value: 'devices',
+      label: translateScheduleFormCopy(t, locale, 'deviceModeDevices')
+    }
+  ] satisfies { value: ScheduleDeviceMode; label: string }[];
 
   const previewTargetLabel = useMemo(() => {
     if (targetType === 'campaign') {
@@ -110,8 +345,42 @@ export function ScheduleFormDialog({
         t('targetTemplate')
       );
     }
+    if (targetType === 'org_scenario') {
+      return (
+        (orgScenarios ?? []).find((scenario) => scenario.id === targetId)
+          ?.name ?? t('targetOrgScenario')
+      );
+    }
     return t('targetFleet');
-  }, [campaigns, targetId, targetType, templates, t]);
+  }, [campaigns, orgScenarios, targetId, targetType, templates, t]);
+
+  const targetOptions = useMemo(() => {
+    if (targetType === 'campaign') {
+      return (campaigns ?? []).map((campaign) => ({
+        value: campaign.id,
+        label: campaign.name
+      }));
+    }
+    if (targetType === 'template') {
+      return (templates ?? []).map((template) => ({
+        value: template.id,
+        label: template.name
+      }));
+    }
+    if (targetType === 'org_scenario') {
+      return (orgScenarios ?? [])
+        .filter(
+          (scenario) =>
+            scenario.is_runnable &&
+            isOrgScenarioVisibleInCampaignPicker(scenario)
+        )
+        .map((scenario) => ({
+          value: scenario.id,
+          label: scenario.name
+        }));
+    }
+    return [];
+  }, [campaigns, orgScenarios, targetType, templates]);
 
   const previewSchedule = useMemo<ScheduleCalendarPreviewItem>(
     () => ({
@@ -142,7 +411,9 @@ export function ScheduleFormDialog({
       setTargetId(null);
       setCronExpression('*/30 * * * *');
       setTimezone('Asia/Ho_Chi_Minh');
+      setDeviceMode('all');
       setDeviceGroupId(null);
+      setDeviceSerials([]);
       setFilterState('READY');
       setFilterModel('');
       setMaxDevices(null);
@@ -164,7 +435,9 @@ export function ScheduleFormDialog({
     setTargetId(s.target_id ?? null);
     setCronExpression(s.cron_expression ?? '*/30 * * * *');
     setTimezone(s.timezone ?? 'Asia/Ho_Chi_Minh');
+    setDeviceMode(resolveScheduleDeviceMode(s));
     setDeviceGroupId(s.device_group_id ?? null);
+    setDeviceSerials(s.device_serials ?? []);
     setFilterState(s.filter_state ?? 'READY');
     setFilterModel(s.filter_model ?? '');
     setMaxDevices(s.max_devices ?? null);
@@ -196,7 +469,12 @@ export function ScheduleFormDialog({
       toast.error(t('errorCronRequired'));
       return;
     }
-    if ((targetType === 'campaign' || targetType === 'template') && !targetId) {
+    if (
+      (targetType === 'campaign' ||
+        targetType === 'template' ||
+        targetType === 'org_scenario') &&
+      !targetId
+    ) {
       toast.error(t('errorTargetIdRequired', { targetType }));
       return;
     }
@@ -217,6 +495,16 @@ export function ScheduleFormDialog({
       return;
     }
 
+    if (deviceMode === 'devices' && !deviceSerials.length) {
+      toast.error(t('errorDevicesRequired'));
+      return;
+    }
+    const deviceTarget = buildScheduleDeviceTarget(
+      deviceMode,
+      deviceGroupId,
+      deviceSerials
+    );
+
     if (mode === 'create') {
       const data: ScheduleCreate = {
         name: name.trim(),
@@ -225,7 +513,7 @@ export function ScheduleFormDialog({
         target_id: targetType === 'fleet' ? null : targetId,
         cron_expression: cron,
         timezone: tz ? tz : undefined,
-        device_group_id: deviceGroupId ?? undefined,
+        ...deviceTarget,
         filter_state: filterState || 'READY',
         filter_model: filterModel?.trim() ? filterModel.trim() : undefined,
         max_devices: maxDevices ?? undefined,
@@ -262,7 +550,7 @@ export function ScheduleFormDialog({
       target_id: targetType === 'fleet' ? null : targetId,
       cron_expression: cron,
       timezone: tz ? tz : undefined,
-      device_group_id: deviceGroupId ?? undefined,
+      ...deviceTarget,
       filter_state: filterState || 'READY',
       filter_model: filterModel?.trim() ? filterModel.trim() : undefined,
       max_devices: maxDevices ?? undefined,
@@ -354,7 +642,10 @@ export function ScheduleFormDialog({
                   <Select
                     value={targetType === 'fleet' ? 'campaign' : targetType}
                     onValueChange={(v) => {
-                      const next = v as 'campaign' | 'template';
+                      const next = v as
+                        | 'campaign'
+                        | 'template'
+                        | 'org_scenario';
                       setTargetType(next);
                       setTargetId(null);
                     }}
@@ -369,56 +660,38 @@ export function ScheduleFormDialog({
                       <SelectItem value='template'>
                         {t('targetTemplate')}
                       </SelectItem>
+                      <SelectItem value='org_scenario'>
+                        {t('targetOrgScenario')}
+                      </SelectItem>
                     </SelectContent>
                   </Select>
                 )}
 
-                {(targetType === 'campaign' || targetType === 'template') && (
+                {(targetType === 'campaign' ||
+                  targetType === 'template' ||
+                  targetType === 'org_scenario') && (
                   <div className='space-y-1'>
                     <Label>{t('targetLabel')}</Label>
-                    {targetType === 'campaign' ? (
-                      <Select
-                        value={targetId ?? '_none'}
-                        onValueChange={(v) =>
-                          setTargetId(v === '_none' ? null : v)
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder={t('pickCampaign')} />
-                        </SelectTrigger>
-                        <SelectContent className='z-[10001]'>
-                          <SelectItem value='_none'>
-                            {t('selectCampaign')}
-                          </SelectItem>
-                          {(campaigns ?? []).map((c) => (
-                            <SelectItem key={c.id} value={c.id}>
-                              {c.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    ) : (
-                      <Select
-                        value={targetId ?? '_none'}
-                        onValueChange={(v) =>
-                          setTargetId(v === '_none' ? null : v)
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder={t('pickTemplate')} />
-                        </SelectTrigger>
-                        <SelectContent className='z-[10001]'>
-                          <SelectItem value='_none'>
-                            {t('selectTemplate')}
-                          </SelectItem>
-                          {(templates ?? []).map((tpl) => (
-                            <SelectItem key={tpl.id} value={tpl.id}>
-                              {tpl.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    )}
+                    <PaginatedTargetPicker
+                      key={targetType}
+                      value={targetId}
+                      onValueChange={setTargetId}
+                      options={targetOptions}
+                      placeholder={
+                        targetType === 'campaign'
+                          ? t('pickCampaign')
+                          : targetType === 'template'
+                            ? t('pickTemplate')
+                            : t('pickOrgScenario')
+                      }
+                      searchPlaceholder={t('targetSearchPlaceholder')}
+                      noResultsText={t('targetNoResults')}
+                      pageStatusText={(page, total) =>
+                        t('targetPageStatus', { page, total })
+                      }
+                      previousText={t('targetPreviousPage')}
+                      nextText={t('targetNextPage')}
+                    />
                   </div>
                 )}
 
@@ -476,28 +749,55 @@ export function ScheduleFormDialog({
               {/* ── Nhóm thiết bị ── */}
               <div className='space-y-4 rounded-lg border bg-background p-4 shadow-sm'>
                 <div className='grid grid-cols-1 gap-4 sm:grid-cols-2'>
-                  <div className='space-y-1'>
-                    <Label>{t('deviceGroupLabel')}</Label>
+                  <div className='space-y-2'>
+                    <Label>{deviceModeLabel}</Label>
                     <Select
-                      value={deviceGroupId ?? '_none'}
-                      onValueChange={(v) =>
-                        setDeviceGroupId(v === '_none' ? null : v)
+                      value={deviceMode}
+                      onValueChange={(value) =>
+                        setDeviceMode(value as ScheduleDeviceMode)
                       }
                     >
-                      <SelectTrigger>
-                        <SelectValue placeholder={t('allReadyDevices')} />
+                      <SelectTrigger className='w-full'>
+                        <SelectValue placeholder={deviceModeLabel} />
                       </SelectTrigger>
                       <SelectContent className='z-[10001]'>
-                        <SelectItem value='_none'>
-                          {t('allReadyDevices')}
-                        </SelectItem>
-                        {(groups ?? []).map((g) => (
-                          <SelectItem key={g.id} value={g.id}>
-                            {g.name} ({g.device_count})
+                        {deviceModeOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
+
+                    {deviceMode === 'group' && (
+                      <Select
+                        value={deviceGroupId ?? '_none'}
+                        onValueChange={(v) =>
+                          setDeviceGroupId(v === '_none' ? null : v)
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder={t('deviceGroupLabel')} />
+                        </SelectTrigger>
+                        <SelectContent className='z-[10001]'>
+                          <SelectItem value='_none'>
+                            {t('allReadyDevices')}
+                          </SelectItem>
+                          {(groups ?? []).map((g) => (
+                            <SelectItem key={g.id} value={g.id}>
+                              {g.name} ({g.device_count})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+
+                    {deviceMode === 'devices' && (
+                      <ScheduleDevicePicker
+                        value={deviceSerials}
+                        onChange={setDeviceSerials}
+                      />
+                    )}
                   </div>
                   <div className='space-y-1'>
                     <Label>{t('timezoneLabel')}</Label>

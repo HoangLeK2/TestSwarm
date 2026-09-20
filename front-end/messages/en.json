@@ -875,6 +875,9 @@
       "title": "Add Devices to Group",
       "loading": "Loading...",
       "loadError": "Could not load assignments. Try again before making changes.",
+      "searchPlaceholder": "Search devices...",
+      "searchLabel": "Search devices",
+      "searchClear": "Clear search",
       "noDevices": "No available devices",
       "adding": "Adding...",
       "submit": "Add {count} device(s)"
@@ -934,7 +937,10 @@
       "statusBanned": "Banned",
       "statusRetired": "Retired",
       "restingUntil": "Resting until {time}",
-      "stepTrace": "Step trace"
+      "verificationHoldUntil": "Waiting for verification setup until {time}",
+      "stepTrace": "Step trace",
+      "setupVerification": "Set up verification",
+      "viewVerificationSetup": "View verification setup schedule"
     },
     "stateDialog": {
       "trigger": "Change state",
@@ -943,10 +949,23 @@
       "currentState": "Current: {status}",
       "targetState": "New state",
       "reason": "Reason",
+      "verificationHold": "Remind user to set up verification",
+      "verificationHoldHint": "This account will stop running campaigns. Choose when to remind the user and where the reminder should be sent.",
+      "holdPreset": {
+        "one_week": "Set up after 1 week",
+        "two_weeks": "Set up after 2 weeks",
+        "custom": "Custom date and time"
+      },
+      "customRemindAt": "Verification setup reminder time",
+      "customDateRequired": "Choose a reminder date.",
+      "customDateFuture": "Choose a future reminder date.",
+      "notifyWeb": "Notify in web",
+      "notifyTelegram": "Notify in Telegram",
       "lastReason": "Last note: {reason}",
       "submit": "Apply",
       "submitting": "Applying...",
-      "submitFailed": "State transition failed"
+      "submitFailed": "State transition failed",
+      "verificationHoldOutcome": "After applying: the account stops running, and the system reminds the user to come back and set it up at the time you choose."
     },
     "createDialog": {
       "trigger": "New Account",
@@ -1237,6 +1256,23 @@
         "topLevelOnly": "top-level steps only (event history expired)",
         "truncated": "showing the most recent events"
       }
+    },
+    "verificationSetup": {
+      "trigger": "View verification setup schedule",
+      "title": "Verification setup schedule",
+      "description": "Account {username} is waiting for the user to come back and set up verification.",
+      "reminderTime": "Setup reminder time",
+      "preset": "Reminder choice",
+      "presetValues": {
+        "one_week": "Set up after 1 week",
+        "two_weeks": "Set up after 2 weeks",
+        "custom": "Custom date and time"
+      },
+      "channels": "Notification channels",
+      "channelWeb": "Web",
+      "channelTelegram": "Telegram",
+      "noChannels": "No notification channel selected",
+      "notSet": "No setup schedule yet"
     }
   },
   "accountGroupsFeature": {
@@ -3007,6 +3043,10 @@
       "advancedFieldsTitle": "Advanced settings",
       "advancedDefaultOk": "Defaults OK",
       "controlFlow": {
+        "loopCountMinLabel": "Random iterations — min (overrides count)",
+        "loopCountMaxLabel": "Random iterations — max",
+        "loopDelayMinLabel": "Random pause between iterations — min (seconds)",
+        "loopDelayMaxLabel": "Random pause between iterations — max (seconds)",
         "loopDurationSecondsLabel": "Time budget (seconds)",
         "loopStallAfterLabel": "Stop after N iterations that do nothing",
         "loopIdleDelayLabel": "Wait after an idle iteration (seconds)",
@@ -5896,15 +5936,31 @@
       "targetTypeLabel": "Target type",
       "targetCampaign": "Campaign",
       "targetTemplate": "Template",
+      "targetOrgScenario": "Org scenario",
       "targetFleet": "Custom script",
       "targetLabel": "Target",
       "pickCampaign": "Pick a campaign",
       "selectCampaign": "Select campaign",
       "pickTemplate": "Pick a template",
       "selectTemplate": "Select template",
+      "pickOrgScenario": "Pick an org scenario",
+      "targetSearchPlaceholder": "Search by name or ID",
+      "targetNoResults": "No matching targets",
+      "targetPageStatus": "Page {page}/{total}",
+      "targetPreviousPage": "Previous page",
+      "targetNextPage": "Next page",
       "inlineStepsLabel": "Steps ({count} steps)",
       "timezoneLabel": "Timezone",
       "timezonePlaceholder": "Asia/Ho_Chi_Minh",
+      "deviceModeLabel": "Target devices",
+      "deviceModeAll": "All ready devices",
+      "deviceModeGroup": "By group",
+      "deviceModeDevices": "Pick devices",
+      "devicePickerPlaceholder": "Pick devices to run on",
+      "devicePickerSearch": "Search by serial, name or model…",
+      "devicePickerEmpty": "No matching devices",
+      "devicePickerSelected": "{count} devices selected",
+      "devicePickerClear": "Clear all",
       "deviceGroupLabel": "Device group (optional)",
       "allReadyDevices": "All ready devices",
       "filterStateLabel": "Device state filter",
@@ -5928,6 +5984,7 @@
       "errorCronRequired": "Cron schedule is required",
       "errorTargetIdRequired": "Please select a target to run",
       "errorInlineStepsRequired": "Please add at least one step",
+      "errorDevicesRequired": "Please select at least one device",
       "errorRandomDelay": "Max delay must be >= min delay",
       "createSuccess": "Schedule created",
       "createFailed": "Create schedule failed",
@@ -6643,6 +6700,7 @@
       "toast": {
         "created": "Workspace created",
         "updated": "Workspace updated",
+        "deleted": "Workspace deleted",
         "ownerPasswordReset": "Owner password reset",
         "lifecycleUpdated": "Workspace lifecycle updated"
       },
@@ -6688,6 +6746,7 @@
         "edit": "Edit workspace",
         "resetOwnerPassword": "Reset owner password",
         "archive": "Archive workspace",
+        "delete": "Delete workspace",
         "markPool": "Mark as pool workspace",
         "unmarkPool": "Unmark pool workspace"
       },
@@ -6695,6 +6754,11 @@
         "title": "Archive workspace?",
         "description": "This changes workspace status to archived. Connected agents, devices, and members are not silently deleted.",
         "confirm": "Archive"
+      },
+      "delete": {
+        "title": "Delete workspace?",
+        "description": "This permanently deletes \"{name}\". It only works after phones, agents, campaigns, accounts, and other workspace data have been moved or removed. Users are not deleted.",
+        "confirm": "Delete"
       },
       "secret": {
         "title": "Temporary password",
@@ -7038,6 +7102,7 @@
       "table": {
         "agent": "Agent",
         "workspace": "Workspace",
+        "kind": "Type",
         "health": "Health",
         "lastSeen": "Last seen",
         "version": "Version",
@@ -7056,6 +7121,10 @@
         "delete": "Delete",
         "enableWaiting": "Waiting for agent…",
         "disableWaiting": "Disconnecting…"
+      },
+      "workspaceKinds": {
+        "pool": "Pool",
+        "tenant": "Tenant"
       },
       "bulk": {
         "selected": "{count} agents selected",
@@ -7145,6 +7214,10 @@
           "assignedTo": "Assigned workspace",
           "lastSeen": "Last seen"
         },
+        "workspaceTable": {
+          "workspace": "Workspace",
+          "status": "Status"
+        },
         "toast": {
           "assigned": "Phones assigned to workspace",
           "returned": "Phones returned to pool"
@@ -7172,7 +7245,18 @@
         },
         "selectedPhonesTitle": "Selected phones ({count})",
         "nextToWorkspace": "Next: choose workspace ({count})",
-        "backToPhones": "Back to phones"
+        "backToPhones": "Back to phones",
+        "simpleTitle": "Phones in this agent pool",
+        "simpleDescription": "Select phones in the pool, choose the receiving workspace, then confirm. Assigned phones leave the pool and appear in that workspace.",
+        "phonePickerTitle": "Pool phones",
+        "phonePickerHint": "Choose the phones to assign to a workspace.",
+        "phonePickerSelected": "{count} phone(s) selected",
+        "workspacePickerTitle": "Receiving workspace",
+        "workspacePickerHint": "Choose the workspace that will receive the selected phones.",
+        "workspacePickerSelected": "Will assign to {workspace}",
+        "allocationSummary": "{count} phone(s) will be assigned to {workspace}.",
+        "selectWorkspace": "Select {workspace}",
+        "selectedBadge": "Selected"
       },
       "onboarding": {
         "title": "Phone allocation flow",
@@ -7206,7 +7290,8 @@
         "cancel": "Cancel"
       },
       "toast": {
-        "assignmentUpdated": "Device assignment updated"
+        "assignmentUpdated": "Device assignment updated",
+        "deleted": "Phone deleted — its serial is free to register again"
       },
       "filters": {
         "workspace": "Workspace",
@@ -7238,11 +7323,25 @@
       "transferDialog": {
         "title": "Transfer device",
         "destinationWorkspace": "Destination workspace",
-        "transfer": "Transfer"
+        "transfer": "Transfer",
+        "currentWorkspace": "Current: {workspace}",
+        "noChangeHint": "Choose the receiving workspace to continue.",
+        "searchPlaceholder": "Search workspaces...",
+        "selectedBadge": "Selected",
+        "noResults": "No matching workspaces",
+        "transferSummary": "{device} will move from {from} to {to}.",
+        "subtitle": "Choose the workspace that will receive this device. The device moves only after you confirm.",
+        "transferTo": "Transfer to {workspace}"
       },
       "actions": {
         "transfer": "Transfer",
-        "notTransferable": "Only pool-managed phones can be transferred here. Tenant-owned phones must be re-enrolled through a pool workspace."
+        "notTransferable": "Only pool-managed phones can be transferred here. Tenant-owned phones must be re-enrolled through a pool workspace.",
+        "delete": "Delete",
+        "notDeletableAssigned": "This phone is assigned to another workspace. Return it to the pool before deleting."
+      },
+      "deleteDialog": {
+        "title": "Delete this phone?",
+        "description": "Serial {serial} will be removed from the pool along with its history. The physical phone can then be registered again by any workspace."
       }
     },
     "platformApps": {

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from api.deps import CurrentUser, DB, require_permission
 from api.org_scope import data_owner_user_id, device_visible_to_user, resource_visible_to_user
 from api.schemas.device import DeviceOut
 from api.schemas.device_group import (
     AddDevicesToGroupBody,
+    DeviceGroupAvailableDevicesOut,
     DeviceGroupCreate,
     DeviceGroupDetailOut,
     DeviceGroupOut,
@@ -19,6 +20,7 @@ from db.crud.device_group import (
     create_group,
     delete_group,
     get_group,
+    list_available_group_devices,
     list_group_devices,
     list_groups,
     remove_device_from_group,
@@ -133,6 +135,47 @@ async def get_device_group(group_id: str, db: DB, user: CurrentUser):
     """Get group with full device list."""
     group = await _get_group_or_404(db, group_id, user)
     return await _group_to_detail_out(db, group)
+
+
+@router.get(
+    "/{group_id}/available-devices",
+    response_model=DeviceGroupAvailableDevicesOut,
+    dependencies=[Depends(require_permission("device-groups", "read"))],
+)
+async def list_available_devices_for_group(
+    group_id: str,
+    db: DB,
+    user: CurrentUser,
+    q: str | None = Query(default=None, max_length=200),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    """List visible devices that can still be added to this group."""
+    await _get_group_or_404(db, group_id, user)
+    org_role = str(getattr(user, "org_role", "") or "").strip().lower()
+    if getattr(user, "org_id", None) and org_role != "admin":
+        org_role = (
+            await repo.get_organization_role_for_user(
+                db, user.id, str(getattr(user, "org_id"))
+            )
+            or ""
+        )
+    devices, total = await list_available_group_devices(
+        db,
+        group_id,
+        org_id=getattr(user, "org_id", None),
+        user_id=data_owner_user_id(user),
+        include_managed_by_org=org_role == "admin",
+        search=q,
+        offset=offset,
+        limit=limit,
+    )
+    return DeviceGroupAvailableDevicesOut(
+        items=[_device_to_out(d) for d in devices],
+        total=total,
+        offset=offset,
+        limit=limit,
+    )
 
 
 @router.patch(

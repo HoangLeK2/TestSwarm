@@ -35,6 +35,10 @@ from services.account_state.fsm import (
 )
 from services.account_state.service import AccountStateService
 from services.account_event_recorder import AccountEventRecorder, reset_account_event_recorder
+from services.account_verification_hold import (
+    AccountVerificationHoldBody,
+    resolve_verification_hold_reminder,
+)
 from types import SimpleNamespace
 
 
@@ -183,6 +187,18 @@ class TestAccountStateFsmMatrix:
         assert ("retired", "active") not in allowed
 
 
+def test_verification_hold_presets_resolve_reminder_window():
+    now = datetime(2026, 9, 20, 12, tzinfo=timezone.utc)
+    assert resolve_verification_hold_reminder(
+        AccountVerificationHoldBody(preset="one_week"),
+        now=now,
+    ) == now + timedelta(days=7)
+    assert resolve_verification_hold_reminder(
+        AccountVerificationHoldBody(preset="two_weeks"),
+        now=now,
+    ) == now + timedelta(days=14)
+
+
 # ── Service ───────────────────────────────────────────────────────────────────
 
 
@@ -218,6 +234,59 @@ async def test_api_transition_to_verifying(fsm_client):
     )
     assert resp.status_code == 200
     assert resp.json()["state"] == "suspended"
+
+
+@pytest.mark.asyncio
+async def test_api_transition_to_verifying_records_hold_metadata(fsm_client):
+    client, session_factory = fsm_client
+    async with session_factory() as db:
+        acc = await _new_account(db, "api_hold")
+        await db.commit()
+        aid = acc.id
+
+    resp = await client.post(
+        f"/api/accounts/{aid}/state",
+        json={
+            "to": "suspended",
+            "reason": "identity checkpoint",
+            "verification_hold": {
+                "preset": "one_week",
+                "notify_web": True,
+                "notify_telegram": True,
+            },
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["state"] == "suspended"
+    assert body["verification_hold"]["preset"] == "one_week"
+    assert body["verification_hold"]["notify_web"] is True
+    assert body["verification_hold"]["notify_telegram"] is True
+    assert body["verification_hold"]["remind_at"]
+
+    async with session_factory() as db:
+        saved = await get_account(db, aid)
+        assert saved.account_metadata["verification_hold"]["preset"] == "one_week"
+
+
+@pytest.mark.asyncio
+async def test_api_verification_hold_requires_suspended_target(fsm_client):
+    client, session_factory = fsm_client
+    async with session_factory() as db:
+        acc = await _new_account(db, "api_hold_invalid")
+        await db.commit()
+        aid = acc.id
+
+    resp = await client.post(
+        f"/api/accounts/{aid}/state",
+        json={
+            "to": "assigned",
+            "reason": "move back",
+            "verification_hold": {"preset": "one_week"},
+        },
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["code"] == "VERIFICATION_HOLD_REQUIRES_SUSPENDED"
 
 
 @pytest.mark.asyncio

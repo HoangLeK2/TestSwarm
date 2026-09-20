@@ -54,6 +54,7 @@ _SCHEMAS: dict[str, tuple[str, str, tuple[str, ...]]] = {
     "device.online": ("device", "device_id", ()),
     "account.rotated": ("account", "account_id", ("account_id",)),
     "account.locked": ("account", "account_id", ("account_id",)),
+    "account.verification_required": ("account", "account_id", ("account_id",)),
     "content.milestone": ("content", "content_id", ()),
     "mcp.action_sensitive": ("mcp_session", "mcp_session_id", ("mcp_session_id",)),
     "dlq.threshold": ("dlq", "campaign_id", ()),
@@ -173,6 +174,16 @@ _TEMPLATES: dict[str, dict[str, tuple[str, str]]] = {
         "en": ("Account {resource_name} locked", "{summary}. Open: {deep_link}"),
         "vi": ("Tai khoan {resource_name} bi khoa", "{summary}. Mo chi tiet: {deep_link}"),
     },
+    "account.verification_required": {
+        "en": (
+            "Account {resource_name} needs verification",
+            "{summary}\nReminder: {remind_at}\nOpen: {deep_link}",
+        ),
+        "vi": (
+            "Tai khoan {resource_name} can xac thuc",
+            "{summary}\nNhac lai: {remind_at}\nMo chi tiet: {deep_link}",
+        ),
+    },
     "content.milestone": {
         "en": ("Content milestone reached", "{summary}. Open: {deep_link}"),
         "vi": ("Content dat moc moi", "{summary}. Mo chi tiet: {deep_link}"),
@@ -207,6 +218,7 @@ _ALLOWED_PLACEHOLDERS = {
     "step_index",
     "device_serial",
     "execution_id",
+    "remind_at",
 }
 
 
@@ -347,6 +359,7 @@ def render_notification(
         "step_index": _payload_text(payload, "step_index", "index", default="unknown"),
         "device_serial": _payload_text(payload, "device_serial", "serial", default="unknown"),
         "execution_id": _payload_text(payload, "execution_id", "run_id", default="unknown"),
+        "remind_at": _payload_text(payload, "remind_at", default="unknown"),
     }
     return RenderedNotification(
         title=title_template.format(**context),

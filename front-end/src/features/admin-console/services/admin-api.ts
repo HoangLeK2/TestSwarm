@@ -467,6 +467,8 @@ const ADMIN_ERROR_MESSAGES: Record<string, string> = {
     'Agent này enroll bằng activation code của một workspace khách nên phone của nó thuộc riêng workspace đó. Muốn chia sẻ, hãy phát activation code mới từ pool workspace rồi enroll lại agent.',
   DEVICE_NOT_IN_POOL_WORKSPACE:
     'Phone này do một workspace khách quản lý nên không chuyển sang workspace khác được. Muốn chia sẻ, hãy phát activation code mới từ pool workspace rồi enroll lại agent.',
+  DEVICE_ASSIGNED_TO_WORKSPACE:
+    'Phone này đang được giao cho một workspace khác. Hãy thu hồi về pool trước rồi mới xoá.',
   AGENT_WORKSPACE_IS_IMMUTABLE:
     'Workspace của agent do activation code quyết định, không đổi được tại đây.',
   DEVICE_NOT_FOUND: 'Serial này chưa từng được đăng ký.',
@@ -486,7 +488,9 @@ const ADMIN_ERROR_MESSAGES: Record<string, string> = {
   AGENT_NOT_FOUND:
     'Không tìm thấy agent này (có thể đã bị xoá). Tải lại danh sách rồi thử lại.',
   DEVICE_MANAGED_BY_ANOTHER_WORKSPACE:
-    'Phone này đang do workspace khác quản lý — không phân bổ từ agent này được.'
+    'Phone này đang do workspace khác quản lý — không phân bổ từ agent này được.',
+  WORKSPACE_NOT_EMPTY:
+    'Workspace còn dữ liệu vận hành. Hãy chuyển hoặc xoá phone, agent, campaign, account và dữ liệu liên quan trước khi xoá workspace.'
 };
 
 /** Machine code of a `{detail: {code}}` error, for screens with a localized message. */
@@ -597,6 +601,10 @@ export const adminApi = {
         `/admin/workspaces/${encodeURIComponent(workspaceId)}/archive`
       )
       .then((r) => r.data),
+  deleteWorkspace: (workspaceId: string) =>
+    farmApi
+      .delete<void>(`/admin/workspaces/${encodeURIComponent(workspaceId)}`)
+      .then(() => undefined),
   resetOwnerPassword: (workspaceId: string, password?: string) =>
     farmApi
       .post<{
@@ -798,6 +806,10 @@ export const adminApi = {
         `/admin/devices/${encodeURIComponent(deviceId)}/assignment`,
         body
       )
+      .then((r) => r.data),
+  deleteDevice: (deviceId: string) =>
+    farmApi
+      .delete(`/admin/devices/${encodeURIComponent(deviceId)}`)
       .then((r) => r.data),
   listFacebookAppReleases: (params: PageParams & { status?: string } = {}) =>
     farmApi

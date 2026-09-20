@@ -1,19 +1,17 @@
 import { farmApi } from '@/lib/farm-api';
 import type {
   ScheduleCreate,
-  ScheduleOut,
+  ScheduleOut as GeneratedScheduleOut,
   SchedulePatch,
   ScheduleRunOut,
   TriggerResponse
 } from '../../device-farm/services/generated/DeviceFarmApi';
 
-export type {
-  ScheduleCreate,
-  ScheduleOut,
-  SchedulePatch,
-  ScheduleRunOut,
-  TriggerResponse
+export type ScheduleOut = GeneratedScheduleOut & {
+  device_serials?: string[] | null;
 };
+
+export type { ScheduleCreate, SchedulePatch, ScheduleRunOut, TriggerResponse };
 
 export const schedulesApi = {
   list: (query?: { offset?: number; limit?: number }) =>

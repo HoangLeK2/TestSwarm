@@ -37,33 +37,30 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 from mcp_util import McpRunner  # noqa: E402
+from common.scenario_schema import SCENARIO_STEP_TYPES  # noqa: E402
 
 OUT_DIR = _ROOT / "debug" / "traces" / "mcp_all_nodes"
 DEFAULT_SCENARIO = _ROOT / "Crawl group (2).json"
 SERIAL_DEFAULT = os.environ.get("DF_SERIAL", "10AE7S00HD002JK")
 
-# Composite step types — executed via df_run_scenario (backend scenario runner).
-_SCENARIO_ONLY_TYPES = frozenset({
-    "stop_app",
-    "launch_app",
-    "wait",
-    "wait_stable",
-    "if_element",
-    "scroll_to",
-    "loop",
-    "extract",
-    "fb_tap_comment_button",
-    "tap_ratio",
-    "swipe_ratio",
-})
-
-# Direct MCP tool per primitive step type (ratios → df_run_scenario).
+# Direct MCP tool per primitive step type. Every other scenario-schema node
+# is routed through df_run_scenario so this script cannot drift behind catalog.
 _DIRECT_MCP: dict[str, str] = {
     "key": "df_key",
     "scroll_down": "df_scroll",
     "tap_selector": "df_tap_selector",
     "input_text": "df_input_text",
 }
+
+_SCENARIO_STEP_TYPES = frozenset(str(t) for t in SCENARIO_STEP_TYPES)
+
+
+def mcp_mode_for_step_type(step_type: str) -> str:
+    if step_type in _DIRECT_MCP:
+        return _DIRECT_MCP[step_type]
+    if step_type in _SCENARIO_STEP_TYPES:
+        return "df_run_scenario"
+    return "unknown"
 
 
 def load_scenario(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -72,6 +69,13 @@ def load_scenario(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     steps = body.get("steps") or []
     variables = body.get("variables") or {}
     return steps, variables
+
+
+def schema_steps() -> list[dict[str, Any]]:
+    return [
+        {"type": step_type, "id": f"schema_{step_type}"}
+        for step_type in SCENARIO_STEP_TYPES
+    ]
 
 
 def resolve_value(value: Any, variables: dict[str, Any]) -> Any:
@@ -110,13 +114,7 @@ def catalog_steps(steps: list[dict[str, Any]]) -> dict[str, Any]:
     for step_path, step in iter_scenario_steps(steps):
         stype = str(step.get("type") or "?")
         by_type.setdefault(stype, []).append(step_path)
-        mcp_tool = _DIRECT_MCP.get(stype)
-        if stype in _SCENARIO_ONLY_TYPES:
-            mcp_mode = "df_run_scenario"
-        elif mcp_tool:
-            mcp_mode = mcp_tool
-        else:
-            mcp_mode = "unknown"
+        mcp_mode = mcp_mode_for_step_type(stype)
         rows.append({
             "path": step_path,
             "type": stype,
@@ -127,6 +125,12 @@ def catalog_steps(steps: list[dict[str, Any]]) -> dict[str, Any]:
         "total_nodes": len(rows),
         "types": {t: len(paths) for t, paths in sorted(by_type.items())},
         "nodes": rows,
+        "schema_coverage": {
+            "schema_step_types": len(_SCENARIO_STEP_TYPES),
+            "direct_mcp_types": sorted(set(_DIRECT_MCP) & _SCENARIO_STEP_TYPES),
+            "scenario_mcp_types": sorted(_SCENARIO_STEP_TYPES - set(_DIRECT_MCP)),
+            "missing_mcp_types": sorted(set(by_type) - _SCENARIO_STEP_TYPES - set(_DIRECT_MCP)),
+        },
     }
 
 
@@ -260,7 +264,7 @@ def run_per_type_smoke(
             }
         entry: dict[str, Any] = {"type": stype, "path": step_path}
 
-        if stype in _SCENARIO_ONLY_TYPES:
+        if stype in _SCENARIO_STEP_TYPES and stype not in _DIRECT_MCP:
             entry["mcp"] = "df_run_scenario"
             row = runner.call("df_run_scenario", {"steps": [smoke_step]})
             entry.update(row)
@@ -481,11 +485,21 @@ def main() -> int:
     parser.add_argument("--out", type=Path, default=OUT_DIR / "last_report.json")
     args = parser.parse_args()
 
-    steps, variables = load_scenario(args.scenario)
+    if args.scenario.exists():
+        steps, variables = load_scenario(args.scenario)
+        scenario_ref = str(args.scenario)
+    elif args.mode == "catalog":
+        steps, variables = schema_steps(), {}
+        scenario_ref = "schema:SCENARIO_STEP_TYPES"
+    else:
+        raise FileNotFoundError(
+            f"Scenario file not found: {args.scenario}. "
+            "Pass --scenario or use --mode catalog for schema coverage."
+        )
     report: dict[str, Any] = {
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "serial": args.serial,
-        "scenario": str(args.scenario),
+        "scenario": scenario_ref,
         "variables": variables,
     }
 

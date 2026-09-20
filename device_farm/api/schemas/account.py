@@ -5,6 +5,9 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from services.account_verification_hold import AccountVerificationHoldOut
+from api.schemas.device import DeviceOut
+
 # ``cooldown``/``disabled`` are legacy aliases kept accepting for old clients;
 # both normalize below (see services.account_state.fsm.normalize_state).
 _LEGACY_STATUS_ALIASES = {"disabled": "suspended", "cooldown": "active"}
@@ -94,6 +97,8 @@ class AccountOut(BaseModel):
     observed_display_name: Optional[str] = None
     friends_count: Optional[int] = None
     friends_observed_at: Optional[datetime] = None
+    verification_hold: Optional[AccountVerificationHoldOut] = None
+    verification_hold_until: Optional[datetime] = None
     # password_encrypted is intentionally excluded from all responses
 
 
@@ -107,6 +112,13 @@ class DeviceAccountOut(BaseModel):
     verified_at: Optional[datetime] = None
     verification_attempted_at: Optional[datetime] = None
     verification_evidence: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AccountAvailableDevicesOut(BaseModel):
+    items: List[DeviceOut] = Field(default_factory=list)
+    total: int
+    offset: int
+    limit: int
 
 
 class AccountVerificationOut(BaseModel):

@@ -101,7 +101,11 @@ function getFlowSummary(step?: FlowStep): string[] {
         : step.type === 'repeat_until'
           ? `Tối đa: ${step.max_iterations ?? '?'}`
           : step.type === 'loop'
-            ? `Loop: ${step.count ?? '?'}`
+            ? // count_min/count_max override count at run time — showing the
+              // count here would name a number the loop does not use.
+              step.count_min != null && step.count_max != null
+              ? `Loop: ${step.count_min}–${step.count_max} (ngẫu nhiên)`
+              : `Loop: ${step.count ?? '?'}`
             : 'Vòng lặp';
     return [count, `Thân: ${bodyCount}`];
   }

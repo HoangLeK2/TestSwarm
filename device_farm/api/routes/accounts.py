@@ -31,13 +31,14 @@ from datetime import datetime, timezone
 from typing import Any, List, NoReturn, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 
 from api.auth.rbac import is_superadmin
 from api.deps import CurrentUser, DB, require_permission
 from api.org_scope import data_owner_user_id, resource_visible_to_user
 from api.schemas.account import (
     AccountCreate,
+    AccountAvailableDevicesOut,
     AccountImportFormatCreate,
     AccountImportFormatListOut,
     AccountImportFormatOut,
@@ -55,6 +56,7 @@ from api.schemas.account import (
     RoundRobinBody,
     SetPrimaryBody,
 )
+from api.schemas.device import DeviceOut
 from api.schemas.device_platform_session import (
     CancelFacebookLoginAttemptBody,
     ConfirmPlatformSessionBody,
@@ -91,8 +93,11 @@ from db.crud.account import (
     update_account,
 )
 from db.crud.device import get_device
+from db.crud.organization import get_organization_role_for_user, list_organization_members
 from db.models.enums import AccountEventType
 from db.models.account import DeviceAccount
+from db.models.device import Device
+from db.models.enums import AccountState
 from services.account_event_recorder import get_account_event_recorder
 from services.account_import_formats import (
     AccountImportFormatError,
@@ -108,6 +113,12 @@ from services.account_state import (
     AccountStateError,
     AccountStateService,
     StateConflictError,
+)
+from services.account_verification_hold import (
+    build_verification_hold_payload,
+    clear_verification_hold,
+    get_verification_hold,
+    set_verification_hold,
 )
 from services.device_platform_session import (
     DevicePlatformSessionConflict,
@@ -129,6 +140,7 @@ from services.device_platform_login_attempt import (
     complete_facebook_login_attempt,
 )
 from services.device_reserve.exceptions import DeviceSessionError
+from services.notification_service import NotificationService
 
 router = APIRouter(tags=["accounts"])
 
@@ -208,10 +220,15 @@ async def _observations_for(db, accounts) -> dict[str, dict[str, Any]]:
 def _account_to_out(account, observed: dict[str, Any] | None = None) -> AccountOut:
     state = getattr(account, "state", None) or account.status
     seen = observed or {}
+    verification_hold = get_verification_hold(account)
     return AccountOut(
         observed_display_name=seen.get("observed_display_name"),
         friends_count=seen.get("friends_count"),
         friends_observed_at=seen.get("friends_observed_at"),
+        verification_hold=verification_hold,
+        verification_hold_until=(
+            verification_hold.remind_at if verification_hold is not None else None
+        ),
         id=account.id,
         platform=account.platform,
         username=account.username,
@@ -264,6 +281,118 @@ def _link_to_out(lnk) -> DeviceAccountOut:
         verification_attempted_at=lnk.verification_attempted_at,
         verification_evidence=lnk.verification_evidence or {},
     )
+
+
+def _device_to_out(device) -> DeviceOut:
+    return DeviceOut(
+        id=device.id,
+        db_id=device.id,
+        serial=device.serial,
+        device_serial=getattr(device, "device_serial", None) or device.serial,
+        name=device.name,
+        device_key=device.device_key,
+        user_id=device.user_id,
+        brand=device.brand,
+        model=device.model,
+        android_version=device.android_version,
+        sdk_version=device.sdk_version,
+        screen_width=device.screen_width,
+        screen_height=device.screen_height,
+        last_seen=device.last_seen,
+        created_at=device.created_at,
+        adb_serial=getattr(device, "adb_serial", None),
+        relay_serial=getattr(device, "relay_serial", None),
+        managed_by_org_id=getattr(device, "managed_by_org_id", None),
+        managed_by_relay_id=getattr(device, "managed_by_relay_id", None),
+        adb_ip=getattr(device, "adb_ip", None),
+        adb_port=getattr(device, "adb_port", 5555),
+        tags=getattr(device, "tags", "") or "",
+        relay_id=getattr(device, "managed_by_relay_id", None),
+        transport_online=False,
+        state="unknown",
+        status=getattr(device, "status", "paired") or "paired",
+        paired_at=getattr(device, "paired_at", None),
+        unpaired_at=getattr(device, "unpaired_at", None),
+        notes=getattr(device, "notes", "") or "",
+    )
+
+
+async def _can_include_managed_devices(db: DB, user: CurrentUser) -> bool:
+    org_id = getattr(user, "org_id", None)
+    if not org_id:
+        return False
+    role = str(getattr(user, "org_role", "") or "").strip().lower()
+    if role != "admin":
+        role = (await get_organization_role_for_user(db, user.id, str(org_id))) or ""
+    return role == "admin"
+
+
+async def _list_available_account_devices(
+    db: DB,
+    *,
+    account_id: str,
+    user: CurrentUser,
+    search: str | None,
+    offset: int,
+    limit: int,
+) -> tuple[list[Device], int]:
+    linked_device_ids = select(DeviceAccount.device_id).where(
+        DeviceAccount.account_id == account_id
+    )
+    filters = [Device.id.not_in(linked_device_ids)]
+
+    org_id = getattr(user, "org_id", None)
+    if org_id:
+        member_rows = await list_organization_members(db, str(org_id))
+        member_ids = [
+            str(member.user_id)
+            for member, _ in member_rows
+            if getattr(member, "user_id", None)
+        ]
+        org_conditions = [Device.org_id == org_id]
+        if member_ids:
+            org_conditions.append(
+                and_(Device.org_id.is_(None), Device.user_id.in_(member_ids))
+            )
+        if await _can_include_managed_devices(db, user):
+            org_conditions.append(Device.managed_by_org_id == org_id)
+        filters.append(or_(*org_conditions))
+    else:
+        owner_id = data_owner_user_id(user)
+        if owner_id:
+            filters.append(Device.user_id == owner_id)
+
+    term = (search or "").strip()
+    if term:
+        pattern = f"%{term}%"
+        filters.append(
+            or_(
+                Device.name.ilike(pattern),
+                Device.serial.ilike(pattern),
+                Device.device_serial.ilike(pattern),
+                Device.adb_serial.ilike(pattern),
+                Device.relay_serial.ilike(pattern),
+                Device.brand.ilike(pattern),
+                Device.model.ilike(pattern),
+            )
+        )
+
+    total = int(
+        (
+            await db.execute(
+                select(func.count()).select_from(Device).where(*filters)
+            )
+        ).scalar_one()
+        or 0
+    )
+    result = await db.execute(
+        select(Device)
+        .where(*filters)
+        .order_by(Device.created_at, Device.id)
+        .offset(offset)
+        .limit(limit)
+    )
+    return list(result.scalars().all()), total
 
 
 def _session_to_out(session) -> DevicePlatformSessionOut:
@@ -347,6 +476,56 @@ async def _require_assigned_account(device_id: str, account_id: str, db, user):
     if link is None:
         raise HTTPException(status_code=404, detail="Device-account link not found")
     return account, link
+
+
+def _notification_service(request: Request) -> NotificationService:
+    svc = getattr(request.app.state, "notification_service", None)
+    if isinstance(svc, NotificationService):
+        return svc
+    return NotificationService(getattr(request.app.state, "ws_manager", None))
+
+
+async def _notify_verification_hold(
+    request: Request,
+    *,
+    account,
+    hold,
+    user: CurrentUser,
+) -> None:
+    channel_types: set[str] = set()
+    if hold.notify_web:
+        channel_types.add("in_app")
+    if hold.notify_telegram:
+        channel_types.add("telegram")
+    if not channel_types:
+        return
+    recipient_user_id = account.user_id or user.id
+    remind_at = hold.remind_at.isoformat()
+    try:
+        await _notification_service(request).notify(
+            "account.verification_required",
+            f"Account {account.username} needs verification",
+            (
+                f"{account.platform}:{account.username} is held in verification "
+                f"until {remind_at}."
+            ),
+            {
+                "resource_type": "account",
+                "resource_id": account.id,
+                "account_id": account.id,
+                "resource_name": account.username,
+                "platform": account.platform,
+                "status": account.state,
+                "remind_at": remind_at,
+                "deep_link": "/dashboard/accounts",
+            },
+            user_id=recipient_user_id,
+            channel_types=channel_types,
+        )
+    except Exception:
+        # Account state is the source of truth; external notification delivery is
+        # best-effort and already records per-channel warnings in the service.
+        pass
 
 
 # ── Account endpoints ──────────────────────────────────────────────────────────
@@ -733,6 +912,37 @@ async def round_robin_assign_endpoint(body: RoundRobinBody, db: DB, user: Curren
     }
 
 
+@router.get(
+    "/accounts/{account_id}/available-devices",
+    response_model=AccountAvailableDevicesOut,
+    dependencies=[Depends(require_permission("accounts", "read"))],
+)
+async def list_account_available_devices_endpoint(
+    account_id: str,
+    db: DB,
+    user: CurrentUser,
+    q: str | None = Query(default=None, max_length=200),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    """List visible devices that are not yet linked to this account."""
+    await _get_account_for_user_or_404(account_id, db, user)
+    devices, total = await _list_available_account_devices(
+        db,
+        account_id=account_id,
+        user=user,
+        search=q,
+        offset=offset,
+        limit=limit,
+    )
+    return AccountAvailableDevicesOut(
+        items=[_device_to_out(device) for device in devices],
+        total=total,
+        offset=offset,
+        limit=limit,
+    )
+
+
 @router.post(
     "/accounts/{account_id}/state",
     response_model=AccountStateTransitionOut,
@@ -742,11 +952,35 @@ async def round_robin_assign_endpoint(body: RoundRobinBody, db: DB, user: Curren
 async def transition_account_state(
     account_id: str,
     body: AccountStateTransitionBody,
+    request: Request,
     db: DB,
     user: CurrentUser,
 ):
     """Transition account FSM state with validation, audit, and domain event."""
     await _get_account_or_404(account_id, db)
+    if body.verification_hold is not None and body.to != AccountState.SUSPENDED.value:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "VERIFICATION_HOLD_REQUIRES_SUSPENDED",
+                "message": "verification hold can only be set for suspended accounts",
+            },
+        )
+    verification_hold_payload = None
+    if body.verification_hold is not None:
+        try:
+            verification_hold_payload = build_verification_hold_payload(
+                body.verification_hold,
+                actor_user_id=user.id,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "INVALID_VERIFICATION_HOLD",
+                    "message": str(exc),
+                },
+            ) from exc
     svc = AccountStateService()
     try:
         account = await svc.transition(
@@ -760,7 +994,22 @@ async def transition_account_state(
     except AccountStateError as exc:
         _raise_account_state_http(exc)
 
+    if verification_hold_payload is not None:
+        set_verification_hold(account, verification_hold_payload)
+        await db.flush()
+    elif account.state != AccountState.SUSPENDED.value:
+        clear_verification_hold(account)
+        await db.flush()
+
+    hold = get_verification_hold(account)
     await _commit_and_flush_events(db)
+    if hold is not None and account.state == AccountState.SUSPENDED.value:
+        await _notify_verification_hold(
+            request,
+            account=account,
+            hold=hold,
+            user=user,
+        )
     return AccountStateTransitionOut(
         id=account.id,
         state=account.state,
@@ -768,6 +1017,7 @@ async def transition_account_state(
         state_reason=account.state_reason,
         state_changed_at=account.state_changed_at,
         cooldown_until=account.cooldown_until,
+        verification_hold=hold,
     )
 
 

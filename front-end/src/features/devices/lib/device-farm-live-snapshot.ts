@@ -46,9 +46,15 @@ function mergeLiveDevice(previous: Device | undefined, live: Device): Device {
 
 export function mergeLiveDeviceSnapshot(
   previousDevices: Device[],
-  liveDevices: Device[]
+  liveDevices: Device[],
+  options: { dropStaleOnEmpty?: boolean } = {}
 ): Device[] {
   if (liveDevices.length === 0) {
+    // An empty feed is not evidence of offline by itself — but when agent-boot
+    // stops, the live endpoint can no longer map the stale runtime serial back
+    // to a registered device, so it drops the row instead of reporting it
+    // DISCONNECTED. Without this the last READY snapshot stays painted forever.
+    if (options.dropStaleOnEmpty) return [];
     return previousDevices.filter((device) => !isExplicitlyOffline(device));
   }
 

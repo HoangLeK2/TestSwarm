@@ -51,6 +51,7 @@ DEFAULT_EVENTS = [
     "account.banned",
     "account.rotated",
     "account.locked",
+    "account.verification_required",
     "content.milestone",
     "mcp.action_sensitive",
 ]
@@ -130,10 +131,13 @@ class NotificationService:
         body: str | None = None,
         data: Optional[dict[str, Any]] = None,
         user_id: Optional[str] = None,
+        channel_types: Optional[set[str]] = None,
     ) -> list[Notification]:
         async with _notification_db_session() as db:
             try:
                 channels = await self._channels_for_event(db, event, user_id)
+                if channel_types is not None:
+                    channels = [channel for channel in channels if channel.type in channel_types]
                 saved: list[Notification] = []
                 for channel in channels:
                     try:
@@ -419,7 +423,15 @@ class NotificationService:
             )
             .limit(1)
         )
-        if result.scalar_one_or_none():
+        channel_id = result.scalar_one_or_none()
+        if channel_id:
+            existing = await db.get(NotificationChannel, channel_id)
+            if existing is not None:
+                events = list(existing.events or [])
+                missing = [event for event in DEFAULT_EVENTS if event not in events]
+                if missing:
+                    existing.events = [*events, *missing]
+                    await db.flush()
             return
         db.add(
             NotificationChannel(

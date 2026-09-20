@@ -34,6 +34,10 @@ _WORKFLOW_LOOP = _ROOT / "temporal" / "workflows.py"
 _STEP_KEYS_BY_NODE: dict[str, tuple[str, ...]] = {
     "loop": (
         "count",
+        "count_min",
+        "count_max",
+        "delay_between_min",
+        "delay_between_max",
         "while",
         "max_iterations",
         "loop_var",
@@ -135,6 +139,37 @@ def test_both_implementations_agree_on_what_counts_as_progress() -> None:
 
     assert a == b, "the two loops disagree about which no-ops are deliberate"
     assert "rate_limited" in a
+
+
+@pytest.mark.parametrize(
+    ("low", "high", "expected"),
+    [
+        (None, None, (None, None)),
+        ("", "", (None, None)),
+        (10, None, None),      # half a range is a typo, not "from 10 upward"
+        (None, 50, None),
+        ("x", "50", None),
+        (50, 10, None),        # reversed bounds
+        (10, 50, ((10, 50), None)),
+        ("10", "50", ((10, 50), None)),
+    ],
+)
+def test_both_implementations_read_random_ranges_the_same_way(
+    low, high, expected
+) -> None:
+    """The twin helpers must agree, or a range means one thing per run path."""
+    from tasks.scenario.steps.control_flow import _resolve_random_range
+    from temporal.workflows import _loop_random_range
+
+    executor = _resolve_random_range(low, high, int)
+    campaign = _loop_random_range(low, high, int)
+
+    assert executor[0] == campaign[0]
+    assert bool(executor[1]) == bool(campaign[1])
+    if expected is None:
+        assert executor[0] is None and executor[1]
+    else:
+        assert executor == expected
 
 
 def test_both_implementations_walk_nested_branches() -> None:

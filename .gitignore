@@ -40,3 +40,9 @@ STFService.apk/java_pid*.hprof
 
 .agents/skills/
 android-uiautomator-server-jar
+
+# Local doc-evaluation CLI (TypeSafe). Not shipped.
+scripts/doceval/
+
+# Local JEV automation brain. Not shipped.
+jev-setup/

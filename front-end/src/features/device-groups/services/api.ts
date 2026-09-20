@@ -5,12 +5,26 @@ import type {
   DeviceGroupCreate,
   DeviceGroupUpdate
 } from '../../device-farm/services/generated/DeviceFarmApi';
+import type { DeviceOut } from '../../devices/services/manage-api';
 
 export type {
   DeviceGroupOut,
   DeviceGroupDetailOut,
   DeviceGroupCreate,
   DeviceGroupUpdate
+};
+
+export type AvailableGroupDevicesParams = {
+  q?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export type AvailableGroupDevicesOut = {
+  items: DeviceOut[];
+  total: number;
+  offset: number;
+  limit: number;
 };
 
 export const deviceGroupsApi = {
@@ -28,6 +42,22 @@ export const deviceGroupsApi = {
       .then((r) => r.data),
   delete: (groupId: string) =>
     farmApi.delete(`/device-groups/${groupId}`).then((r) => r.data),
+  availableDevices: (
+    groupId: string,
+    { q, limit = 20, offset = 0 }: AvailableGroupDevicesParams = {}
+  ) =>
+    farmApi
+      .get<AvailableGroupDevicesOut>(
+        `/device-groups/${encodeURIComponent(groupId)}/available-devices`,
+        {
+          params: {
+            q: q || undefined,
+            limit,
+            offset
+          }
+        }
+      )
+      .then((r) => r.data),
   addDevices: (groupId: string, deviceIds: string[]) =>
     farmApi
       .post(`/device-groups/${groupId}/devices`, { device_ids: deviceIds })

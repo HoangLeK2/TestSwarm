@@ -46,6 +46,7 @@ class _FakeDevice:
     state: str = "READY"
     _relay_id: str = "relay-test"
     _scenario_active: int = 0
+    _agent_send: object | None = None
     _q: Optional[asyncio.Queue] = None
     calls: list[tuple] | None = None
 
@@ -60,6 +61,12 @@ class _FakeDevice:
 
     def get_log_lines(self) -> list[str]:
         return []
+
+    def input_route_hint(self) -> str:
+        return "fake"
+
+    def key_route_hint(self) -> str:
+        return "fake"
 
     def get_stream_bootstrap(self, *_args, **_kwargs):
         return _h264_cfg(self.serial), _h264_key(self.serial)
@@ -108,6 +115,7 @@ class _PingThenDisconnectWebSocket:
 class _MessagesThenDisconnectWebSocket:
     def __init__(self, messages: list[dict]) -> None:
         self.state = SimpleNamespace()
+        self.sent_json: list[dict] = []
         self._messages = iter(messages)
 
     async def receive_json(self) -> dict:
@@ -115,6 +123,9 @@ class _MessagesThenDisconnectWebSocket:
             return next(self._messages)
         except StopIteration:
             raise WebSocketDisconnect() from None
+
+    async def send_json(self, msg: dict) -> None:
+        self.sent_json.append(msg)
 
 
 class _BootstrapFailOnceWebSocket:
@@ -544,6 +555,74 @@ async def test_ws_receiver_coalesces_burst_idr_requests_per_device():
         await asyncio.sleep(0.01)
 
     assert control.idr_requests == 1
+
+
+@pytest.mark.asyncio
+async def test_ws_receiver_rechecks_allowlist_before_write_after_reassignment(monkeypatch):
+    dev = _FakeDevice(serial="SN001")
+    ws_manager = WebSocketManager(_FakeManager([dev]), db_enabled=True, read_only=False)
+    ws = _MessagesThenDisconnectWebSocket(
+        [{"type": "tap", "serial": "SN001", "x": 11, "y": 22}]
+    )
+    ws_manager._connections["conn-old"] = ws
+    ws_manager._user_ids["conn-old"] = "user-old"
+    ws_manager._allowed_serials["conn-old"] = {"SN001"}
+    # This mirrors a device reclaimed into another workspace after the socket
+    # was opened: the in-memory snapshot is stale, but the DB-backed allowlist
+    # no longer grants SN001 to the old workspace.
+    ws_manager._org_ids = {"conn-old": "org-old"}
+    refresh_calls: list[tuple[str | None, str | None]] = []
+
+    async def _load_allowed_serials(user_id, *, org_id=None):
+        refresh_calls.append((user_id, org_id))
+        return set()
+
+    monkeypatch.setattr(ws_manager, "_load_allowed_serials", _load_allowed_serials)
+
+    await ws_manager._receiver(ws, asyncio.Lock())
+    await asyncio.sleep(0.05)
+
+    assert refresh_calls == [("user-old", "org-old")]
+    assert dev.calls in (None, [])
+
+
+@pytest.mark.asyncio
+async def test_ws_receiver_rechecks_allowlist_before_multi_action_after_reassignment(monkeypatch):
+    dev = _FakeDevice(serial="SN001", screen_width=1000, screen_height=2000)
+    ws_manager = WebSocketManager(_FakeManager([dev]), db_enabled=True, read_only=False)
+    ws = _MessagesThenDisconnectWebSocket(
+        [
+            {
+                "type": "multi_action",
+                "request_id": "req-stale",
+                "serials": ["SN001"],
+                "action": {"type": "tap_ratio", "rx": 0.25, "ry": 0.5},
+            }
+        ]
+    )
+    ws_manager._connections["conn-old"] = ws
+    ws_manager._user_ids["conn-old"] = "user-old"
+    ws_manager._allowed_serials["conn-old"] = {"SN001"}
+    ws_manager._org_ids["conn-old"] = "org-old"
+
+    async def _load_allowed_serials(user_id, *, org_id=None):
+        return set()
+
+    monkeypatch.setattr(ws_manager, "_load_allowed_serials", _load_allowed_serials)
+
+    await ws_manager._receiver(ws, asyncio.Lock())
+    await asyncio.sleep(0.05)
+
+    assert dev.calls in (None, [])
+    assert ws.sent_json == [
+        {
+            "type": "multi_action_result",
+            "request_id": "req-stale",
+            "ok": False,
+            "count": 1,
+            "results": [{"serial": "SN001", "ok": False, "error": "not_allowed"}],
+        }
+    ]
 
 
 @pytest.mark.asyncio

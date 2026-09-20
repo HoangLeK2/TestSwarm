@@ -367,3 +367,74 @@ async def test_account_search_filters_server_side(session_factory):
 
         unfiltered = await client.get("/api/accounts")
         assert len(unfiltered.json()) >= 3
+
+
+@pytest.mark.asyncio
+async def test_account_available_devices_supports_backend_search_and_pagination(
+    session_factory,
+):
+    await _seed(session_factory)
+    async with session_factory() as session:
+        session.add_all(
+            [
+                Device(
+                    id="device-3",
+                    serial="serial-3",
+                    name="Alpha",
+                    org_id="org-1",
+                ),
+                Device(
+                    id="device-4",
+                    serial="needle-4",
+                    name="Beta",
+                    org_id="org-1",
+                ),
+                DeviceAccount(
+                    id="link-1",
+                    device_id="device-1",
+                    account_id="account-1",
+                ),
+            ]
+        )
+        await session.commit()
+
+    app = _build_app(session_factory)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        first_page = await client.get(
+            "/api/accounts/account-1/available-devices",
+            params={"limit": 1, "offset": 0},
+        )
+        assert first_page.status_code == 200, first_page.text
+        first_body = first_page.json()
+        assert first_body["total"] == 2
+        assert first_body["offset"] == 0
+        assert first_body["limit"] == 1
+        assert [row["id"] for row in first_body["items"]] == ["device-3"]
+
+        second_page = await client.get(
+            "/api/accounts/account-1/available-devices",
+            params={"limit": 1, "offset": 1},
+        )
+        assert second_page.status_code == 200
+        assert [row["id"] for row in second_page.json()["items"]] == ["device-4"]
+
+        searched = await client.get(
+            "/api/accounts/account-1/available-devices",
+            params={"q": "needle", "limit": 10},
+        )
+        assert searched.status_code == 200
+        searched_body = searched.json()
+        assert searched_body["total"] == 1
+        assert [row["id"] for row in searched_body["items"]] == ["device-4"]
+
+        linked_match = await client.get(
+            "/api/accounts/account-1/available-devices",
+            params={"q": "serial-1"},
+        )
+        assert linked_match.status_code == 200
+        assert linked_match.json()["total"] == 0
+
+        foreign_account = await client.get(
+            "/api/accounts/account-foreign/available-devices",
+        )
+        assert foreign_account.status_code == 404

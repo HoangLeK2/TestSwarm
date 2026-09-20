@@ -23,6 +23,7 @@ def _fake_schedule(**overrides):
         "inline_steps": None,
         "inline_variables": {},
         "device_group_id": None,
+        "device_serials": [],
         "filter_state": "READY",
         "filter_model": None,
         "max_devices": None,
@@ -121,6 +122,53 @@ async def test_create_fleet_requires_inline_steps():
 
 
 @pytest.mark.asyncio
+async def test_create_org_scenario_schedule_forwards_target():
+    scheduler = MagicMock()
+    scheduler.create = AsyncMock(
+        return_value=_fake_schedule(
+            target_type="org_scenario",
+            target_id="scenario-1",
+        )
+    )
+    app = _build_app(scheduler)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post(
+            "/api/schedules",
+            json={
+                "name": "Org scenario runner",
+                "target_type": "org_scenario",
+                "target_id": "scenario-1",
+                "cron_expression": "*/15 * * * *",
+            },
+        )
+
+    assert resp.status_code == 201
+    scheduler.create.assert_awaited_once()
+    assert scheduler.create.await_args.kwargs["target_type"] == "org_scenario"
+    assert scheduler.create.await_args.kwargs["target_id"] == "scenario-1"
+
+
+@pytest.mark.asyncio
+async def test_create_org_scenario_requires_target_id():
+    scheduler = MagicMock()
+    app = _build_app(scheduler)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post(
+            "/api/schedules",
+            json={
+                "name": "Org scenario runner",
+                "target_type": "org_scenario",
+                "cron_expression": "*/15 * * * *",
+            },
+        )
+
+    assert resp.status_code == 400
+    assert "target_id is required" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_patch_schedule_remaps_timezone_to_timezone_name():
     scheduler = MagicMock()
     scheduler.update = AsyncMock(return_value=_fake_schedule(timezone="UTC"))
@@ -136,6 +184,73 @@ async def test_patch_schedule_remaps_timezone_to_timezone_name():
     patch_payload = call.args[2] if len(call.args) >= 3 else call.kwargs["patch"]
     assert "timezone" not in patch_payload
     assert patch_payload["timezone_name"] == "UTC"
+
+
+@pytest.mark.asyncio
+async def test_create_schedule_forwards_and_returns_device_serials():
+    scheduler = MagicMock()
+    scheduler.create = AsyncMock(
+        return_value=_fake_schedule(device_serials=["AAA", "BBB"])
+    )
+    app = _build_app(scheduler)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post(
+            "/api/schedules",
+            json={
+                "name": "Two phones",
+                "target_type": "campaign",
+                "target_id": "camp-1",
+                "cron_expression": "*/15 * * * *",
+                # blanks + duplicates must be normalized away
+                "device_serials": ["AAA", " BBB ", "AAA", "  "],
+            },
+        )
+
+    assert resp.status_code == 201
+    assert resp.json()["device_serials"] == ["AAA", "BBB"]
+    assert scheduler.create.await_args.kwargs["device_serials"] == ["AAA", "BBB"]
+
+
+@pytest.mark.asyncio
+async def test_patch_schedule_can_clear_device_group():
+    scheduler = MagicMock()
+    scheduler.update = AsyncMock(return_value=_fake_schedule(device_group_id=None))
+    app = _build_app(scheduler)
+
+    with patch(
+        "api.routes.schedules.get_schedule",
+        new=AsyncMock(return_value=_fake_schedule(device_group_id="group-1")),
+    ):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.patch(
+                "/api/schedules/sched-1",
+                json={"device_group_id": None, "device_serials": ["AAA"]},
+            )
+
+    assert resp.status_code == 200
+    call = scheduler.update.await_args
+    patch_payload = call.args[2] if len(call.args) >= 3 else call.kwargs["patch"]
+    # exclude_none would have dropped this — the explicit null must survive.
+    assert "device_group_id" in patch_payload
+    assert patch_payload["device_group_id"] is None
+    assert patch_payload["device_serials"] == ["AAA"]
+
+
+@pytest.mark.asyncio
+async def test_patch_schedule_leaves_device_group_untouched_when_absent():
+    scheduler = MagicMock()
+    scheduler.update = AsyncMock(return_value=_fake_schedule())
+    app = _build_app(scheduler)
+
+    with patch("api.routes.schedules.get_schedule", new=AsyncMock(return_value=_fake_schedule())):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.patch("/api/schedules/sched-1", json={"name": "Renamed"})
+
+    assert resp.status_code == 200
+    call = scheduler.update.await_args
+    patch_payload = call.args[2] if len(call.args) >= 3 else call.kwargs["patch"]
+    assert "device_group_id" not in patch_payload
 
 
 @pytest.mark.asyncio

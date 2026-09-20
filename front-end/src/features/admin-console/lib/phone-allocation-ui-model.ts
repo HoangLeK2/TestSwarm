@@ -30,6 +30,9 @@ export function canAssignPhones({
   );
 }
 
-export function showReturnToPoolAction(selectedCount: number): boolean {
-  return selectedCount > 0;
+export function showReturnToPoolAction(
+  selectedCount: number,
+  targetWorkspaceId = ''
+): boolean {
+  return selectedCount > 0 && !targetWorkspaceId;
 }

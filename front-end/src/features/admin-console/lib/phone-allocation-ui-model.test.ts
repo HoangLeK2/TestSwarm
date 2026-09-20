@@ -50,7 +50,8 @@ test('canAssignPhones waits for both phone selection and a readable workspace ta
   );
 });
 
-test('showReturnToPoolAction hides zero-count actions', () => {
+test('showReturnToPoolAction only shows while no receiving workspace is selected', () => {
   assert.equal(showReturnToPoolAction(0), false);
   assert.equal(showReturnToPoolAction(1), true);
+  assert.equal(showReturnToPoolAction(1, 'workspace-id-1'), false);
 });

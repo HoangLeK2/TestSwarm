@@ -1341,14 +1341,58 @@ function AgentPhoneAllocationDialog({
     targetWorkspaceId,
     targetWorkspaceName
   });
-  const showReturnToPool = showReturnToPoolAction(selectedCount);
+  const selectedSerials = Array.from(selected);
+  const selectedDisplayedPhones = displayedPhones.filter((phone) =>
+    selected.has(phone.serial)
+  );
+  const selectedPhoneSources = Array.from(
+    new Set(
+      selectedDisplayedPhones.map((phone) =>
+        phone.pooled
+          ? t('review.poolSource')
+          : phone.assignedWorkspaceName || t('unknownWorkspace')
+      )
+    )
+  );
+  const selectedFromLabel = selectedPhoneSources.length
+    ? selectedPhoneSources.join(', ')
+    : selectedCount > 0
+      ? t('review.selectedSources')
+      : t('review.noPhones');
+  const hasAllocatedSelection = selectedDisplayedPhones.some(
+    (phone) => !phone.pooled
+  );
+  const showReturnToPool = showReturnToPoolAction(
+    selectedCount,
+    targetWorkspaceId
+  );
   const assignLabel = canAssign
-    ? t('assignToWorkspace', {
+    ? t(hasAllocatedSelection ? 'transferToWorkspace' : 'assignToWorkspace', {
         count: selectedCount,
         workspace: targetWorkspaceName
       })
     : t('chooseTargetWorkspace');
-  const selectedSerials = Array.from(selected);
+  const assignmentSummary = canAssign
+    ? t(hasAllocatedSelection ? 'transferSummary' : 'allocationSummary', {
+        count: selectedCount,
+        workspace: targetWorkspaceName,
+        source: selectedFromLabel
+      })
+    : '';
+  const reviewResult =
+    selectedCount === 0
+      ? t('review.noPhones')
+      : canAssign
+        ? t(
+            hasAllocatedSelection
+              ? 'review.transferResult'
+              : 'review.assignResult',
+            {
+              count: selectedCount,
+              workspace: targetWorkspaceName
+            }
+          )
+        : t('review.chooseDestination');
 
   const toggleSerial = (serial: string) => {
     setSelected((prev) => {
@@ -1381,7 +1425,7 @@ function AgentPhoneAllocationDialog({
                   {t('agent')}
                 </p>
                 <p className='truncate font-medium'>
-                  {agent.name || agent.relay_id}
+                  {agent.name || t('unnamedAgent')}
                 </p>
               </div>
               <div className='min-w-0'>
@@ -1389,7 +1433,7 @@ function AgentPhoneAllocationDialog({
                   {t('managedBy')}
                 </p>
                 <p className='truncate font-medium'>
-                  {agent.workspaceName || agent.workspaceId}
+                  {agent.workspaceName || t('unknownWorkspace')}
                 </p>
               </div>
               <div className='min-w-0'>
@@ -1585,13 +1629,38 @@ function AgentPhoneAllocationDialog({
               </section>
             </div>
 
+            <div className='border-t bg-background px-5 py-3'>
+              <p className='text-sm font-medium'>{t('review.title')}</p>
+              <div className='mt-3 grid gap-3 md:grid-cols-3'>
+                <div className='rounded-md border bg-muted/20 p-3'>
+                  <p className='text-xs font-medium text-muted-foreground'>
+                    {t('review.from')}
+                  </p>
+                  <p className='mt-1 text-sm font-medium'>
+                    {selectedFromLabel}
+                  </p>
+                </div>
+                <div className='rounded-md border bg-muted/20 p-3'>
+                  <p className='text-xs font-medium text-muted-foreground'>
+                    {t('review.to')}
+                  </p>
+                  <p className='mt-1 text-sm font-medium'>
+                    {targetWorkspaceName || t('review.chooseDestination')}
+                  </p>
+                </div>
+                <div className='rounded-md border bg-muted/20 p-3'>
+                  <p className='text-xs font-medium text-muted-foreground'>
+                    {t('review.result')}
+                  </p>
+                  <p className='mt-1 text-sm font-medium'>{reviewResult}</p>
+                </div>
+              </div>
+            </div>
+
             <DialogFooter className='border-t p-3 sm:items-center sm:justify-between'>
               <div className='text-sm text-muted-foreground'>
                 {selectedCount > 0 && targetWorkspaceName
-                  ? t('allocationSummary', {
-                      count: selectedCount,
-                      workspace: targetWorkspaceName
-                    })
+                  ? assignmentSummary
                   : selectedCount > 0
                     ? t('chooseTargetWorkspaceHint')
                     : t('phonePickerHint')}
@@ -1641,12 +1710,13 @@ function AgentPhoneAllocationDialog({
  * pool" from "handed out": both states used to render the same workspace name.
  */
 function PhonePooledCell({ phone }: { phone: AdminAgentPhoneOut }) {
+  const t = useTranslations('adminConsole.agents.phoneAllocation');
   if (phone.pooled) return <StatusBadge value='in_pool' />;
   return (
     <div className='flex flex-wrap items-center gap-1.5'>
       <StatusBadge value='allocated' />
       <span className='text-sm'>
-        {phone.assignedWorkspaceName || phone.assignedWorkspaceId || '-'}
+        {phone.assignedWorkspaceName || t('unknownWorkspace')}
       </span>
     </div>
   );
@@ -1712,10 +1782,7 @@ function AgentPhoneRow({
           <PhonePooledCell phone={phone} />
           <p className='mt-1 text-xs text-muted-foreground'>
             {t('managedByValue', {
-              workspace:
-                phone.managedByWorkspaceName ||
-                phone.managedByWorkspaceId ||
-                '-'
+              workspace: phone.managedByWorkspaceName || t('unknownWorkspace')
             })}
           </p>
         </div>

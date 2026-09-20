@@ -6719,7 +6719,7 @@
         "actions": "Thao tác"
       },
       "actions": {
-        "phones": "Phân bổ phone",
+        "phones": "Cấp / chuyển phone",
         "edit": "Sửa",
         "enable": "Bật",
         "disable": "Tắt",
@@ -6797,7 +6797,7 @@
         }
       },
       "phoneAllocation": {
-        "title": "Phân bổ phone",
+        "title": "Cấp / chuyển phone",
         "agent": "Agent",
         "managedBy": "Pool quản lý",
         "phones": "Phone",
@@ -6809,7 +6809,7 @@
         "workspaceSearchPlaceholder": "Tìm workspace nhận",
         "selectVisible": "Chọn đang hiển thị",
         "assign": "Cấp {count} phone",
-        "returnToPool": "Thu hồi {count} phone",
+        "returnToPool": "Thu hồi {count} phone về pool",
         "empty": "Không có phone phù hợp.",
         "pool": "Trong pool",
         "managedByValue": "Quản lý bởi {workspace}",
@@ -6824,14 +6824,14 @@
           "status": "Trạng thái"
         },
         "toast": {
-          "assigned": "Đã cấp phone cho workspace",
+          "assigned": "Đã cập nhật workspace nhận phone",
           "returned": "Đã thu hồi phone về pool"
         },
         "tenantLocked": "Agent này enroll bằng activation code của workspace {workspace} nên phone của nó thuộc riêng workspace đó. Muốn chia sẻ, hãy phát activation code mới từ pool workspace rồi enroll lại agent.",
         "deviceNotFound": "Serial này chưa từng được đăng ký thành device.",
         "assignToWorkspace": "Cấp {count} phone cho {workspace}",
         "chooseTargetWorkspace": "Chọn workspace nhận",
-        "chooseTargetWorkspaceHint": "Chọn workspace nhận để bật nút cấp phone.",
+        "chooseTargetWorkspaceHint": "Chọn workspace nhận để chuyển/cấp phone, hoặc thu hồi về pool nếu chỉ muốn gỡ khỏi workspace hiện tại.",
         "noTargetWorkspaces": "Không có workspace phù hợp",
         "targetWorkspaceLabel": "Workspace nhận phone",
         "targetWorkspaceHelp": "Chọn workspace sẽ nhận và đăng ký các phone đang tick.",
@@ -6851,17 +6851,33 @@
         "selectedPhonesTitle": "Phone đã chọn ({count})",
         "nextToWorkspace": "Tiếp: chọn workspace ({count})",
         "backToPhones": "Quay lại chọn phone",
-        "simpleTitle": "Kho phone của agent này",
-        "simpleDescription": "Chọn phone trong kho, chọn workspace nhận, rồi xác nhận. Phone được cấp sẽ rời pool và xuất hiện trong workspace nhận.",
+        "simpleTitle": "Cấp hoặc chuyển phone cho workspace",
+        "simpleDescription": "Chọn phone, chọn workspace nhận, kiểm tra Từ → Đến → Kết quả, rồi xác nhận. Phone đang dùng ở workspace cũ sẽ rời workspace đó khi bạn chuyển.",
         "phonePickerTitle": "Phone trong kho",
-        "phonePickerHint": "Chọn phone cần cấp cho workspace.",
+        "phonePickerHint": "Chọn phone cần cấp hoặc chuyển.",
         "phonePickerSelected": "Đã chọn {count} phone",
         "workspacePickerTitle": "Workspace nhận",
         "workspacePickerHint": "Chọn workspace sẽ nhận các phone đã tick.",
-        "workspacePickerSelected": "Sẽ cấp cho {workspace}",
-        "allocationSummary": "{count} phone sẽ được cấp cho {workspace}.",
-        "selectWorkspace": "Chọn {workspace}",
-        "selectedBadge": "Đã chọn"
+        "workspacePickerSelected": "Workspace nhận: {workspace}",
+        "allocationSummary": "{count} phone sẽ được cấp từ pool cho {workspace}.",
+        "selectWorkspace": "Chọn workspace {workspace}",
+        "selectedBadge": "Đã chọn",
+        "transferToWorkspace": "Chuyển {count} phone sang {workspace}",
+        "transferSummary": "{count} phone sẽ rời {source} và chuyển sang {workspace}.",
+        "unknownWorkspace": "Workspace chưa xác định",
+        "unnamedAgent": "Agent chưa đặt tên",
+        "review": {
+          "title": "Xem lại chuyển giao",
+          "from": "Từ",
+          "to": "Đến",
+          "result": "Kết quả",
+          "poolSource": "Pool của agent",
+          "selectedSources": "Các phone đã chọn",
+          "noPhones": "Chưa chọn phone",
+          "chooseDestination": "Chưa chọn workspace nhận",
+          "assignResult": "{count} phone sẽ xuất hiện trong {workspace}.",
+          "transferResult": "{count} phone sẽ rời workspace hiện tại và xuất hiện trong {workspace}."
+        }
       },
       "onboarding": {
         "title": "Luồng phân bổ phone",

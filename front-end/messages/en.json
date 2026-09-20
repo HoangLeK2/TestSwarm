@@ -7186,7 +7186,7 @@
         "actions": "Actions"
       },
       "actions": {
-        "phones": "Allocate phones",
+        "phones": "Assign / move phones",
         "edit": "Edit",
         "enable": "Enable",
         "disable": "Disable",
@@ -7264,7 +7264,7 @@
         }
       },
       "phoneAllocation": {
-        "title": "Allocate phones",
+        "title": "Assign / move phones",
         "agent": "Agent",
         "managedBy": "Managed pool",
         "phones": "Phones",
@@ -7276,7 +7276,7 @@
         "workspaceSearchPlaceholder": "Search destination workspace",
         "selectVisible": "Select visible",
         "assign": "Assign {count} phones",
-        "returnToPool": "Return {count} phones",
+        "returnToPool": "Return {count} phones to pool",
         "empty": "No matching phones.",
         "pool": "In pool",
         "managedByValue": "Managed by {workspace}",
@@ -7291,14 +7291,14 @@
           "status": "Status"
         },
         "toast": {
-          "assigned": "Phones assigned to workspace",
+          "assigned": "Phone destination workspace updated",
           "returned": "Phones returned to pool"
         },
         "tenantLocked": "This agent enrolled with an activation code from {workspace}, so its phones belong to that workspace only. To share them, issue a new activation code from a pool workspace and enroll the agent again.",
         "deviceNotFound": "This serial has never been registered as a device.",
         "assignToWorkspace": "Assign {count} phones to {workspace}",
         "chooseTargetWorkspace": "Choose receiving workspace",
-        "chooseTargetWorkspaceHint": "Choose a receiving workspace to enable the assign button.",
+        "chooseTargetWorkspaceHint": "Choose a receiving workspace to move/assign phones, or return them to the pool if you only want to remove the current assignment.",
         "noTargetWorkspaces": "No matching workspaces",
         "targetWorkspaceLabel": "Receiving workspace",
         "targetWorkspaceHelp": "Choose the workspace that will receive and register the selected phones.",
@@ -7318,17 +7318,33 @@
         "selectedPhonesTitle": "Selected phones ({count})",
         "nextToWorkspace": "Next: choose workspace ({count})",
         "backToPhones": "Back to phones",
-        "simpleTitle": "Phones in this agent pool",
-        "simpleDescription": "Select phones in the pool, choose the receiving workspace, then confirm. Assigned phones leave the pool and appear in that workspace.",
+        "simpleTitle": "Assign or move phones to a workspace",
+        "simpleDescription": "Choose phones, choose the receiving workspace, review From → To → Result, then confirm. Phones already used by another workspace will leave that workspace when moved.",
         "phonePickerTitle": "Pool phones",
-        "phonePickerHint": "Choose the phones to assign to a workspace.",
+        "phonePickerHint": "Choose the phones to assign or move.",
         "phonePickerSelected": "{count} phone(s) selected",
         "workspacePickerTitle": "Receiving workspace",
         "workspacePickerHint": "Choose the workspace that will receive the selected phones.",
-        "workspacePickerSelected": "Will assign to {workspace}",
-        "allocationSummary": "{count} phone(s) will be assigned to {workspace}.",
-        "selectWorkspace": "Select {workspace}",
-        "selectedBadge": "Selected"
+        "workspacePickerSelected": "Receiving workspace: {workspace}",
+        "allocationSummary": "{count} phone(s) will be assigned from the pool to {workspace}.",
+        "selectWorkspace": "Select workspace {workspace}",
+        "selectedBadge": "Selected",
+        "transferToWorkspace": "Move {count} phones to {workspace}",
+        "transferSummary": "{count} phone(s) will leave {source} and move to {workspace}.",
+        "unknownWorkspace": "Unknown workspace",
+        "unnamedAgent": "Unnamed agent",
+        "review": {
+          "title": "Review transfer",
+          "from": "From",
+          "to": "To",
+          "result": "Result",
+          "poolSource": "Agent pool",
+          "selectedSources": "Selected phones",
+          "noPhones": "No phones selected",
+          "chooseDestination": "No receiving workspace selected",
+          "assignResult": "{count} phone(s) will appear in {workspace}.",
+          "transferResult": "{count} phone(s) will leave the current workspace and appear in {workspace}."
+        }
       },
       "onboarding": {
         "title": "Phone allocation flow",

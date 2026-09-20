@@ -1,14 +1,21 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import { useLocale, useTranslations } from 'next-intl';
 import {
+  CalendarCheck2,
   Check,
   ChevronLeft,
   ChevronRight,
   ChevronsUpDown,
-  Search
+  Clock3,
+  ListChecks,
+  Search,
+  Settings2,
+  Smartphone,
+  Target,
+  Timer
 } from 'lucide-react';
 import { useCreateSchedule, useUpdateSchedule } from '../hooks/use-schedules';
 import { useCampaigns } from '@/features/campaigns/hooks/use-campaigns';
@@ -22,7 +29,7 @@ import type {
   ScheduleCreate
 } from '../services/api';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
-import { CronBuilder } from './cron-builder';
+import { CronBuilder, cronExpressionToHumanReadable } from './cron-builder';
 import { ScheduleDevicePicker } from './schedule-device-picker';
 import {
   buildScheduleDeviceTarget,
@@ -35,8 +42,10 @@ import { canPersistScenario } from '@/features/campaigns/components/flow-editor/
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
 import { validateScenarioStepsForApi } from '@/features/campaigns/utils/validate-scenario-steps-for-api';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Separator } from '@/components/ui/separator';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import {
@@ -81,13 +90,25 @@ const SCHEDULE_FORM_COPY_FALLBACKS = {
     en: 'All ready devices',
     vi: 'Tất cả thiết bị sẵn sàng'
   },
+  deviceModeAllHelp: {
+    en: 'Let the scheduler use any device that is ready when the run starts.',
+    vi: 'Để hệ thống dùng bất kỳ thiết bị nào đang sẵn sàng khi lịch bắt đầu.'
+  },
   deviceModeGroup: {
     en: 'By group',
     vi: 'Theo nhóm'
   },
+  deviceModeGroupHelp: {
+    en: 'Limit this schedule to a saved device group.',
+    vi: 'Giới hạn lịch này trong một nhóm thiết bị đã lưu.'
+  },
   deviceModeDevices: {
     en: 'Pick devices',
     vi: 'Chọn thiết bị cụ thể'
+  },
+  deviceModeDevicesHelp: {
+    en: 'Choose the exact devices that may run this schedule.',
+    vi: 'Chọn chính xác thiết bị được phép chạy lịch này.'
   }
 } as const;
 
@@ -257,6 +278,65 @@ function PaginatedTargetPicker({
   );
 }
 
+function ScheduleFormSection({
+  icon,
+  eyebrow,
+  title,
+  description,
+  children,
+  className
+}: {
+  icon: ReactNode;
+  eyebrow: string;
+  title: string;
+  description: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <section
+      className={cn(
+        'overflow-hidden rounded-lg border bg-background shadow-sm',
+        className
+      )}
+    >
+      <div className='border-b bg-muted/20 px-4 py-3'>
+        <div className='flex items-start gap-3'>
+          <div className='mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-md border bg-background text-muted-foreground'>
+            {icon}
+          </div>
+          <div className='min-w-0'>
+            <p className='text-[11px] font-semibold uppercase tracking-wide text-muted-foreground'>
+              {eyebrow}
+            </p>
+            <h3 className='text-sm font-semibold leading-6 text-foreground'>
+              {title}
+            </h3>
+            <p className='text-xs leading-5 text-muted-foreground'>
+              {description}
+            </p>
+          </div>
+        </div>
+      </div>
+      <div className='space-y-4 p-4'>{children}</div>
+    </section>
+  );
+}
+
+function SummaryRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className='grid grid-cols-[7.5rem_minmax(0,1fr)] gap-3 text-sm'>
+      <dt className='text-xs font-medium text-muted-foreground'>{label}</dt>
+      <dd
+        className='min-w-0 truncate font-medium text-foreground'
+        title={value}
+      >
+        {value}
+      </dd>
+    </div>
+  );
+}
+
 export function ScheduleFormDialog({
   open,
   onOpenChange,
@@ -320,17 +400,27 @@ export function ScheduleFormDialog({
   const deviceModeOptions = [
     {
       value: 'all',
-      label: translateScheduleFormCopy(t, locale, 'deviceModeAll')
+      label: translateScheduleFormCopy(t, locale, 'deviceModeAll'),
+      description: translateScheduleFormCopy(t, locale, 'deviceModeAllHelp')
     },
     {
       value: 'group',
-      label: translateScheduleFormCopy(t, locale, 'deviceModeGroup')
+      label: translateScheduleFormCopy(t, locale, 'deviceModeGroup'),
+      description: translateScheduleFormCopy(t, locale, 'deviceModeGroupHelp')
     },
     {
       value: 'devices',
-      label: translateScheduleFormCopy(t, locale, 'deviceModeDevices')
+      label: translateScheduleFormCopy(t, locale, 'deviceModeDevices'),
+      description: translateScheduleFormCopy(t, locale, 'deviceModeDevicesHelp')
     }
-  ] satisfies { value: ScheduleDeviceMode; label: string }[];
+  ] satisfies {
+    value: ScheduleDeviceMode;
+    label: string;
+    description: string;
+  }[];
+  const selectedDeviceModeDescription =
+    deviceModeOptions.find((option) => option.value === deviceMode)
+      ?.description ?? '';
 
   const previewTargetLabel = useMemo(() => {
     if (targetType === 'campaign') {
@@ -584,19 +674,90 @@ export function ScheduleFormDialog({
 
   const isPending =
     mode === 'create' ? createMutation.isPending : updateMutation.isPending;
+  const tCron = useTranslations('schedulesFeature.cronBuilder');
+  const scheduleSummary = useMemo(
+    () =>
+      cronExpressionToHumanReadable(
+        cronExpression.trim() || '*/30 * * * *',
+        tCron
+      ),
+    [cronExpression, tCron]
+  );
+  const deviceSummary = useMemo(() => {
+    if (deviceMode === 'devices') {
+      return deviceSerials.length
+        ? t('summarySelectedDevices', { count: deviceSerials.length })
+        : t('summaryNoDevices');
+    }
+
+    if (deviceMode === 'group') {
+      if (!deviceGroupId) return t('summaryAllReadyDevices');
+      const groupName =
+        (groups ?? []).find((group) => group.id === deviceGroupId)?.name ??
+        t('summaryUnknownGroup');
+      return t('summaryDeviceGroup', { name: groupName });
+    }
+
+    return t('summaryAllReadyDevices');
+  }, [deviceGroupId, deviceMode, deviceSerials.length, groups, t]);
+  const delaySummary = useMemo(() => {
+    const parts: string[] = [];
+    if (randomDelayMax > 0) {
+      parts.push(
+        t('summaryRandomDelay', {
+          min: randomDelayMin,
+          max: randomDelayMax
+        })
+      );
+    }
+    if (staggerDevices) {
+      parts.push(t('summaryStagger', { seconds: staggerIntervalSeconds }));
+    }
+    return parts.length ? parts.join(' / ') : t('summaryNoDelay');
+  }, [
+    randomDelayMax,
+    randomDelayMin,
+    staggerDevices,
+    staggerIntervalSeconds,
+    t
+  ]);
+  const readinessLabel =
+    name.trim() &&
+    cronExpression.trim() &&
+    (targetType === 'fleet' || targetId) &&
+    (deviceMode !== 'devices' || deviceSerials.length > 0)
+      ? t('summaryReady')
+      : t('summaryNeedsInput');
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className='z-[1000] flex max-h-[92vh] w-[calc(100vw-2rem)] flex-col overflow-hidden p-0 sm:max-w-[760px] xl:max-w-[1180px]'>
-        <DialogHeader className='shrink-0 border-b bg-muted/25 px-5 py-4'>
-          <DialogTitle>{title}</DialogTitle>
+        <DialogHeader className='shrink-0 border-b bg-background px-5 py-4'>
+          <div className='flex flex-wrap items-start justify-between gap-3'>
+            <div className='min-w-0 space-y-1'>
+              <DialogTitle>{title}</DialogTitle>
+              <p className='text-sm text-muted-foreground'>
+                {mode === 'create' ? t('subtitleCreate') : t('subtitleEdit')}
+              </p>
+            </div>
+            <Badge
+              variant={isEnabled ? 'default' : 'secondary'}
+              className='mt-0.5'
+            >
+              {isEnabled ? t('enabledOn') : t('enabledOff')}
+            </Badge>
+          </div>
         </DialogHeader>
 
-        <div className='flex-1 overflow-y-auto bg-muted/15 p-4 sm:p-5'>
+        <div className='flex-1 overflow-y-auto bg-muted/10 p-4 sm:p-5'>
           <div className='grid gap-5 xl:grid-cols-[minmax(34rem,1fr)_34rem]'>
             <div className='space-y-5'>
-              {/* ── Thông tin cơ bản ── */}
-              <div className='space-y-4 rounded-lg border bg-background p-4 shadow-sm'>
+              <ScheduleFormSection
+                icon={<ListChecks className='size-4' />}
+                eyebrow={t('sectionBasicsEyebrow')}
+                title={t('sectionBasicsTitle')}
+                description={t('sectionBasicsDescription')}
+              >
                 <div className='space-y-1'>
                   <Label>{t('nameLabel')}</Label>
                   <Input
@@ -627,45 +788,49 @@ export function ScheduleFormDialog({
                     {isEnabled ? t('enabledOn') : t('enabledOff')}
                   </label>
                 </div>
-              </div>
+              </ScheduleFormSection>
 
-              {/* ── Mục tiêu ── */}
-              <div className='space-y-3 rounded-lg border bg-background p-4 shadow-sm'>
-                <p className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>
-                  {t('targetTypeLabel')}
-                </p>
-                {targetType === 'fleet' && mode === 'edit' ? (
-                  <p className='text-sm text-muted-foreground'>
-                    {t('targetFleet')}
-                  </p>
-                ) : (
-                  <Select
-                    value={targetType === 'fleet' ? 'campaign' : targetType}
-                    onValueChange={(v) => {
-                      const next = v as
-                        | 'campaign'
-                        | 'template'
-                        | 'org_scenario';
-                      setTargetType(next);
-                      setTargetId(null);
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className='z-[10001]'>
-                      <SelectItem value='campaign'>
-                        {t('targetCampaign')}
-                      </SelectItem>
-                      <SelectItem value='template'>
-                        {t('targetTemplate')}
-                      </SelectItem>
-                      <SelectItem value='org_scenario'>
-                        {t('targetOrgScenario')}
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                )}
+              <ScheduleFormSection
+                icon={<Target className='size-4' />}
+                eyebrow={t('sectionTargetEyebrow')}
+                title={t('sectionTargetTitle')}
+                description={t('sectionTargetDescription')}
+              >
+                <div className='space-y-1'>
+                  <Label>{t('targetTypeLabel')}</Label>
+                  {targetType === 'fleet' && mode === 'edit' ? (
+                    <p className='text-sm text-muted-foreground'>
+                      {t('targetFleet')}
+                    </p>
+                  ) : (
+                    <Select
+                      value={targetType === 'fleet' ? 'campaign' : targetType}
+                      onValueChange={(v) => {
+                        const next = v as
+                          | 'campaign'
+                          | 'template'
+                          | 'org_scenario';
+                        setTargetType(next);
+                        setTargetId(null);
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className='z-[10001]'>
+                        <SelectItem value='campaign'>
+                          {t('targetCampaign')}
+                        </SelectItem>
+                        <SelectItem value='template'>
+                          {t('targetTemplate')}
+                        </SelectItem>
+                        <SelectItem value='org_scenario'>
+                          {t('targetOrgScenario')}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
 
                 {(targetType === 'campaign' ||
                   targetType === 'template' ||
@@ -735,19 +900,27 @@ export function ScheduleFormDialog({
                     </div>
                   </details>
                 )}
-              </div>
+              </ScheduleFormSection>
 
-              {/* ── Lịch cron ── */}
-              <div className='rounded-lg border bg-background p-4 shadow-sm'>
+              <ScheduleFormSection
+                icon={<Clock3 className='size-4' />}
+                eyebrow={t('sectionScheduleEyebrow')}
+                title={t('sectionScheduleTitle')}
+                description={t('sectionScheduleDescription')}
+              >
                 <CronBuilder
                   key={`${mode}-${schedule?.id ?? 'new'}-${open ? 'open' : 'closed'}`}
                   value={cronExpression}
                   onChange={setCronExpression}
                 />
-              </div>
+              </ScheduleFormSection>
 
-              {/* ── Nhóm thiết bị ── */}
-              <div className='space-y-4 rounded-lg border bg-background p-4 shadow-sm'>
+              <ScheduleFormSection
+                icon={<Smartphone className='size-4' />}
+                eyebrow={t('sectionDevicesEyebrow')}
+                title={t('sectionDevicesTitle')}
+                description={t('sectionDevicesDescription')}
+              >
                 <div className='grid grid-cols-1 gap-4 sm:grid-cols-2'>
                   <div className='space-y-2'>
                     <Label>{deviceModeLabel}</Label>
@@ -768,6 +941,9 @@ export function ScheduleFormDialog({
                         ))}
                       </SelectContent>
                     </Select>
+                    <p className='text-xs leading-5 text-muted-foreground'>
+                      {selectedDeviceModeDescription}
+                    </p>
 
                     {deviceMode === 'group' && (
                       <Select
@@ -840,14 +1016,15 @@ export function ScheduleFormDialog({
                     />
                   </div>
                 </div>
-              </div>
+              </ScheduleFormSection>
 
-              {/* ── Tuỳ chọn thời gian ── */}
-              <div className='space-y-4 rounded-lg border bg-background p-4 shadow-sm'>
-                <p className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>
-                  {t('staggerDevicesLabel')}
-                </p>
-                <div className='grid grid-cols-2 gap-4'>
+              <ScheduleFormSection
+                icon={<Timer className='size-4' />}
+                eyebrow={t('sectionDispatchEyebrow')}
+                title={t('sectionDispatchTitle')}
+                description={t('sectionDispatchDescription')}
+              >
+                <div className='grid grid-cols-1 gap-4 sm:grid-cols-2'>
                   <div className='space-y-1'>
                     <Label>{t('randomDelayMinLabel')}</Label>
                     <Input
@@ -914,7 +1091,7 @@ export function ScheduleFormDialog({
                     />
                   </div>
                 )}
-              </div>
+              </ScheduleFormSection>
 
               {(createMutation.error || updateMutation.error) && (
                 <p className='text-xs text-destructive'>
@@ -929,11 +1106,68 @@ export function ScheduleFormDialog({
             </div>
 
             <div className='xl:sticky xl:top-0 xl:self-start'>
-              <ScheduleCalendarPreview
-                schedules={[previewSchedule]}
-                compact
-                className='overflow-hidden shadow-sm'
-              />
+              <aside className='overflow-hidden rounded-lg border bg-background shadow-sm'>
+                <div className='border-b bg-muted/20 px-4 py-3'>
+                  <div className='flex items-start justify-between gap-3'>
+                    <div className='min-w-0'>
+                      <div className='flex items-center gap-2'>
+                        <CalendarCheck2 className='size-4 text-muted-foreground' />
+                        <h3 className='text-sm font-semibold'>
+                          {t('summaryTitle')}
+                        </h3>
+                      </div>
+                      <p className='mt-1 text-xs leading-5 text-muted-foreground'>
+                        {t('summaryDescription')}
+                      </p>
+                    </div>
+                    <Badge
+                      variant={
+                        readinessLabel === t('summaryReady')
+                          ? 'default'
+                          : 'secondary'
+                      }
+                      className='shrink-0'
+                    >
+                      {readinessLabel}
+                    </Badge>
+                  </div>
+                </div>
+                <dl className='space-y-3 p-4'>
+                  <SummaryRow
+                    label={t('summaryName')}
+                    value={previewSchedule.name}
+                  />
+                  <SummaryRow
+                    label={t('summaryTarget')}
+                    value={previewTargetLabel}
+                  />
+                  <SummaryRow
+                    label={t('summaryDevices')}
+                    value={deviceSummary}
+                  />
+                  <SummaryRow
+                    label={t('summaryFrequency')}
+                    value={scheduleSummary}
+                  />
+                  <SummaryRow label={t('summaryTimezone')} value={timezone} />
+                  <SummaryRow
+                    label={t('summaryDispatch')}
+                    value={delaySummary}
+                  />
+                </dl>
+                <Separator />
+                <div className='p-4 pt-3'>
+                  <div className='mb-3 flex items-center gap-2 text-sm font-semibold'>
+                    <Settings2 className='size-4 text-muted-foreground' />
+                    {t('summaryPreviewTitle')}
+                  </div>
+                  <ScheduleCalendarPreview
+                    schedules={[previewSchedule]}
+                    compact
+                    className='overflow-hidden'
+                  />
+                </div>
+              </aside>
             </div>
           </div>
         </div>

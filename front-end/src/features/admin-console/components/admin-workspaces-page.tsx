@@ -11,6 +11,7 @@ import {
   Edit,
   KeyRound,
   LogIn,
+  MoreHorizontal,
   Plus,
   Server,
   ShieldCheck,
@@ -24,9 +25,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { ROUTES } from '@/config/routes';
 import { Link, useRouter } from '@/i18n/navigation';
-import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu';
 import {
   Dialog,
   DialogContent,
@@ -51,11 +58,6 @@ import {
   TableHeader,
   TableRow
 } from '@/components/ui/table';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger
-} from '@/components/ui/tooltip';
 import { Textarea } from '@/components/ui/textarea';
 import {
   AlertDialog,
@@ -79,7 +81,10 @@ import {
   StatusBadge,
   SubmitSpinner
 } from './admin-shared';
-import { useAdminWorkspaceScope } from '../hooks/use-admin-workspace-scope';
+import {
+  ADMIN_ALL_WORKSPACES,
+  useAdminWorkspaceScope
+} from '../hooks/use-admin-workspace-scope';
 import type { ProtoOrganization } from '@/features/device-farm';
 import { useOrganization } from '@/features/organization/hooks/use-organization';
 import {
@@ -114,21 +119,6 @@ function workspaceToOrganization(
     plan: workspace.plan,
     created_at: workspace.created_at
   };
-}
-
-function ActionTooltip({
-  label,
-  children
-}: {
-  label: string;
-  children: ReactNode;
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>{children}</TooltipTrigger>
-      <TooltipContent side='top'>{label}</TooltipContent>
-    </Tooltip>
-  );
 }
 
 export function AdminWorkspacesPage() {
@@ -168,7 +158,8 @@ export function AdminWorkspacesPage() {
 
   const workspaces = useQuery({
     queryKey: ['admin-workspaces', params],
-    queryFn: () => adminApi.listWorkspaces(params)
+    queryFn: () => adminApi.listWorkspaces(params),
+    placeholderData: (previous) => previous
   });
 
   const deepLinkedWorkspace = useQuery({
@@ -180,7 +171,8 @@ export function AdminWorkspacesPage() {
   const summary = useQuery({
     queryKey: ['admin-summary', scope.scopedWorkspaceId],
     queryFn: () => adminApi.summary({ workspaceId: scope.scopedWorkspaceId }),
-    staleTime: 30_000
+    staleTime: 30_000,
+    placeholderData: (previous) => previous
   });
 
   const pageCounts = useMemo(() => {
@@ -192,6 +184,66 @@ export function AdminWorkspacesPage() {
       { admins: 0, members: 0 }
     );
   }, [workspaces.data?.items]);
+
+  const hasActiveFilters =
+    search.trim().length > 0 ||
+    status !== ALL ||
+    scope.workspaceId !== ADMIN_ALL_WORKSPACES;
+  const isInitialWorkspaceLoading = workspaces.isLoading && !workspaces.data;
+  const isInitialSummaryLoading = summary.isLoading && !summary.data;
+  const overviewUnavailable = t('overview.unavailable');
+  const overviewLoading = t('overview.loading');
+  const overviewItems: Array<{
+    label: string;
+    value: ReactNode;
+    detail: string;
+  }> = [
+    {
+      label: t('overview.workspaces'),
+      value: isInitialWorkspaceLoading
+        ? overviewLoading
+        : (workspaces.data?.total ??
+          summary.data?.totalWorkspaces ??
+          overviewUnavailable),
+      detail: t('overview.activeWorkspaces', {
+        count: summary.data?.activeWorkspaces ?? 0
+      })
+    },
+    {
+      label: t('overview.devices'),
+      value: isInitialSummaryLoading
+        ? overviewLoading
+        : (summary.data?.totalDevices ?? overviewUnavailable),
+      detail: t('overview.unassignedDevices', {
+        count: summary.data?.unassignedDevices ?? 0
+      })
+    },
+    {
+      label: t('overview.agents'),
+      value: isInitialSummaryLoading
+        ? overviewLoading
+        : (summary.data?.totalAgents ?? overviewUnavailable),
+      detail: t('overview.onlineAgents', {
+        count: summary.data?.onlineAgents ?? 0
+      })
+    },
+    {
+      label: t('overview.adminsOnPage'),
+      value: isInitialWorkspaceLoading ? overviewLoading : pageCounts.admins,
+      detail: t('overview.membersOnPage', {
+        count: pageCounts.members
+      })
+    }
+  ];
+
+  const resetFilters = () => {
+    setSearch('');
+    setStatus(ALL);
+    if (scope.allowGlobalScope) {
+      scope.setWorkspaceId(ADMIN_ALL_WORKSPACES);
+    }
+    setOffset(0);
+  };
 
   useEffect(() => {
     if (shouldOpenDetail && deepLinkedWorkspace.data) {
@@ -286,6 +338,16 @@ export function AdminWorkspacesPage() {
     onError: (error) => toast.error(formatAdminApiError(error))
   });
 
+  const poolBusyWorkspaceId = updateMutation.isPending
+    ? updateMutation.variables?.id
+    : null;
+  const passwordBusyWorkspaceId = resetPasswordMutation.isPending
+    ? resetPasswordMutation.variables
+    : null;
+  const deleteBusyWorkspaceId = deleteMutation.isPending
+    ? deleteMutation.variables
+    : null;
+
   return (
     <div className='min-h-full bg-muted/20'>
       <AdminPageHeader
@@ -293,17 +355,6 @@ export function AdminWorkspacesPage() {
         description={t('description')}
         action={
           <div className='flex flex-col gap-2 sm:flex-row sm:items-center'>
-            <AdminWorkspaceScopeSelect
-              value={scope.workspaceId}
-              onChange={(value) => {
-                scope.setWorkspaceId(value);
-                setOffset(0);
-              }}
-              workspaces={scope.workspaces}
-              allowGlobalScope={scope.allowGlobalScope}
-              workspaceLabel={t('scope.workspace')}
-              allWorkspacesLabel={t('scope.allWorkspaces')}
-            />
             {isSuperadmin ? (
               <Button asChild variant='outline'>
                 <Link href={ROUTES.ADMIN.WORKSPACE_ADMINS}>
@@ -312,7 +363,10 @@ export function AdminWorkspacesPage() {
                 </Link>
               </Button>
             ) : null}
-            <Button onClick={() => setCreateOpen(true)}>
+            <Button
+              onClick={() => setCreateOpen(true)}
+              className='w-full sm:w-auto'
+            >
               <Plus className='mr-2 size-4' />
               {t('newWorkspace')}
             </Button>
@@ -321,41 +375,11 @@ export function AdminWorkspacesPage() {
       />
       <div className='space-y-4 p-4 md:p-6'>
         <section className='overflow-hidden rounded-md border bg-background'>
-          <div className='grid border-b text-sm md:grid-cols-4'>
-            {[
-              {
-                label: t('overview.workspaces'),
-                value:
-                  workspaces.data?.total ?? summary.data?.totalWorkspaces ?? 0,
-                detail: t('overview.activeWorkspaces', {
-                  count: summary.data?.activeWorkspaces ?? 0
-                })
-              },
-              {
-                label: t('overview.devices'),
-                value: summary.data?.totalDevices ?? 0,
-                detail: t('overview.unassignedDevices', {
-                  count: summary.data?.unassignedDevices ?? 0
-                })
-              },
-              {
-                label: t('overview.agents'),
-                value: summary.data?.totalAgents ?? 0,
-                detail: t('overview.onlineAgents', {
-                  count: summary.data?.onlineAgents ?? 0
-                })
-              },
-              {
-                label: t('overview.admins'),
-                value: pageCounts.admins,
-                detail: t('overview.membersOnPage', {
-                  count: pageCounts.members
-                })
-              }
-            ].map((item) => (
+          <div className='grid border-b text-sm sm:grid-cols-2 xl:grid-cols-4'>
+            {overviewItems.map((item) => (
               <div
                 key={item.label}
-                className='border-b px-4 py-3 last:border-b-0 md:border-b-0 md:border-r md:last:border-r-0'
+                className='border-b px-4 py-3 last:border-b-0 xl:border-b-0 xl:border-r xl:last:border-r-0 sm:[&:nth-child(odd)]:border-r'
               >
                 <div className='flex items-baseline justify-between gap-3'>
                   <span className='font-medium'>{item.label}</span>
@@ -393,34 +417,77 @@ export function AdminWorkspacesPage() {
           </div>
         </section>
 
-        <div className='flex flex-col gap-3 rounded-md border bg-background p-3 md:flex-row'>
-          <SearchField
-            value={search}
-            onChange={(value) => {
-              setSearch(value);
-              setOffset(0);
-            }}
-            placeholder={t('searchPlaceholder')}
-          />
-          <Select
-            value={status}
-            onValueChange={(value) => {
-              setStatus(value);
-              setOffset(0);
-            }}
-          >
-            <SelectTrigger className='w-full md:w-[180px]'>
-              <SelectValue placeholder={t('filters.status')} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL}>{t('filters.allStatuses')}</SelectItem>
-              <SelectItem value='active'>{t('statuses.active')}</SelectItem>
-              <SelectItem value='suspended'>
-                {t('statuses.suspended')}
-              </SelectItem>
-              <SelectItem value='archived'>{t('statuses.archived')}</SelectItem>
-            </SelectContent>
-          </Select>
+        <div className='grid gap-3 rounded-md border bg-background p-3 sm:grid-cols-2 xl:grid-cols-[minmax(220px,1fr)_260px_180px_auto]'>
+          <div className='space-y-1.5'>
+            <Label className='text-xs text-muted-foreground'>
+              {t('filters.search')}
+            </Label>
+            <SearchField
+              value={search}
+              onChange={(value) => {
+                setSearch(value);
+                setOffset(0);
+              }}
+              placeholder={t('searchPlaceholder')}
+            />
+          </div>
+          <div className='space-y-1.5'>
+            <Label className='text-xs text-muted-foreground'>
+              {t('filters.scope')}
+            </Label>
+            <AdminWorkspaceScopeSelect
+              value={scope.workspaceId}
+              onChange={(value) => {
+                scope.setWorkspaceId(value);
+                setOffset(0);
+              }}
+              workspaces={scope.workspaces}
+              allowGlobalScope={scope.allowGlobalScope}
+              workspaceLabel={t('scope.workspace')}
+              allWorkspacesLabel={t('scope.allWorkspaces')}
+              triggerClassName='w-full'
+            />
+          </div>
+          <div className='space-y-1.5'>
+            <Label className='text-xs text-muted-foreground'>
+              {t('filters.status')}
+            </Label>
+            <Select
+              value={status}
+              onValueChange={(value) => {
+                setStatus(value);
+                setOffset(0);
+              }}
+            >
+              <SelectTrigger className='w-full md:w-[180px]'>
+                <SelectValue placeholder={t('filters.status')} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>{t('filters.allStatuses')}</SelectItem>
+                <SelectItem value='active'>{t('statuses.active')}</SelectItem>
+                <SelectItem value='suspended'>
+                  {t('statuses.suspended')}
+                </SelectItem>
+                <SelectItem value='archived'>
+                  {t('statuses.archived')}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className='flex items-end justify-between gap-3 sm:col-span-2 xl:col-span-1 xl:justify-end'>
+            <p className='text-sm text-muted-foreground'>
+              {isInitialWorkspaceLoading
+                ? t('filters.loading')
+                : t('filters.resultCount', {
+                    count: workspaces.data?.total ?? 0
+                  })}
+            </p>
+            {hasActiveFilters ? (
+              <Button variant='ghost' size='sm' onClick={resetFilters}>
+                {t('filters.clear')}
+              </Button>
+            ) : null}
+          </div>
         </div>
 
         {workspaces.isError ? (
@@ -438,19 +505,17 @@ export function AdminWorkspacesPage() {
                   <TableHead>{t('table.workspace')}</TableHead>
                   <TableHead>{t('table.owner')}</TableHead>
                   <TableHead>{t('table.status')}</TableHead>
-                  <TableHead>{t('table.agents')}</TableHead>
-                  <TableHead>{t('table.devices')}</TableHead>
-                  <TableHead>{t('table.members')}</TableHead>
-                  <TableHead>{t('table.admins')}</TableHead>
+                  <TableHead>{t('table.capacity')}</TableHead>
+                  <TableHead>{t('table.people')}</TableHead>
                   <TableHead>{t('table.updated')}</TableHead>
-                  <TableHead className='w-[260px] text-right'>
+                  <TableHead className='w-[180px] text-right'>
                     {t('table.actions')}
                   </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {workspaces.isLoading ? (
-                  <AdminTableSkeleton columns={9} />
+                  <AdminTableSkeleton columns={7} />
                 ) : null}
                 {workspaces.data?.items.map((workspace) => (
                   <TableRow key={workspace.id}>
@@ -468,150 +533,167 @@ export function AdminWorkspacesPage() {
                           ) : null}
                         </p>
                         <p className='line-clamp-1 text-xs text-muted-foreground'>
-                          {workspace.description ||
-                            workspace.businessEmail ||
-                            workspace.id}
+                          {workspace.description || t('table.noDescription')}
                         </p>
                       </div>
                     </TableCell>
                     <TableCell>
                       <div className='min-w-[180px] text-sm'>
-                        <p>{workspace.owner?.name || '-'}</p>
+                        <p>
+                          {workspace.owner
+                            ? t('table.ownerAssigned')
+                            : t('table.noOwner')}
+                        </p>
                         <p className='text-xs text-muted-foreground'>
-                          {workspace.owner?.email || '-'}
+                          {workspace.owner
+                            ? t('table.ownerManagedInDetails')
+                            : t('table.ownerMissing')}
                         </p>
                       </div>
                     </TableCell>
                     <TableCell>
                       <StatusBadge value={workspace.status} />
                     </TableCell>
-                    <TableCell>{workspace.agentCount}</TableCell>
-                    <TableCell>{workspace.deviceCount}</TableCell>
-                    <TableCell>{workspace.memberCount}</TableCell>
                     <TableCell>
-                      <div className='flex max-w-[220px] flex-wrap gap-1'>
-                        {(workspace.workspaceAdmins ?? []).length ? (
-                          (workspace.workspaceAdmins ?? [])
-                            .slice(0, 2)
-                            .map((admin) => (
-                              <span
-                                key={admin.user_id}
-                                className='rounded border bg-muted px-1.5 py-0.5 text-xs'
-                              >
-                                {admin.name || admin.email}
-                              </span>
-                            ))
-                        ) : (
-                          <span className='text-sm text-muted-foreground'>
-                            {t('table.noAdmins')}
+                      <div className='min-w-[160px] space-y-1 text-sm'>
+                        <div className='flex items-center gap-2'>
+                          <Server className='size-3.5 text-muted-foreground' />
+                          <span>
+                            {t('table.agentCount', {
+                              count: workspace.agentCount
+                            })}
                           </span>
-                        )}
-                        {workspace.adminCount > 2 ? (
-                          <span className='text-xs text-muted-foreground'>
-                            +{workspace.adminCount - 2}
+                        </div>
+                        <div className='flex items-center gap-2'>
+                          <Smartphone className='size-3.5 text-muted-foreground' />
+                          <span>
+                            {t('table.deviceCount', {
+                              count: workspace.deviceCount
+                            })}
                           </span>
-                        ) : null}
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className='min-w-[220px] space-y-2'>
+                        <p className='text-sm'>
+                          {t('table.memberCount', {
+                            count: workspace.memberCount
+                          })}
+                        </p>
+                        <div className='flex flex-wrap gap-1'>
+                          {(workspace.workspaceAdmins ?? []).length ? (
+                            (workspace.workspaceAdmins ?? [])
+                              .slice(0, 2)
+                              .map((admin) => (
+                                <span
+                                  key={admin.user_id}
+                                  className='rounded border bg-muted px-1.5 py-0.5 text-xs'
+                                >
+                                  {admin.name || admin.email}
+                                </span>
+                              ))
+                          ) : (
+                            <span className='text-sm text-muted-foreground'>
+                              {t('table.noAdmins')}
+                            </span>
+                          )}
+                          {workspace.adminCount > 2 ? (
+                            <span className='text-xs text-muted-foreground'>
+                              +{workspace.adminCount - 2}
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
                     </TableCell>
                     <TableCell className='text-sm text-muted-foreground'>
                       {dateLabel(workspace.updated_at)}
                     </TableCell>
                     <TableCell>
-                      <div className='flex justify-end gap-1.5'>
+                      <div className='flex flex-col justify-end gap-1.5 sm:flex-row'>
                         <Button
                           size='sm'
+                          className='w-full sm:w-auto'
                           onClick={() => enterWorkspace(workspace)}
                         >
                           <LogIn className='mr-2 size-4' />
                           {t('actions.enterWorkspace')}
                         </Button>
-                        <Button
-                          size='sm'
-                          variant='outline'
-                          onClick={() => setAccessWorkspace(workspace)}
-                        >
-                          <ShieldCheck className='mr-2 size-4' />
-                          {t('actions.details')}
-                        </Button>
-                        <ActionTooltip
-                          label={
-                            workspace.kind === 'pool'
-                              ? t('actions.unmarkPool')
-                              : t('actions.markPool')
-                          }
-                        >
-                          <Button
-                            size='icon'
-                            variant='ghost'
-                            className='size-8'
-                            aria-label={
-                              workspace.kind === 'pool'
-                                ? t('actions.unmarkPool')
-                                : t('actions.markPool')
-                            }
-                            disabled={updateMutation.isPending}
-                            onClick={() =>
-                              updateMutation.mutate({
-                                id: workspace.id,
-                                body: {
-                                  kind:
-                                    workspace.kind === 'pool'
-                                      ? 'tenant'
-                                      : 'pool'
-                                }
-                              })
-                            }
-                          >
-                            <Server
-                              className={cn(
-                                'size-4',
-                                workspace.kind === 'pool'
-                                  ? 'text-sky-600 dark:text-sky-400'
-                                  : undefined
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              size='icon'
+                              variant='outline'
+                              className='size-9'
+                              aria-label={t('actions.more')}
+                            >
+                              <MoreHorizontal className='size-4' />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align='end' className='w-56'>
+                            <DropdownMenuItem
+                              onClick={() => setAccessWorkspace(workspace)}
+                            >
+                              <ShieldCheck className='size-4' />
+                              {t('actions.details')}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              disabled={poolBusyWorkspaceId === workspace.id}
+                              onClick={() =>
+                                updateMutation.mutate({
+                                  id: workspace.id,
+                                  body: {
+                                    kind:
+                                      workspace.kind === 'pool'
+                                        ? 'tenant'
+                                        : 'pool'
+                                  }
+                                })
+                              }
+                            >
+                              {poolBusyWorkspaceId === workspace.id ? (
+                                <SubmitSpinner />
+                              ) : (
+                                <Server className='size-4' />
                               )}
-                            />
-                          </Button>
-                        </ActionTooltip>
-                        <ActionTooltip label={t('actions.edit')}>
-                          <Button
-                            size='icon'
-                            variant='ghost'
-                            className='size-8'
-                            aria-label={t('actions.edit')}
-                            onClick={() => setEditWorkspace(workspace)}
-                          >
-                            <Edit className='size-4' />
-                          </Button>
-                        </ActionTooltip>
-                        <ActionTooltip label={t('actions.resetOwnerPassword')}>
-                          <Button
-                            size='icon'
-                            variant='ghost'
-                            className='size-8'
-                            aria-label={t('actions.resetOwnerPassword')}
-                            disabled={
-                              resetPasswordMutation.isPending ||
-                              !workspace.owner
-                            }
-                            onClick={() =>
-                              resetPasswordMutation.mutate(workspace.id)
-                            }
-                          >
-                            <KeyRound className='size-4' />
-                          </Button>
-                        </ActionTooltip>
-                        <ActionTooltip label={t('actions.delete')}>
-                          <Button
-                            size='icon'
-                            variant='ghost'
-                            className='size-8 text-destructive hover:text-destructive'
-                            aria-label={t('actions.delete')}
-                            disabled={deleteMutation.isPending}
-                            onClick={() => setDeleteWorkspace(workspace)}
-                          >
-                            <Trash2 className='size-4' />
-                          </Button>
-                        </ActionTooltip>
+                              {workspace.kind === 'pool'
+                                ? t('actions.unmarkPool')
+                                : t('actions.markPool')}
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              onClick={() => setEditWorkspace(workspace)}
+                            >
+                              <Edit className='size-4' />
+                              {t('actions.edit')}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              disabled={
+                                passwordBusyWorkspaceId === workspace.id ||
+                                !workspace.owner
+                              }
+                              onClick={() =>
+                                resetPasswordMutation.mutate(workspace.id)
+                              }
+                            >
+                              {passwordBusyWorkspaceId === workspace.id ? (
+                                <SubmitSpinner />
+                              ) : (
+                                <KeyRound className='size-4' />
+                              )}
+                              {t('actions.resetOwnerPassword')}
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              variant='destructive'
+                              disabled={deleteBusyWorkspaceId === workspace.id}
+                              onClick={() => setDeleteWorkspace(workspace)}
+                            >
+                              <Trash2 className='size-4' />
+                              {t('actions.delete')}
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -619,11 +701,33 @@ export function AdminWorkspacesPage() {
                 {!workspaces.isLoading &&
                 workspaces.data?.items.length === 0 ? (
                   <TableRow>
-                    <TableCell
-                      colSpan={9}
-                      className='h-28 text-center text-sm text-muted-foreground'
-                    >
-                      {t('empty')}
+                    <TableCell colSpan={7} className='h-40 text-center'>
+                      <div className='mx-auto flex max-w-md flex-col items-center gap-3 py-6'>
+                        <p className='text-sm font-medium text-foreground'>
+                          {hasActiveFilters
+                            ? t('emptyFilteredTitle')
+                            : t('emptyTitle')}
+                        </p>
+                        <p className='text-sm text-muted-foreground'>
+                          {hasActiveFilters
+                            ? t('emptyFilteredDescription')
+                            : t('emptyDescription')}
+                        </p>
+                        {hasActiveFilters ? (
+                          <Button
+                            variant='outline'
+                            size='sm'
+                            onClick={resetFilters}
+                          >
+                            {t('filters.clear')}
+                          </Button>
+                        ) : (
+                          <Button size='sm' onClick={() => setCreateOpen(true)}>
+                            <Plus className='mr-2 size-4' />
+                            {t('newWorkspace')}
+                          </Button>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ) : null}
@@ -672,7 +776,9 @@ export function AdminWorkspacesPage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>
+              {t('common.cancel')}
+            </AlertDialogCancel>
             <AlertDialogAction
               className='bg-destructive text-destructive-foreground hover:bg-destructive/90'
               disabled={deleteMutation.isPending}
@@ -681,7 +787,9 @@ export function AdminWorkspacesPage() {
               }
             >
               {deleteMutation.isPending ? <SubmitSpinner /> : null}
-              {t('delete.confirm')}
+              {deleteMutation.isPending
+                ? t('delete.deleting')
+                : t('delete.confirm')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

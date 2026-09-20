@@ -570,7 +570,7 @@
     "admin_accounts": "Workspace accounts",
     "admin_content": "Collected results",
     "admin_workspace_admins": "Workspace admins",
-    "admin_agents": "Admin agents",
+    "admin_agents": "Agents",
     "admin_devices": "Admin devices",
     "admin_platform_apps": "Platform apps",
     "admin_audit": "Admin audit",
@@ -5833,16 +5833,16 @@
       "countLabel": "schedules",
       "trigger": "New schedule",
       "emptyTitle": "No schedules",
-      "emptyDescription": "Create a schedule to run campaigns/templates automatically.",
+      "emptyDescription": "Create a schedule so Device Farm can run your automation at the right time.",
       "quickStartTitle": "Suggested workflow",
-      "quickStartStep1": "Create a device group (used by schedules and campaigns).",
-      "quickStartStep2": "Create a campaign or a scenario template.",
-      "quickStartStep3": "Create a schedule and pick the group + campaign/template.",
+      "quickStartStep1": "Prepare the phones you want to use.",
+      "quickStartStep2": "Choose the campaign or scenario that should run.",
+      "quickStartStep3": "Create a schedule, then review the devices, cadence, and target before saving.",
       "quickStartGoDeviceGroups": "Go to Device Groups",
       "quickStartGoCampaigns": "Go to Campaigns",
       "colName": "Name",
       "colTarget": "Target",
-      "colCron": "Cron",
+      "colCron": "Frequency",
       "colEnabled": "Enabled",
       "enabledOn": "ON",
       "enabledOff": "OFF",
@@ -5876,7 +5876,7 @@
       "close": "Close"
     },
     "cronBuilder": {
-      "cronScheduleLabel": "Cron schedule",
+      "cronScheduleLabel": "Run frequency",
       "simple": "Simple",
       "advanced": "Advanced",
       "preset": "Preset",
@@ -5894,9 +5894,9 @@
       "endHour": "End hour",
       "stepHours": "Step hours",
       "minute": "Minute",
-      "rawCronExpression": "Raw cron expression",
+      "rawCronExpression": "Advanced cron expression",
       "rawCronPlaceholder": "*/30 * * * *",
-      "rawCronHelp": "5 fields (minute hour day month day-of-week), Croniter-compatible.",
+      "rawCronHelp": "Use this only when presets do not cover the timing you need.",
       "everyMinutes": "Every {interval} minutes",
       "everyHoursAtMinute": "Every {interval} hours at {minute}:00",
       "dailyAt": "Every day at {hour}:{minute}",
@@ -5926,6 +5926,11 @@
     "form": {
       "titleCreate": "Create schedule",
       "titleEdit": "Edit schedule: {name}",
+      "subtitleCreate": "Pick what runs, where it runs, and when the automation should start.",
+      "subtitleEdit": "Review the target, devices, and cadence before saving the schedule.",
+      "sectionBasicsEyebrow": "Step 1",
+      "sectionBasicsTitle": "Name the automation",
+      "sectionBasicsDescription": "Use a name operators can recognize later in history and run monitoring.",
       "nameLabel": "Name",
       "namePlaceholder": "Schedule name",
       "enabledLabel": "Enabled",
@@ -5933,6 +5938,9 @@
       "enabledOff": "OFF",
       "descriptionLabel": "Description",
       "optional": "Optional",
+      "sectionTargetEyebrow": "Step 2",
+      "sectionTargetTitle": "Choose what will run",
+      "sectionTargetDescription": "Select the campaign, template, or organization scenario this schedule should dispatch.",
       "targetTypeLabel": "Target type",
       "targetCampaign": "Campaign",
       "targetTemplate": "Template",
@@ -5950,17 +5958,28 @@
       "targetPreviousPage": "Previous page",
       "targetNextPage": "Next page",
       "inlineStepsLabel": "Steps ({count} steps)",
+      "sectionScheduleEyebrow": "Step 3",
+      "sectionScheduleTitle": "Set the cadence",
+      "sectionScheduleDescription": "Start with presets for common schedules, or switch to cron when you need precision.",
       "timezoneLabel": "Timezone",
       "timezonePlaceholder": "Asia/Ho_Chi_Minh",
+      "sectionDevicesEyebrow": "Step 4",
+      "sectionDevicesTitle": "Pick the device scope",
+      "sectionDevicesDescription": "Limit the run to ready devices, a device group, or selected phones.",
       "deviceModeLabel": "Target devices",
       "deviceModeAll": "All ready devices",
+      "deviceModeAllHelp": "Let the scheduler use any device that is ready when the run starts.",
       "deviceModeGroup": "By group",
+      "deviceModeGroupHelp": "Limit this schedule to a saved device group.",
       "deviceModeDevices": "Pick devices",
+      "deviceModeDevicesHelp": "Choose the exact devices that may run this schedule.",
       "devicePickerPlaceholder": "Pick devices to run on",
       "devicePickerSearch": "Search by serial, name or model…",
       "devicePickerEmpty": "No matching devices",
       "devicePickerSelected": "{count} devices selected",
       "devicePickerClear": "Clear all",
+      "devicePickerReadyHint": "Schedules normally run on ready devices. Check the status before selecting a phone.",
+      "devicePickerReadyState": "Ready",
       "deviceGroupLabel": "Device group (optional)",
       "allReadyDevices": "All ready devices",
       "filterStateLabel": "Device state filter",
@@ -5968,6 +5987,9 @@
       "filterModelLabel": "Filter by model",
       "filterModelPlaceholder": "device model (optional)",
       "maxDevicesLabel": "Max devices",
+      "sectionDispatchEyebrow": "Step 5",
+      "sectionDispatchTitle": "Control dispatch pacing",
+      "sectionDispatchDescription": "Use random delay or staggered starts to avoid every device beginning at the same moment.",
       "randomDelayMinLabel": "Min random delay (seconds)",
       "randomDelayMaxLabel": "Max random delay (seconds)",
       "staggerDevicesLabel": "Stagger device dispatch",
@@ -5989,7 +6011,26 @@
       "createSuccess": "Schedule created",
       "createFailed": "Create schedule failed",
       "updateSuccess": "Schedule updated",
-      "updateFailed": "Update schedule failed"
+      "updateFailed": "Update schedule failed",
+      "summaryTitle": "Review schedule",
+      "summaryDescription": "A quick check of the run before you save.",
+      "summaryReady": "Ready",
+      "summaryNeedsInput": "Needs input",
+      "summaryName": "Name",
+      "summaryTarget": "Runs",
+      "summaryDevices": "Devices",
+      "summaryFrequency": "Frequency",
+      "summaryTimezone": "Timezone",
+      "summaryDispatch": "Pacing",
+      "summaryPreviewTitle": "Weekly schedule preview",
+      "summarySelectedDevices": "{count} selected devices",
+      "summaryNoDevices": "No devices selected",
+      "summaryAllReadyDevices": "All ready devices",
+      "summaryDeviceGroup": "Group: {name}",
+      "summaryUnknownGroup": "Selected group",
+      "summaryRandomDelay": "Random delay {min}-{max}s",
+      "summaryStagger": "Stagger every {seconds}s",
+      "summaryNoDelay": "Start together"
     },
     "actions": {
       "runNow": "Run now",
@@ -6607,7 +6648,7 @@
     },
     "dashboard": {
       "title": "Admin dashboard",
-      "description": "Operational overview for workspaces, relay agents, devices, and recent health signals.",
+      "description": "Operational overview for workspaces, agents, phones, and recent health signals.",
       "metrics": {
         "workspaces": "Workspaces",
         "suspended": "Suspended",
@@ -6615,14 +6656,16 @@
         "devices": "Devices",
         "activeDetail": "{count} active",
         "archivedDetail": "{count} archived",
-        "onlineDetail": "{count} online",
-        "unassignedDetail": "{count} unassigned"
+        "onlineDetail": "{count} online agents",
+        "unassignedDetail": "{count} unassigned",
+        "loading": "Loading…",
+        "unavailable": "—"
       },
       "workspaceOverview": {
         "title": "Workspace command center",
         "description": "{count} workspaces in the current admin scope",
         "manageAll": "Manage workspaces",
-        "provisionAccounts": "Provision accounts",
+        "provisionAccounts": "Manage workspace admins",
         "allocatePhones": "Allocate phones",
         "enterWorkspace": "Enter workspace",
         "open": "Open",
@@ -6638,7 +6681,14 @@
           "devices": "Phones",
           "updated": "Updated",
           "action": "Action"
-        }
+        },
+        "loadingDescription": "Loading workspaces in the current admin scope",
+        "noDescription": "No description",
+        "noOwnerEmail": "No owner email",
+        "emptyTitle": "No workspaces to show",
+        "emptyDescription": "Create or adjust admin scope to see workspaces here.",
+        "ownerAssigned": "Owner assigned",
+        "ownerManagedInDetails": "View email in details"
       },
       "devicesByWorkspace": "Devices by workspace",
       "agentsByWorkspace": "Agents by workspace",
@@ -6649,7 +6699,7 @@
         "summary": "{count} items to check",
         "clear": "No items need attention",
         "offlineAgents": "Disconnected agents",
-        "offlineAgentsDetail": "Relay hosts are offline",
+        "offlineAgentsDetail": "Agents are offline",
         "staleAgents": "Agents with stale heartbeat",
         "staleAgentsDetail": "No recent heartbeat",
         "viewAgents": "Agents"
@@ -6660,20 +6710,20 @@
       },
       "setup": {
         "title": "Device pool setup",
-        "description": "Follow these steps to turn relay-host phones into workspace resources: create a pool, issue its activation code, enroll an agent, then allocate phones to tenant workspaces.",
+        "description": "Follow these steps to turn agent phones into workspace resources: connect an agent, issue its code, confirm phones are online, then assign phones to workspaces.",
         "primaryAction": "Open agents",
         "poolWorkspace": {
           "title": "Create a pool workspace",
-          "description": "A pool workspace owns relay hosts and is the source of phones that can be shared.",
+          "description": "An agent workspace owns the machines that connect phones and makes phones available to other workspaces.",
           "action": "Manage workspaces"
         },
         "activation": {
           "title": "Issue a pool activation code",
-          "description": "Create the agent code from the pool workspace so the host can share its phones.",
+          "description": "Create the agent code from the agent workspace so the machine can share phones.",
           "action": "Create code"
         },
         "agent": {
-          "title": "Enroll the relay agent",
+          "title": "Connect the agent",
           "description": "Start the agent with that code and wait for it to report online with phone serials.",
           "action": "View agents"
         },
@@ -6686,12 +6736,16 @@
     },
     "workspaces": {
       "title": "Workspaces",
-      "description": "Overview of every workspace in the admin scope; use filters only when you need to narrow the view.",
+      "description": "Manage each workspace's owner, admins, phone capacity, agents, and operating status from one table.",
       "newWorkspace": "New workspace",
-      "accountProvisioning": "Provision accounts",
+      "accountProvisioning": "Manage workspace admins",
       "allocatePhones": "Allocate phones",
       "searchPlaceholder": "Search workspace, email, description",
       "empty": "No workspaces found.",
+      "emptyTitle": "No workspaces yet",
+      "emptyDescription": "Create the first workspace, then add its owner, admins, phones, and agents.",
+      "emptyFilteredTitle": "No workspaces match these filters",
+      "emptyFilteredDescription": "Clear the filters or search by workspace name, owner email, or description.",
       "common": {
         "cancel": "Cancel",
         "create": "Create",
@@ -6705,8 +6759,13 @@
         "lifecycleUpdated": "Workspace lifecycle updated"
       },
       "filters": {
+        "search": "Search",
+        "scope": "Admin scope",
         "status": "Status",
-        "allStatuses": "All statuses"
+        "allStatuses": "All statuses",
+        "resultCount": "{count} results",
+        "clear": "Clear filters",
+        "loading": "Loading results…"
       },
       "scope": {
         "workspace": "Admin scope",
@@ -6726,19 +6785,30 @@
         "activeWorkspaces": "{count} active",
         "unassignedDevices": "{count} unassigned phones",
         "onlineAgents": "{count} online agents",
-        "membersOnPage": "{count} members on this page"
+        "membersOnPage": "{count} members on this page",
+        "loading": "Loading…",
+        "unavailable": "—",
+        "adminsOnPage": "Admins on this page"
       },
       "table": {
         "workspace": "Workspace",
         "owner": "Owner",
         "status": "Status",
-        "agents": "Agents",
-        "devices": "Devices",
-        "members": "Users",
+        "capacity": "Capacity",
+        "people": "People",
+        "agentCount": "{count} agents",
+        "deviceCount": "{count} phones",
+        "memberCount": "{count} users",
         "admins": "Admins",
         "noAdmins": "No admins",
+        "noDescription": "No description",
         "updated": "Updated",
-        "actions": "Actions"
+        "actions": "Actions",
+        "hostCount": "{count} hosts",
+        "ownerAssigned": "Owner assigned",
+        "ownerMissing": "Owner not assigned",
+        "noOwner": "No owner",
+        "ownerManagedInDetails": "View email in details"
       },
       "actions": {
         "enterWorkspace": "Enter workspace",
@@ -6747,8 +6817,9 @@
         "resetOwnerPassword": "Reset owner password",
         "archive": "Archive workspace",
         "delete": "Delete workspace",
-        "markPool": "Mark as pool workspace",
-        "unmarkPool": "Unmark pool workspace"
+        "more": "More workspace actions",
+        "markPool": "Use for agent phone pool",
+        "unmarkPool": "Stop using for agent phone pool"
       },
       "archive": {
         "title": "Archive workspace?",
@@ -6758,7 +6829,8 @@
       "delete": {
         "title": "Delete workspace?",
         "description": "This permanently deletes \"{name}\". It only works after phones, agents, campaigns, accounts, and other workspace data have been moved or removed. Users are not deleted.",
-        "confirm": "Delete"
+        "confirm": "Delete",
+        "deleting": "Deleting…"
       },
       "secret": {
         "title": "Temporary password",
@@ -6773,9 +6845,9 @@
         "ownerName": "Owner name",
         "description": "Description",
         "kind": "Type",
-        "kindPool": "Pool (owns relay hosts)",
-        "kindTenant": "Tenant (receives phones)",
-        "kindHint": "Pool workspaces own relay hosts and can allocate phones to other workspaces. Tenant workspaces receive phones and use them for automation."
+        "kindPool": "Agent pool workspace",
+        "kindTenant": "Workspace that receives phones",
+        "kindHint": "An agent pool workspace connects phones. A receiving workspace uses assigned phones for automation."
       },
       "editDialog": {
         "title": "Edit workspace",
@@ -6791,9 +6863,9 @@
         "suspend": "Suspend",
         "reactivate": "Reactivate",
         "kind": "Type",
-        "kindPool": "Pool (owns relay hosts)",
-        "kindTenant": "Tenant (receives phones)",
-        "kindHint": "Pool workspaces own relay hosts and can allocate phones to other workspaces. Tenant workspaces receive phones and use them for automation."
+        "kindPool": "Agent pool workspace",
+        "kindTenant": "Workspace that receives phones",
+        "kindHint": "An agent pool workspace connects phones. A receiving workspace uses assigned phones for automation."
       },
       "access": {
         "title": "Workspace details",
@@ -6876,11 +6948,11 @@
       "setup": {
         "title": "Set up a pool before allocating phones",
         "description": "Use one Pool workspace for relay hosts, create its activation code, then allocate reported phones to tenant workspaces.",
-        "stepPool": "Create or mark a Pool workspace",
-        "stepActivation": "Create an activation code from that pool",
-        "stepAllocation": "Allocate phones from the pool agent",
-        "activationAction": "Create activation code",
-        "allocateAction": "Allocate phones",
+        "stepPool": "1. Connect an agent",
+        "stepActivation": "2. Confirm phones are online",
+        "stepAllocation": "3. Give phones to a workspace",
+        "activationAction": "Create agent code",
+        "allocateAction": "Assign phones",
         "eyebrow": "Device pool flow"
       }
     },

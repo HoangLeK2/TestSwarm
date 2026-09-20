@@ -1,11 +1,18 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { useTranslations } from 'next-intl';
-import { ChevronLeft, ChevronRight, ChevronsUpDown, Search, X } from 'lucide-react';
+import { useLocale, useTranslations } from 'next-intl';
+import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronsUpDown,
+  Search,
+  X
+} from 'lucide-react';
 
 import { useDevicePage } from '@/features/devices/hooks/use-devices';
 import { useDebouncedCallback } from '@/hooks/use-debounced-callback';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -16,6 +23,51 @@ import {
 } from '@/components/ui/popover';
 
 const PAGE_SIZE = 8;
+const SCHEDULE_DEVICE_PICKER_COPY_FALLBACKS = {
+  devicePickerReadyHint: {
+    en: 'Schedules normally run on ready devices. Check the status before selecting a phone.',
+    vi: 'Lịch thường chạy trên thiết bị sẵn sàng. Hãy kiểm tra trạng thái trước khi chọn máy.'
+  },
+  devicePickerReadyState: {
+    en: 'Ready',
+    vi: 'Sẵn sàng'
+  }
+} as const;
+
+type ScheduleDevicePickerCopyKey =
+  keyof typeof SCHEDULE_DEVICE_PICKER_COPY_FALLBACKS;
+
+function normalizeDeviceState(state: string | null | undefined) {
+  return (state || 'UNKNOWN').trim().toUpperCase();
+}
+
+function isReadyLikeDeviceState(state: string | null | undefined) {
+  const normalized = normalizeDeviceState(state);
+  return normalized === 'READY' || normalized === 'ONLINE';
+}
+
+function translateDevicePickerCopy(
+  t: (key: string) => string,
+  locale: string,
+  key: ScheduleDevicePickerCopyKey
+) {
+  try {
+    const translated = t(key);
+    if (
+      translated &&
+      translated !== key &&
+      translated !== `schedulesFeature.form.${key}`
+    ) {
+      return translated;
+    }
+  } catch {
+    // Use a readable fallback if the runtime message bundle is stale.
+  }
+
+  return SCHEDULE_DEVICE_PICKER_COPY_FALLBACKS[key][
+    locale === 'en' ? 'en' : 'vi'
+  ];
+}
 
 export function ScheduleDevicePicker({
   value,
@@ -25,6 +77,7 @@ export function ScheduleDevicePicker({
   onChange: (next: string[]) => void;
 }) {
   const t = useTranslations('schedulesFeature.form');
+  const locale = useLocale();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [query, setQuery] = useState('');
@@ -34,9 +87,23 @@ export function ScheduleDevicePicker({
     300
   );
 
-  const { data } = useDevicePage({ page, pageSize: PAGE_SIZE, q: query || undefined });
+  const { data } = useDevicePage({
+    page,
+    pageSize: PAGE_SIZE,
+    q: query || undefined
+  });
   const items = data?.items ?? [];
   const pageCount = Math.max(1, data?.page_count ?? 1);
+  const readyHint = translateDevicePickerCopy(
+    t,
+    locale,
+    'devicePickerReadyHint'
+  );
+  const readyStateLabel = translateDevicePickerCopy(
+    t,
+    locale,
+    'devicePickerReadyState'
+  );
 
   useEffect(() => {
     setPage(1);
@@ -79,6 +146,9 @@ export function ScheduleDevicePicker({
           align='start'
           className='z-[10001] w-[var(--radix-popover-trigger-width)] p-2'
         >
+          <p className='mb-2 rounded-md bg-muted/40 px-2.5 py-2 text-xs leading-5 text-muted-foreground'>
+            {readyHint}
+          </p>
           <div className='relative'>
             <Search className='pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground' />
             <Input
@@ -93,30 +163,43 @@ export function ScheduleDevicePicker({
           </div>
           <div className='mt-2 max-h-64 overflow-y-auto'>
             {items.length ? (
-              items.map((device) => (
-                <button
-                  key={device.serial}
-                  type='button'
-                  className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground'
-                  onClick={() => toggle(device.serial)}
-                >
-                  <Checkbox
-                    checked={value.includes(device.serial)}
-                    tabIndex={-1}
-                    className='pointer-events-none'
-                  />
-                  <span className='min-w-0 flex-1'>
-                    <span className='block truncate'>
-                      {device.name || device.serial}
+              items.map((device) => {
+                const state = normalizeDeviceState(device.state);
+                const readyLike = isReadyLikeDeviceState(device.state);
+
+                return (
+                  <button
+                    key={device.serial}
+                    type='button'
+                    className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground'
+                    onClick={() => toggle(device.serial)}
+                  >
+                    <Checkbox
+                      checked={value.includes(device.serial)}
+                      tabIndex={-1}
+                      className='pointer-events-none'
+                    />
+                    <span className='min-w-0 flex-1'>
+                      <span className='flex min-w-0 items-center gap-2'>
+                        <span className='min-w-0 flex-1 truncate'>
+                          {device.name || device.serial}
+                        </span>
+                        <Badge
+                          variant={readyLike ? 'default' : 'secondary'}
+                          className='h-5 shrink-0 text-[10px]'
+                        >
+                          {readyLike ? readyStateLabel : state}
+                        </Badge>
+                      </span>
+                      <span className='block truncate text-[11px] text-muted-foreground'>
+                        {[device.brand, device.model].filter(Boolean).join(' ')}
+                        {' · '}
+                        {device.serial}
+                      </span>
                     </span>
-                    <span className='block truncate text-[11px] text-muted-foreground'>
-                      {[device.brand, device.model].filter(Boolean).join(' ')}
-                      {' · '}
-                      {device.serial}
-                    </span>
-                  </span>
-                </button>
-              ))
+                  </button>
+                );
+              })
             ) : (
               <p className='px-2 py-6 text-center text-sm text-muted-foreground'>
                 {t('devicePickerEmpty')}

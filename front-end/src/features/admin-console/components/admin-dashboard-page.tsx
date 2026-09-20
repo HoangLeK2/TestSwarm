@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { type ReactNode, useMemo, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -27,11 +27,15 @@ import { formatDate, getLocaleByNextLocale } from '@/lib/format';
 import {
   AdminErrorState,
   AdminPageHeader,
+  AdminPagination,
+  AdminTableSkeleton,
   AdminWorkspaceScopeSelect,
   StatusBadge
 } from './admin-shared';
 import { adminApi, formatAdminApiError } from '../services/admin-api';
 import { useAdminWorkspaceScope } from '../hooks/use-admin-workspace-scope';
+
+const DASHBOARD_WORKSPACE_PAGE_SIZE = 12;
 
 function Metric({
   label,
@@ -39,7 +43,7 @@ function Metric({
   detail
 }: {
   label: string;
-  value: number;
+  value: ReactNode;
   detail?: string;
 }) {
   return (
@@ -100,18 +104,20 @@ export function AdminDashboardPage() {
   const t = useTranslations('adminConsole.dashboard');
   const locale = getLocaleByNextLocale(useLocale());
   const scope = useAdminWorkspaceScope();
+  const [workspaceOffset, setWorkspaceOffset] = useState(0);
   const workspaceParams = useMemo(
     () => ({
       workspaceId: scope.scopedWorkspaceId,
-      offset: 0,
-      limit: 12
+      offset: workspaceOffset,
+      limit: DASHBOARD_WORKSPACE_PAGE_SIZE
     }),
-    [scope.scopedWorkspaceId]
+    [scope.scopedWorkspaceId, workspaceOffset]
   );
   const summary = useQuery({
     queryKey: ['admin-summary', scope.scopedWorkspaceId],
     queryFn: () => adminApi.summary({ workspaceId: scope.scopedWorkspaceId }),
-    refetchInterval: 30_000
+    refetchInterval: 30_000,
+    placeholderData: (previous) => previous
   });
   const offlineAgents = summary.data?.offlineAgents ?? 0;
   const staleAgents = summary.data?.staleAgents ?? 0;
@@ -119,8 +125,15 @@ export function AdminDashboardPage() {
   const workspaces = useQuery({
     queryKey: ['admin-dashboard-workspaces', workspaceParams],
     queryFn: () => adminApi.listWorkspaces(workspaceParams),
-    refetchInterval: 30_000
+    refetchInterval: 30_000,
+    placeholderData: (previous) => previous
   });
+  const isInitialSummaryLoading = summary.isLoading && !summary.data;
+  const isInitialWorkspacesLoading = workspaces.isLoading && !workspaces.data;
+  const metricValue = (value?: number | null) =>
+    isInitialSummaryLoading
+      ? t('metrics.loading')
+      : (value ?? t('metrics.unavailable'));
   return (
     <div className='min-h-full bg-muted/20'>
       <AdminPageHeader
@@ -129,7 +142,10 @@ export function AdminDashboardPage() {
         action={
           <AdminWorkspaceScopeSelect
             value={scope.workspaceId}
-            onChange={scope.setWorkspaceId}
+            onChange={(value) => {
+              scope.setWorkspaceId(value);
+              setWorkspaceOffset(0);
+            }}
             workspaces={scope.workspaces}
             allowGlobalScope={scope.allowGlobalScope}
             workspaceLabel={t('scope.workspace')}
@@ -151,28 +167,28 @@ export function AdminDashboardPage() {
         <div className='grid gap-3 md:grid-cols-3 xl:grid-cols-4'>
           <Metric
             label={t('metrics.workspaces')}
-            value={summary.data?.totalWorkspaces ?? 0}
+            value={metricValue(summary.data?.totalWorkspaces)}
             detail={t('metrics.activeDetail', {
               count: summary.data?.activeWorkspaces ?? 0
             })}
           />
           <Metric
             label={t('metrics.suspended')}
-            value={summary.data?.suspendedWorkspaces ?? 0}
+            value={metricValue(summary.data?.suspendedWorkspaces)}
             detail={t('metrics.archivedDetail', {
               count: summary.data?.archivedWorkspaces ?? 0
             })}
           />
           <Metric
             label={t('metrics.agents')}
-            value={summary.data?.totalAgents ?? 0}
+            value={metricValue(summary.data?.totalAgents)}
             detail={t('metrics.onlineDetail', {
               count: summary.data?.onlineAgents ?? 0
             })}
           />
           <Metric
             label={t('metrics.devices')}
-            value={summary.data?.totalDevices ?? 0}
+            value={metricValue(summary.data?.totalDevices)}
             detail={t('metrics.unassignedDetail', {
               count: summary.data?.unassignedDevices ?? 0
             })}
@@ -220,9 +236,11 @@ export function AdminDashboardPage() {
                   {t('workspaceOverview.title')}
                 </h2>
                 <p className='truncate text-xs text-muted-foreground'>
-                  {t('workspaceOverview.description', {
-                    count: workspaces.data?.total ?? 0
-                  })}
+                  {isInitialWorkspacesLoading
+                    ? t('workspaceOverview.loadingDescription')
+                    : t('workspaceOverview.description', {
+                        count: workspaces.data?.total ?? 0
+                      })}
                 </p>
               </div>
             </div>
@@ -272,14 +290,8 @@ export function AdminDashboardPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {workspaces.isLoading ? (
-                  Array.from({ length: 5 }).map((_, index) => (
-                    <TableRow key={index}>
-                      <TableCell colSpan={8}>
-                        <div className='h-6 animate-pulse rounded bg-muted' />
-                      </TableCell>
-                    </TableRow>
-                  ))
+                {isInitialWorkspacesLoading ? (
+                  <AdminTableSkeleton columns={8} />
                 ) : workspaces.data?.items.length ? (
                   workspaces.data.items.map((workspace) => (
                     <TableRow key={workspace.id}>
@@ -289,18 +301,22 @@ export function AdminDashboardPage() {
                             {workspace.businessName}
                           </p>
                           <p className='truncate text-xs text-muted-foreground'>
-                            {workspace.businessEmail || workspace.description}
+                            {workspace.description ||
+                              t('workspaceOverview.noDescription')}
                           </p>
                         </div>
                       </TableCell>
                       <TableCell>
                         <div className='min-w-0'>
                           <p className='truncate text-sm'>
-                            {workspace.owner?.name ||
-                              t('workspaceOverview.unassignedOwner')}
+                            {workspace.owner
+                              ? t('workspaceOverview.ownerAssigned')
+                              : t('workspaceOverview.unassignedOwner')}
                           </p>
                           <p className='truncate text-xs text-muted-foreground'>
-                            {workspace.owner?.email || workspace.slug || '-'}
+                            {workspace.owner
+                              ? t('workspaceOverview.ownerManagedInDetails')
+                              : t('workspaceOverview.noOwnerEmail')}
                           </p>
                         </div>
                       </TableCell>
@@ -334,17 +350,32 @@ export function AdminDashboardPage() {
                   ))
                 ) : (
                   <TableRow>
-                    <TableCell
-                      colSpan={8}
-                      className='h-24 text-center text-sm text-muted-foreground'
-                    >
-                      {t('workspaceOverview.empty')}
+                    <TableCell colSpan={8} className='h-32 text-center'>
+                      <div className='mx-auto flex max-w-sm flex-col items-center gap-2 py-5'>
+                        <p className='text-sm font-medium text-foreground'>
+                          {t('workspaceOverview.emptyTitle')}
+                        </p>
+                        <p className='text-sm text-muted-foreground'>
+                          {t('workspaceOverview.emptyDescription')}
+                        </p>
+                        <Button asChild size='sm' variant='outline'>
+                          <Link href={ROUTES.ADMIN.WORKSPACES}>
+                            {t('workspaceOverview.manageAll')}
+                          </Link>
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 )}
               </TableBody>
             </Table>
           </div>
+          <AdminPagination
+            offset={workspaceOffset}
+            limit={DASHBOARD_WORKSPACE_PAGE_SIZE}
+            total={workspaces.data?.total ?? 0}
+            onOffsetChange={setWorkspaceOffset}
+          />
         </section>
 
         <div className='grid gap-4 xl:grid-cols-2'>

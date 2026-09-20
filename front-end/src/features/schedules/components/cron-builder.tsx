@@ -332,7 +332,7 @@ export function CronBuilder({
   onChange: (cronExpression: string) => void;
 }) {
   const t = useTranslations('schedulesFeature.cronBuilder');
-  const initial = useMemo(() => createInitialSimpleState(value), []);
+  const initial = useMemo(() => createInitialSimpleState(value), [value]);
   const [tab, setTab] = useState<'simple' | 'advanced'>(initial.tab);
   const [kind, setKind] = useState<SimpleCronKind>(initial.kind);
   const [params, setParams] = useState<SimpleCronParams>(initial.params);
@@ -400,7 +400,7 @@ export function CronBuilder({
         value={tab}
         onValueChange={(v) => setTab(v as 'simple' | 'advanced')}
       >
-        <TabsList>
+        <TabsList className='grid w-full grid-cols-2 sm:w-auto'>
           <TabsTrigger value='simple'>{t('simple')}</TabsTrigger>
           <TabsTrigger value='advanced'>{t('advanced')}</TabsTrigger>
         </TabsList>
@@ -451,7 +451,7 @@ export function CronBuilder({
           )}
 
           {kind === 'everyHours' && (
-            <div className='grid grid-cols-2 gap-3'>
+            <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
               <div className='space-y-1'>
                 <Label>{t('intervalHours')}</Label>
                 <Input
@@ -485,7 +485,7 @@ export function CronBuilder({
           )}
 
           {kind === 'dailyAt' && (
-            <div className='grid grid-cols-2 gap-3'>
+            <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
               <div className='space-y-1'>
                 <Label>{t('hour0to23')}</Label>
                 <Input
@@ -520,7 +520,7 @@ export function CronBuilder({
           )}
 
           {kind === 'windowMinutes' && (
-            <div className='grid grid-cols-3 gap-3'>
+            <div className='grid grid-cols-1 gap-3 sm:grid-cols-3'>
               <div className='space-y-1'>
                 <Label>{t('intervalMinutes')}</Label>
                 <Input
@@ -569,7 +569,7 @@ export function CronBuilder({
           )}
 
           {kind === 'windowHours' && (
-            <div className='grid grid-cols-4 gap-3'>
+            <div className='grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4'>
               <div className='space-y-1'>
                 <Label>{t('stepHours')}</Label>
                 <Input

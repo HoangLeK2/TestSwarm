@@ -238,19 +238,87 @@ async def test_patch_schedule_can_clear_device_group():
 
 
 @pytest.mark.asyncio
+async def test_patch_schedule_preserves_explicit_null_clear_fields():
+    scheduler = MagicMock()
+    scheduler.update = AsyncMock(
+        return_value=_fake_schedule(
+            target_type="fleet",
+            target_id=None,
+            inline_steps=None,
+            inline_variables={},
+            filter_model=None,
+            max_devices=None,
+        )
+    )
+    app = _build_app(scheduler)
+
+    with patch(
+        "api.routes.schedules.get_schedule",
+        new=AsyncMock(return_value=_fake_schedule()),
+    ):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as ac:
+            resp = await ac.patch(
+                "/api/schedules/sched-1",
+                json={
+                    "target_type": "fleet",
+                    "target_id": None,
+                    "inline_steps": None,
+                    "inline_variables": None,
+                    "filter_model": None,
+                    "max_devices": None,
+                },
+            )
+
+    assert resp.status_code == 200
+    call = scheduler.update.await_args
+    patch_payload = call.args[2] if len(call.args) >= 3 else call.kwargs["patch"]
+    assert patch_payload["target_id"] is None
+    assert patch_payload["inline_steps"] is None
+    assert patch_payload["inline_variables"] == {}
+    assert patch_payload["filter_model"] is None
+    assert patch_payload["max_devices"] is None
+
+
+@pytest.mark.asyncio
 async def test_patch_schedule_leaves_device_group_untouched_when_absent():
     scheduler = MagicMock()
     scheduler.update = AsyncMock(return_value=_fake_schedule())
     app = _build_app(scheduler)
 
-    with patch("api.routes.schedules.get_schedule", new=AsyncMock(return_value=_fake_schedule())):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+    with patch(
+        "api.routes.schedules.get_schedule",
+        new=AsyncMock(return_value=_fake_schedule()),
+    ):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as ac:
             resp = await ac.patch("/api/schedules/sched-1", json={"name": "Renamed"})
 
     assert resp.status_code == 200
     call = scheduler.update.await_args
     patch_payload = call.args[2] if len(call.args) >= 3 else call.kwargs["patch"]
     assert "device_group_id" not in patch_payload
+
+
+@pytest.mark.asyncio
+async def test_delete_schedule_calls_scheduler_delete():
+    scheduler = MagicMock()
+    scheduler.delete = AsyncMock(return_value=True)
+    app = _build_app(scheduler)
+
+    with patch(
+        "api.routes.schedules.get_schedule",
+        new=AsyncMock(return_value=_fake_schedule()),
+    ):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as ac:
+            resp = await ac.delete("/api/schedules/sched-1")
+
+    assert resp.status_code == 204
+    scheduler.delete.assert_awaited_once()
 
 
 @pytest.mark.asyncio

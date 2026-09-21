@@ -50,6 +50,18 @@ router = APIRouter(prefix="/schedules", tags=["schedules"])
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
+_CLEARABLE_SCHEDULE_PATCH_FIELDS = {
+    "target_id",
+    "inline_steps",
+    "inline_variables",
+    "device_group_id",
+    "filter_model",
+    "max_devices",
+    "run_at",
+    "account_rate_limit_per_hour",
+}
+
+
 def _get_scheduler(request: Request):
     """Get SchedulerService from app state."""
     scheduler = getattr(request.app.state, "scheduler", None)
@@ -133,6 +145,17 @@ def _run_to_out(r) -> ScheduleRunOut:
         error_message=r.error_message,
         created_at=r.created_at,
     )
+
+
+def _schedule_patch_payload(body: SchedulePatch) -> dict:
+    patch = body.model_dump(exclude_none=True)
+    sent = body.model_dump(exclude_unset=True)
+    for field in _CLEARABLE_SCHEDULE_PATCH_FIELDS:
+        if field in sent and sent[field] is None:
+            patch[field] = None
+    if patch.get("inline_variables") is None:
+        patch["inline_variables"] = {}
+    return patch
 
 
 # ── Schedule CRUD ─────────────────────────────────────────────────────────────
@@ -300,12 +323,7 @@ async def update_schedule_endpoint(
     await _get_schedule_or_404(db, schedule_id, user)
 
     scheduler = _get_scheduler(request)
-    patch = body.model_dump(exclude_none=True)
-
-    # exclude_none drops explicit nulls, so "switch back to all devices" could
-    # never clear the group. Let device_group_id through when it was sent.
-    if "device_group_id" in body.model_dump(exclude_unset=True):
-        patch["device_group_id"] = body.device_group_id
+    patch = _schedule_patch_payload(body)
 
     # Remap timezone field to timezone_name for the service layer
     if "timezone" in patch:

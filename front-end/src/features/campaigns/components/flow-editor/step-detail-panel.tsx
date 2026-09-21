@@ -1331,6 +1331,17 @@ export function StepDetailPanel({
     setupTabs.findIndex((tab) => tab.value === currentSetupTab)
   );
   const nextSetupTab = setupTabs[currentSetupIndex + 1];
+  const nextSetupLabel = nextSetupTab?.label ?? tSetup('done');
+  const translatedSetupFocusHint = tSetup('focusHint', {
+    next: nextSetupLabel
+  });
+  const setupFocusHint = translatedSetupFocusHint.includes(
+    'campaignsFeature.stepEditor.setupFlow.focusHint'
+  )
+    ? locale === 'vi'
+      ? `Bạn đang cấu hình bước đang chọn. Tiếp theo: ${nextSetupLabel}. Đóng panel vẫn giữ bản nháp trong editor.`
+      : `You are configuring the selected step. Next: ${nextSetupLabel}. Closing keeps the draft in the editor.`
+    : translatedSetupFocusHint;
   const handleDoneAndClose = useCallback(() => {
     if (pendingCommitRef.current) {
       onChangeRef.current(pendingCommitRef.current);
@@ -1384,9 +1395,14 @@ export function StepDetailPanel({
               <p className='truncate text-xs font-semibold text-foreground'>
                 {tSetup('title')}
               </p>
-              <span className='shrink-0 text-[10px] font-medium text-muted-foreground'>
-                {currentSetupIndex + 1}/{setupTabs.length}
-              </span>
+              <div className='flex shrink-0 items-center gap-1.5'>
+                <span className='rounded-full border border-emerald-500/30 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200'>
+                  {tSetup('draftBadge')}
+                </span>
+                <span className='text-[10px] font-medium text-muted-foreground'>
+                  {currentSetupIndex + 1}/{setupTabs.length}
+                </span>
+              </div>
             </div>
             <TabsList
               className={cn(
@@ -1412,10 +1428,22 @@ export function StepDetailPanel({
             <p className='mt-2 line-clamp-2 text-[10px] leading-snug text-muted-foreground'>
               {setupTabs[currentSetupIndex]?.description}
             </p>
+            <p className='mt-1.5 rounded-md border border-primary/15 bg-primary/5 px-2 py-1.5 text-[10px] leading-snug text-foreground'>
+              {setupFocusHint}
+            </p>
+            <p className='mt-1.5 inline-flex w-full items-start gap-1.5 rounded-md border border-emerald-500/20 bg-emerald-50 px-2 py-1.5 text-[10px] leading-snug text-emerald-800 dark:bg-emerald-950/20 dark:text-emerald-200'>
+              <CheckCircle2 className='mt-0.5 size-3 shrink-0' />
+              <span>
+                {tSetup('feedbackStatus', {
+                  current: currentSetupIndex + 1,
+                  total: setupTabs.length
+                })}
+              </span>
+            </p>
           </div>
 
           <TabsContent value={primarySetupTab} className='mt-0 space-y-3'>
-            <StepPanelSection title={tSec('stepConfig')}>
+            <div className='space-y-3'>
               {schemaDrivenFields && (
                 <SchemaFields
                   fields={schemaDrivenFields}
@@ -4949,7 +4977,7 @@ export function StepDetailPanel({
                   />
                 </div>
               )}
-            </StepPanelSection>
+            </div>
           </TabsContent>
 
           {isExtractStep ? (
@@ -4976,7 +5004,9 @@ export function StepDetailPanel({
       <div className='shrink-0 border-t border-border/70 bg-background/95 p-2.5 backdrop-blur'>
         <div className='space-y-2'>
           <p className='text-[10px] leading-snug text-muted-foreground'>
-            {nextSetupTab ? tSetup('footerNextHint') : tSetup('footerDoneHint')}
+            {nextSetupTab
+              ? tSetup('footerNextHint', { next: nextSetupTab.label })
+              : tSetup('footerDoneHint')}
           </p>
           <div
             className={cn(
@@ -4987,21 +5017,23 @@ export function StepDetailPanel({
             {nextSetupTab ? (
               <Button
                 type='button'
-                variant='outline'
                 size='sm'
                 className='h-8 min-w-0 text-xs'
                 onClick={() => setSetupTab(nextSetupTab.value)}
               >
-                {tSetup('next')}
+                <span className='truncate'>
+                  {tSetup('nextTo', { next: nextSetupTab.label })}
+                </span>
               </Button>
             ) : null}
             <Button
               type='button'
+              variant={nextSetupTab ? 'outline' : 'default'}
               size='sm'
               className='h-8 min-w-0 text-xs'
               onClick={handleDoneAndClose}
             >
-              {tSetup('done')}
+              {nextSetupTab ? tSetup('closePanel') : tSetup('done')}
             </Button>
           </div>
         </div>

@@ -101,6 +101,7 @@ export function DeviceFarm() {
     liveSnapshotAuthoritative: true
   });
 
+  const hasLiveSnapshot = lastUpdatedAt !== null;
   const visibleDevices = useMemo(
     () => (error ? [] : filterDeviceFarmActiveGridDevices(devices)),
     [devices, error]
@@ -145,8 +146,8 @@ export function DeviceFarm() {
 
   const isInitialLoading =
     requestStatus === 'idle' ||
-    (requestStatus === 'loading' && lastUpdatedAt === null);
-  const isInitialError = requestStatus === 'error' && lastUpdatedAt === null;
+    (requestStatus === 'loading' && !hasLiveSnapshot);
+  const isInitialError = requestStatus === 'error' && !hasLiveSnapshot;
   const renderMode = getDeviceGridRenderMode({
     isInitialError,
     isInitialLoading,
@@ -269,6 +270,9 @@ export function DeviceFarm() {
       <div className='flex flex-wrap items-start justify-between gap-3'>
         <div>
           <h1 className='text-xl font-semibold'>{t('pageTitle')}</h1>
+          <p className='mt-1 max-w-2xl text-sm text-muted-foreground'>
+            {t('pageSubtitle')}
+          </p>
           <p className='mt-1 text-xs text-muted-foreground'>
             {lastUpdatedLabel
               ? t('lastUpdated', { time: lastUpdatedLabel })
@@ -368,7 +372,12 @@ export function DeviceFarm() {
             <div className='font-medium'>{t('refreshErrorTitle')}</div>
             <div className='text-xs opacity-80'>{t('refreshErrorHint')}</div>
             {error ? (
-              <p className='mt-1 font-mono text-[11px]'>{error}</p>
+              <details className='mt-1 text-xs opacity-80'>
+                <summary className='cursor-pointer'>
+                  {t('technicalDetails')}
+                </summary>
+                <p className='mt-1 font-mono text-[11px]'>{error}</p>
+              </details>
             ) : null}
           </div>
           <Button
@@ -386,7 +395,14 @@ export function DeviceFarm() {
         <div className='rounded-md border border-destructive/40 bg-destructive/5 px-4 py-8 text-center text-sm text-destructive'>
           <div className='font-medium'>{t('backendErrorTitle')}</div>
           <div className='mt-1 text-xs opacity-80'>{t('loadErrorHint')}</div>
-          {error ? <p className='mt-2 font-mono text-[11px]'>{error}</p> : null}
+          {error ? (
+            <details className='mx-auto mt-2 max-w-xl text-xs opacity-80'>
+              <summary className='cursor-pointer'>
+                {t('technicalDetails')}
+              </summary>
+              <p className='mt-1 font-mono text-[11px]'>{error}</p>
+            </details>
+          ) : null}
           <Button
             className='mt-4'
             variant='outline'

@@ -29,6 +29,7 @@ async def get_or_claim_device_for_user(
     user_id: str,
     org_id: str | None,
     allow_relay_reclaim: bool = False,
+    preserve_existing_name: bool = False,
 ) -> Device:
     """Find device by serial globally, claim unowned rows, or create in ``org_id``."""
     serial = (serial or "").strip()
@@ -83,7 +84,11 @@ async def get_or_claim_device_for_user(
         existing.unpaired_at = None
         if not existing.paired_at:
             existing.paired_at = _now()
-        if display_name and display_name != existing.name:
+        current_name = str(existing.name or "").strip()
+        should_update_name = bool(display_name and display_name != existing.name)
+        if preserve_existing_name and current_name:
+            should_update_name = False
+        if should_update_name:
             await repo.update_device_name(db, existing.id, display_name)
         return existing
 
@@ -121,6 +126,7 @@ async def claim_relay_reported_serials(
             user_id=user_id,
             org_id=org_id,
             allow_relay_reclaim=True,
+            preserve_existing_name=True,
         )
         device.managed_by_org_id = org_id
         device.managed_by_relay_id = relay_id

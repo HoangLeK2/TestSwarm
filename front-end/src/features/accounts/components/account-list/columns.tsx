@@ -59,6 +59,53 @@ const STATUS_VARIANT: Record<
 
 export type { AccountStateKey };
 
+function readableStateReason(reason: string | null | undefined, t: TFn) {
+  if (!reason) return '';
+  const normalized = reason.trim().toLowerCase();
+  if (!normalized) return '';
+  if (
+    normalized.includes('no device') ||
+    normalized.includes('unlinked') ||
+    normalized.includes('device linked')
+  ) {
+    return t('reasonNoDevice');
+  }
+  if (
+    normalized.includes('band') ||
+    normalized.includes('ban') ||
+    normalized.includes('cấm')
+  ) {
+    return t('reasonBanned');
+  }
+  if (normalized.includes('checkpoint') || normalized.includes('verify')) {
+    return t('reasonVerification');
+  }
+  if (normalized.includes('manual')) return t('reasonManual');
+  return t('reasonNeedsReview');
+}
+
+function accountDisplayName(account: AccountOut, t: TFn) {
+  const displayName =
+    account.display_name || account.observed_display_name || '';
+  if (/^\d{8,}$/.test(displayName.trim())) return t('unnamed');
+  return displayName || t('unnamed');
+}
+
+function shortAccountCode(username: string) {
+  const clean = username.trim();
+  if (clean.length <= 4) return clean;
+  return clean.slice(-4);
+}
+
+function visibleTags(account: AccountOut) {
+  const platform = account.platform?.trim().toLowerCase();
+  return (account.tags || '')
+    .split(',')
+    .map((tag) => tag.trim())
+    .filter(Boolean)
+    .filter((tag) => tag.toLowerCase() !== platform);
+}
+
 export function getAccountColumns(
   t: TFn,
   statusLabel: Record<AccountStateKey, string>,
@@ -68,85 +115,114 @@ export function getAccountColumns(
 ): ColumnDef<AccountOut>[] {
   return [
     {
-      id: 'platform',
-      accessorKey: 'platform',
-      header: t('colPlatform'),
-      cell: ({ row }) => (
-        <Badge variant='outline' className='text-[11px]'>
-          {row.original.platform}
-        </Badge>
-      )
-    },
-    {
-      id: 'username',
-      accessorKey: 'username',
-      header: t('colUsername'),
+      id: 'account',
+      header: t('colAccount'),
       cell: ({ row }) => {
         const account = row.original;
         const envFlag = detectAccountEnvironment(account);
         return (
-          <div className='flex min-w-0 flex-wrap items-center gap-1.5'>
-            <span className='truncate text-sm font-semibold'>
-              {account.username}
-            </span>
-            {envFlag === 'test' ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Badge
-                    variant='outline'
-                    className='border-amber-500/50 text-[10px] text-amber-700 dark:text-amber-300'
-                  >
-                    {t('badgeTest')}
-                  </Badge>
-                </TooltipTrigger>
-                <TooltipContent>{t('testAccountHint')}</TooltipContent>
-              </Tooltip>
-            ) : null}
-            {envFlag === 'dev' ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Badge
-                    variant='outline'
-                    className='border-orange-500/50 text-[10px] text-orange-700 dark:text-orange-300'
-                  >
-                    {t('badgeDev')}
-                  </Badge>
-                </TooltipTrigger>
-                <TooltipContent>{t('testAccountHint')}</TooltipContent>
-              </Tooltip>
-            ) : null}
+          <div className='min-w-[240px] space-y-2'>
+            <div className='flex min-w-0 flex-wrap items-center gap-1.5'>
+              <span className='truncate text-sm font-semibold'>
+                {accountDisplayName(account, t)}
+              </span>
+              <Badge variant='outline' className='text-[10px] capitalize'>
+                {account.platform}
+              </Badge>
+              {envFlag === 'test' ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge
+                      variant='outline'
+                      className='border-amber-500/50 text-[10px] text-amber-700 dark:text-amber-300'
+                    >
+                      {t('badgeTest')}
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent>{t('testAccountHint')}</TooltipContent>
+                </Tooltip>
+              ) : null}
+              {envFlag === 'dev' ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge
+                      variant='outline'
+                      className='border-orange-500/50 text-[10px] text-orange-700 dark:text-orange-300'
+                    >
+                      {t('badgeDev')}
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent>{t('testAccountHint')}</TooltipContent>
+                </Tooltip>
+              ) : null}
+            </div>
+            <div className='space-y-0.5 text-xs text-muted-foreground'>
+              <p>
+                {t('loginCode', { code: shortAccountCode(account.username) })}
+              </p>
+              {account.observed_display_name && account.display_name ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <p className='truncate'>
+                      {t('observedNameValue', {
+                        name: account.observed_display_name
+                      })}
+                    </p>
+                  </TooltipTrigger>
+                  <TooltipContent>{t('observedNameHint')}</TooltipContent>
+                </Tooltip>
+              ) : null}
+            </div>
           </div>
         );
       }
     },
     {
-      id: 'displayName',
-      accessorKey: 'display_name',
-      header: t('colDisplayName'),
-      cell: ({ row }) => (
-        <span className='truncate text-sm text-muted-foreground'>
-          {row.original.display_name || '-'}
-        </span>
-      )
-    },
-    // What the phone read off the account's own profile, next to — never on top
-    // of — the name the operator typed. A login scenario writes both of these;
-    // until now they were stored and never shown anywhere on this page.
-    {
-      id: 'observedName',
-      accessorKey: 'observed_display_name',
-      header: t('colObservedName'),
+      id: 'status',
+      header: t('colStatus'),
       cell: ({ row }) => {
-        const name = row.original.observed_display_name;
-        if (!name)
-          return <span className='text-sm text-muted-foreground'>-</span>;
+        const account = row.original;
+        const state = normalizeAccountState(
+          account.state || account.status
+        ) as AccountStateKey;
+        const label = statusLabel[state] ?? state;
+        const resting = isResting(account.cooldown_until);
+        const reason = readableStateReason(account.state_reason, t);
         return (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className='truncate text-sm'>{name}</span>
-            </TooltipTrigger>
-            <TooltipContent>{t('observedNameHint')}</TooltipContent>
-          </Tooltip>
+          <div className='flex min-w-[180px] flex-col gap-1'>
+            <Badge
+              variant={STATUS_VARIANT[state] ?? 'outline'}
+              className='w-fit text-[11px]'
+            >
+              {label}
+            </Badge>
+            {reason ? (
+              <span className='text-xs text-muted-foreground'>{reason}</span>
+            ) : null}
+            {resting ? (
+              <span className='text-xs text-muted-foreground'>
+                {t('restingUntil', {
+                  time: formatDistanceToNow(new Date(account.cooldown_until!), {
+                    addSuffix: true,
+                    locale: dateLocale
+                  })
+                })}
+              </span>
+            ) : null}
+            {account.verification_hold_until ? (
+              <span className='text-xs text-muted-foreground'>
+                {t('verificationHoldUntil', {
+                  time: formatDistanceToNow(
+                    new Date(account.verification_hold_until),
+                    {
+                      addSuffix: true,
+                      locale: dateLocale
+                    }
+                  )
+                })}
+              </span>
+            ) : null}
+          </div>
         );
       }
     },
@@ -156,8 +232,13 @@ export function getAccountColumns(
       header: t('colFriends'),
       cell: ({ row }) => {
         const { friends_count: count, friends_observed_at: at } = row.original;
-        if (count === null || count === undefined)
-          return <span className='text-sm text-muted-foreground'>-</span>;
+        if (count === null || count === undefined) {
+          return (
+            <span className='text-sm text-muted-foreground'>
+              {t('unknown')}
+            </span>
+          );
+        }
         const label = <span className='text-sm tabular-nums'>{count}</span>;
         if (!at) return label;
         return (
@@ -176,72 +257,23 @@ export function getAccountColumns(
       }
     },
     {
-      id: 'status',
-      header: t('colStatus'),
-      cell: ({ row }) => {
-        const account = row.original;
-        const state = normalizeAccountState(
-          account.state || account.status
-        ) as AccountStateKey;
-        const label = statusLabel[state] ?? state;
-        const resting = isResting(account.cooldown_until);
-        return (
-          <div className='flex flex-col gap-0.5'>
-            <Badge
-              variant={STATUS_VARIANT[state] ?? 'outline'}
-              className='w-fit text-[11px]'
-            >
-              {label}
-            </Badge>
-            {resting ? (
-              <span className='text-[10px] text-muted-foreground'>
-                {t('restingUntil', {
-                  time: formatDistanceToNow(new Date(account.cooldown_until!), {
-                    addSuffix: true,
-                    locale: dateLocale
-                  })
-                })}
-              </span>
-            ) : null}
-            {account.verification_hold_until ? (
-              <span className='text-[10px] text-muted-foreground'>
-                {t('verificationHoldUntil', {
-                  time: formatDistanceToNow(
-                    new Date(account.verification_hold_until),
-                    {
-                      addSuffix: true,
-                      locale: dateLocale
-                    }
-                  )
-                })}
-              </span>
-            ) : null}
-            {account.state_reason ? (
-              <span className='max-w-[180px] truncate text-[10px] text-muted-foreground'>
-                {account.state_reason}
-              </span>
-            ) : null}
-          </div>
-        );
-      }
-    },
-    {
       id: 'tags',
       accessorKey: 'tags',
       header: t('colTags'),
       cell: ({ row }) => {
-        const tags = row.original.tags;
-        if (!tags) return <span className='text-muted-foreground'>-</span>;
+        const tags = visibleTags(row.original);
+        if (tags.length === 0) {
+          return (
+            <span className='text-sm text-muted-foreground'>{t('noTags')}</span>
+          );
+        }
         return (
-          <div className='flex flex-wrap gap-1'>
-            {tags
-              .split(',')
-              .filter(Boolean)
-              .map((tag) => (
-                <Badge key={tag} variant='secondary' className='text-[10px]'>
-                  {tag.trim()}
-                </Badge>
-              ))}
+          <div className='flex max-w-[180px] flex-wrap gap-1'>
+            {tags.map((tag) => (
+              <Badge key={tag} variant='secondary' className='text-[10px]'>
+                {tag.trim()}
+              </Badge>
+            ))}
           </div>
         );
       }
@@ -250,7 +282,7 @@ export function getAccountColumns(
       id: 'createdAt',
       header: t('colTime'),
       cell: ({ row }) => (
-        <span className='whitespace-nowrap text-[11px] text-muted-foreground'>
+        <span className='whitespace-nowrap text-xs text-muted-foreground'>
           {formatDistanceToNow(new Date(row.original.created_at), {
             addSuffix: true,
             locale: dateLocale
@@ -277,7 +309,14 @@ export function getAccountColumns(
             {perms.canUpdate || perms.canDelete || perms.canRead ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button size='icon' variant='ghost' className='size-8'>
+                  <Button
+                    size='icon'
+                    variant='ghost'
+                    className='size-8'
+                    aria-label={t('moreActions', {
+                      account: accountDisplayName(account, t)
+                    })}
+                  >
                     <MoreHorizontal size={14} />
                   </Button>
                 </DropdownMenuTrigger>

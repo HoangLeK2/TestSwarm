@@ -1,7 +1,7 @@
 'use client';
 
 import { formatDistanceToNow } from 'date-fns';
-import { vi } from 'date-fns/locale';
+import { enUS, vi } from 'date-fns/locale';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Trash2 } from 'lucide-react';
@@ -15,10 +15,12 @@ type TFn = (key: string, values?: Record<string, any>) => string;
 
 function DeviceGroupActionsCell({
   group,
-  onDelete
+  onDelete,
+  t
 }: {
   group: DeviceGroupOut;
   onDelete: (group: DeviceGroupOut) => void;
+  t: TFn;
 }) {
   const perms = useResourcePermissions('device-groups');
 
@@ -32,6 +34,7 @@ function DeviceGroupActionsCell({
           variant='ghost'
           className='size-8 text-destructive hover:text-destructive'
           onClick={() => onDelete(group)}
+          aria-label={t('deleteAction', { name: group.name })}
         >
           <Trash2 size={14} />
         </Button>
@@ -43,8 +46,11 @@ function DeviceGroupActionsCell({
 export function getDeviceGroupColumns(
   t: TFn,
   onDelete: (group: DeviceGroupOut) => void,
-  onSelect: (group: DeviceGroupOut) => void
+  onSelect: (group: DeviceGroupOut) => void,
+  locale: string
 ): ColumnDef<DeviceGroupOut>[] {
+  const dateLocale = locale === 'vi' ? vi : enUS;
+
   return [
     {
       id: 'color',
@@ -53,6 +59,8 @@ export function getDeviceGroupColumns(
         <div
           className='size-4 rounded-full'
           style={{ backgroundColor: row.original.color }}
+          role='img'
+          aria-label={t('colorDotLabel', { name: row.original.name })}
         />
       ),
       size: 40
@@ -94,7 +102,7 @@ export function getDeviceGroupColumns(
         <span className='whitespace-nowrap text-[11px] text-muted-foreground'>
           {formatDistanceToNow(new Date(row.original.created_at), {
             addSuffix: true,
-            locale: vi
+            locale: dateLocale
           })}
         </span>
       )
@@ -103,7 +111,11 @@ export function getDeviceGroupColumns(
       id: 'actions',
       header: '',
       cell: ({ row }) => (
-        <DeviceGroupActionsCell group={row.original} onDelete={onDelete} />
+        <DeviceGroupActionsCell
+          group={row.original}
+          onDelete={onDelete}
+          t={t}
+        />
       )
     }
   ];

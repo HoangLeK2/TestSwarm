@@ -1653,6 +1653,82 @@ async def test_workspace_owner_lists_allocated_unclaimed_phones(session_factory)
 
 
 @pytest.mark.asyncio
+async def test_reassigning_claimed_phone_does_not_require_registration_again(
+    session_factory,
+):
+    await _seed_workspace(session_factory)
+    await _seed_second_workspace(session_factory)
+    async with session_factory() as db:
+        with tenant_context("org-1"):
+            agent = await db.get(RelayAgent, "ra-1")
+            assert agent is not None
+            agent.serials = ["SN001"]
+        await db.commit()
+
+    app_admin_a = _app(session_factory, _user(org_role="admin", org_id="org-1"))
+    async with AsyncClient(transport=ASGITransport(app=app_admin_a), base_url="http://test") as client:
+        first_assign = await client.post(
+            "/api/admin/agents/relay-1/phone-allocations",
+            json={"targetWorkspaceId": "org-2", "serials": ["SN001"]},
+        )
+    assert first_assign.status_code == 200, first_assign.text
+    assert first_assign.json()["items"][0]["status"] == "unpaired"
+
+    app_owner_b = _app(
+        session_factory,
+        _user(user_id="owner-2", org_role="owner", role="system", org_id="org-2"),
+    )
+    async with AsyncClient(transport=ASGITransport(app=app_owner_b), base_url="http://test") as client:
+        before_claim = await client.get("/api/devices/allocated")
+        claim = await client.post("/api/devices/dev-1/claim-allocated")
+        after_claim = await client.get("/api/devices/allocated")
+
+    assert before_claim.status_code == 200
+    assert [item["serial"] for item in before_claim.json()] == ["SN001"]
+    assert claim.status_code == 200
+    assert claim.json()["status"] == "paired"
+    assert after_claim.status_code == 200
+    assert after_claim.json() == []
+
+    app_admin_a = _app(session_factory, _user(org_role="admin", org_id="org-1"))
+    async with AsyncClient(transport=ASGITransport(app=app_admin_a), base_url="http://test") as client:
+        release = await client.request(
+            "DELETE",
+            "/api/admin/agents/relay-1/phone-allocations",
+            json={"serials": ["SN001"]},
+        )
+        second_assign = await client.post(
+            "/api/admin/agents/relay-1/phone-allocations",
+            json={"targetWorkspaceId": "org-2", "serials": ["SN001"]},
+        )
+
+    assert release.status_code == 200
+    assert release.json()["items"][0]["assignedWorkspaceId"] == "org-1"
+    assert release.json()["items"][0]["status"] == "paired"
+    assert second_assign.status_code == 200
+    assert second_assign.json()["items"][0]["assignedWorkspaceId"] == "org-2"
+    assert second_assign.json()["items"][0]["status"] == "paired"
+
+    app_owner_b = _app(
+        session_factory,
+        _user(user_id="owner-2", org_role="owner", role="system", org_id="org-2"),
+    )
+    async with AsyncClient(transport=ASGITransport(app=app_owner_b), base_url="http://test") as client:
+        allocated_after_reassign = await client.get("/api/devices/allocated")
+        devices_after_reassign = await client.get("/api/devices?page=1&page_size=10")
+
+    assert allocated_after_reassign.status_code == 200
+    assert allocated_after_reassign.json() == []
+    assert devices_after_reassign.status_code == 200
+    row = next(
+        item for item in devices_after_reassign.json()["items"] if item["serial"] == "SN001"
+    )
+    assert row["status"] == "paired"
+    assert row["user_id"] is None
+    assert row["managed_by_relay_id"] == "relay-1"
+
+
+@pytest.mark.asyncio
 async def test_workspace_owner_claims_allocated_phone_and_delete_releases_to_admin_pool(
     session_factory,
 ):

@@ -306,9 +306,16 @@ class SchedulerService:
         """Update schedule in DB + sync Temporal Schedule spec if cron changed."""
         from db.crud.schedule import update_schedule, get_schedule
 
+        existing = await get_schedule(db, schedule_id)
+        if existing is None:
+            return None
+
         cron = patch.get("cron_expression")
-        tz_name = patch.get("timezone_name", "Asia/Ho_Chi_Minh")
+        tz_name = patch.get(
+            "timezone_name", getattr(existing, "timezone", "Asia/Ho_Chi_Minh")
+        )
         run_at = patch.get("run_at")
+        enabled = patch.get("is_enabled")
 
         if cron and run_at:
             raise ValueError("CRON_AND_RUN_AT_MUTUALLY_EXCLUSIVE")
@@ -318,6 +325,7 @@ class SchedulerService:
         if cron:
             patch.setdefault("next_run_at", compute_next_run(cron, tz_name))
             patch.setdefault("schedule_kind", "cron")
+            patch.setdefault("run_at", None)
         if run_at:
             normalized_run_at = _normalize_run_at(run_at)
             if normalized_run_at <= datetime.now(timezone.utc):
@@ -326,6 +334,20 @@ class SchedulerService:
             patch["schedule_kind"] = "one_shot"
             patch["cron_expression"] = None
             patch["next_run_at"] = normalized_run_at
+
+        if enabled is not None:
+            patch["status"] = "enabled" if enabled else "disabled"
+            if not enabled:
+                patch["next_run_at"] = None
+            elif "next_run_at" not in patch:
+                next_cron = cron if cron is not None else existing.cron_expression
+                next_kind = patch.get("schedule_kind", existing.schedule_kind)
+                next_run_at = patch.get("run_at", existing.run_at)
+                patch["next_run_at"] = (
+                    compute_next_run(next_cron, tz_name)
+                    if next_kind == "cron" and next_cron
+                    else next_run_at
+                )
 
         schedule = await update_schedule(db, schedule_id, **patch)
         if schedule is None:

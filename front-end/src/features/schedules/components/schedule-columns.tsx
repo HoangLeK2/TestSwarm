@@ -14,6 +14,7 @@ type TFn = (key: string, values?: Record<string, any>) => string;
 type TargetLookup = {
   campaignById: Map<string, CampaignOut>;
   templateById: Map<string, { id: string; name: string }>;
+  orgScenarioById: Map<string, { id: string; name: string }>;
 };
 
 export function getScheduleColumns(
@@ -26,8 +27,12 @@ export function getScheduleColumns(
       id: 'name',
       accessorKey: 'name',
       header: tList('colName'),
+      meta: {
+        headerClassName: 'w-[15rem]',
+        cellClassName: 'py-3 align-middle'
+      },
       cell: ({ row }) => (
-        <span className='truncate text-sm font-semibold'>
+        <span className='block max-w-[14rem] truncate text-sm font-semibold'>
           {row.original.name}
         </span>
       )
@@ -36,6 +41,10 @@ export function getScheduleColumns(
       id: 'target',
       accessorKey: 'target_type',
       header: tList('colTarget'),
+      meta: {
+        headerClassName: 'w-[15rem]',
+        cellClassName: 'py-3 align-middle'
+      },
       cell: ({ row }) => {
         const s = row.original;
         const targetCampaign =
@@ -46,7 +55,14 @@ export function getScheduleColumns(
           s.target_type === 'template' && s.target_id
             ? lookup.templateById.get(s.target_id)
             : null;
-        const targetName = targetCampaign?.name ?? targetTemplate?.name;
+        const targetOrgScenario =
+          s.target_type === 'org_scenario' && s.target_id
+            ? lookup.orgScenarioById.get(s.target_id)
+            : null;
+        const targetName =
+          targetCampaign?.name ??
+          targetTemplate?.name ??
+          targetOrgScenario?.name;
         const targetDetail =
           targetName ??
           (s.target_id ? `${tList('targetIdPrefix')}: ${s.target_id}` : null);
@@ -58,9 +74,11 @@ export function getScheduleColumns(
             ? tList('targetCampaign')
             : s.target_type === 'template'
               ? tList('targetTemplate')
-              : s.target_type === 'fleet'
-                ? tList('targetFleet')
-                : s.target_type;
+              : s.target_type === 'org_scenario'
+                ? tList('targetOrgScenario')
+                : s.target_type === 'fleet'
+                  ? tList('targetFleet')
+                  : s.target_type;
         return (
           <div className='min-w-0 space-y-1'>
             <div className='flex min-w-0 items-center gap-2'>
@@ -89,6 +107,10 @@ export function getScheduleColumns(
       id: 'cron',
       accessorKey: 'cron_expression',
       header: tList('colCron'),
+      meta: {
+        headerClassName: 'w-[13rem]',
+        cellClassName: 'py-3 align-middle'
+      },
       cell: ({ row }) => {
         const s = row.original;
         const cronExpression = s.cron_expression ?? '';
@@ -112,6 +134,10 @@ export function getScheduleColumns(
       id: 'enabled',
       accessorKey: 'is_enabled',
       header: tList('colEnabled'),
+      meta: {
+        headerClassName: 'w-[7rem]',
+        cellClassName: 'py-3 align-middle'
+      },
       cell: ({ row }) => {
         const isEnabled = row.original.is_enabled;
         return (
@@ -128,6 +154,10 @@ export function getScheduleColumns(
       id: 'nextRun',
       accessorKey: 'next_run_at',
       header: tList('colNextRun'),
+      meta: {
+        headerClassName: 'w-[12rem]',
+        cellClassName: 'py-3 align-middle'
+      },
       cell: ({ row }) => {
         const v = row.original.next_run_at;
         if (!v)
@@ -143,6 +173,10 @@ export function getScheduleColumns(
       id: 'runs',
       accessorKey: 'run_count',
       header: tList('colRuns'),
+      meta: {
+        headerClassName: 'w-[8rem]',
+        cellClassName: 'py-3 align-middle'
+      },
       cell: ({ row }) => (
         <Badge variant='secondary' className='text-[11px]'>
           {row.original.run_count}
@@ -152,6 +186,10 @@ export function getScheduleColumns(
     {
       id: 'actions',
       header: '',
+      meta: {
+        headerClassName: 'w-[10rem]',
+        cellClassName: 'py-3 align-middle text-right'
+      },
       cell: ({ row }) => <ScheduleRowActions schedule={row.original} />
     }
   ];

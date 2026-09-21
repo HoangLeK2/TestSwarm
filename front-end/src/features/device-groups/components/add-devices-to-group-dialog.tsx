@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Plus, Search, X } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { toast } from 'sonner';
 import {
   useAddDevicesToGroup,
   useAvailableGroupDevices
@@ -19,6 +20,12 @@ import {
 import { Input } from '@/components/ui/input';
 import { TablePaginationControls } from '@/components/ui/table/data-table-pagination';
 import type { DeviceOut } from '@/features/devices/services/manage-api';
+import { formatFarmApiError } from '@/lib/format-farm-api-error';
+import {
+  deviceDisplayName,
+  deviceModelLabel,
+  deviceSecondarySerial
+} from '@/features/devices/lib/device-display-name';
 
 interface Props {
   groupId: string;
@@ -30,22 +37,44 @@ export function AddDevicesToGroupDialog({ groupId }: Props) {
   const t = useTranslations('deviceGroupsFeature.addDevicesDialog');
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [pageIndex, setPageIndex] = useState(0);
   const [selected, setSelected] = useState<string[]>([]);
   const { mutate, isPending } = useAddDevicesToGroup();
+
+  useEffect(() => {
+    const timer = window.setTimeout(
+      () => setDebouncedSearchQuery(searchQuery.trim()),
+      250
+    );
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
+
   const availableDevicesQuery = useAvailableGroupDevices(
     groupId,
     {
-      q: searchQuery.trim() || undefined,
+      q: debouncedSearchQuery || undefined,
       limit: AVAILABLE_DEVICES_PAGE_SIZE,
       offset: pageIndex * AVAILABLE_DEVICES_PAGE_SIZE
     },
     { enabled: open }
   );
 
-  const available = availableDevicesQuery.data?.items ?? [];
+  const available = useMemo(
+    () => availableDevicesQuery.data?.items ?? [],
+    [availableDevicesQuery.data?.items]
+  );
   const total = availableDevicesQuery.data?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / AVAILABLE_DEVICES_PAGE_SIZE));
+  const isRefreshingResults =
+    availableDevicesQuery.isFetching && !availableDevicesQuery.isLoading;
+  const selectedNames = useMemo(
+    () =>
+      available
+        .filter((device) => selected.includes(device.id))
+        .map((device) => deviceDisplayName(device)),
+    [available, selected]
+  );
 
   const toggle = (id: string) => {
     setSelected((prev) =>
@@ -59,8 +88,12 @@ export function AddDevicesToGroupDialog({ groupId }: Props) {
       { groupId, deviceIds: selected },
       {
         onSuccess: () => {
+          toast.success(t('addSuccess', { count: selected.length }));
           setSelected([]);
           setOpen(false);
+        },
+        onError: (err) => {
+          toast.error(formatFarmApiError(err, t('addFailed')));
         }
       }
     );
@@ -124,6 +157,11 @@ export function AddDevicesToGroupDialog({ groupId }: Props) {
           )}
           {!availableDevicesQuery.isLoading &&
             !availableDevicesQuery.isError &&
+            isRefreshingResults && (
+              <p className='text-xs text-muted-foreground'>{t('refreshing')}</p>
+            )}
+          {!availableDevicesQuery.isLoading &&
+            !availableDevicesQuery.isError &&
             available.length === 0 && (
               <p className='text-sm text-muted-foreground'>{t('noDevices')}</p>
             )}
@@ -132,23 +170,53 @@ export function AddDevicesToGroupDialog({ groupId }: Props) {
             available.map((d: DeviceOut) => (
               <label
                 key={d.id}
-                className='flex cursor-pointer items-center gap-3 rounded-md border p-3 hover:bg-muted/50'
+                className='flex cursor-pointer items-center gap-3 rounded-md border p-3 hover:bg-muted/50 has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60'
               >
                 <Checkbox
                   checked={selected.includes(d.id)}
+                  disabled={isRefreshingResults}
                   onCheckedChange={() => toggle(d.id)}
+                  aria-label={t('selectDevice', {
+                    device: deviceDisplayName(d)
+                  })}
                 />
                 <div className='min-w-0 flex-1'>
                   <p className='truncate text-sm font-medium'>
-                    {d.name || d.serial}
+                    {deviceDisplayName(d)}
                   </p>
-                  <p className='text-xs text-muted-foreground'>
-                    {d.brand} {d.model}
-                  </p>
+                  <div className='space-y-0.5 text-xs text-muted-foreground'>
+                    {deviceSecondarySerial(d) ? (
+                      <p className='truncate'>
+                        {t('serialLabel', {
+                          serial: deviceSecondarySerial(d)
+                        })}
+                      </p>
+                    ) : null}
+                    {deviceModelLabel(d) ? (
+                      <p className='truncate'>{deviceModelLabel(d)}</p>
+                    ) : null}
+                  </div>
                 </div>
               </label>
             ))}
         </div>
+        {selected.length ? (
+          <div className='rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground'>
+            <p className='font-medium text-foreground'>
+              {t('selectedSummary', { count: selected.length })}
+            </p>
+            {selectedNames.length ? (
+              <p className='mt-1 truncate'>
+                {selectedNames.slice(0, 3).join(', ')}
+                {selected.length > selectedNames.length
+                  ? t('selectedMore', {
+                      count: selected.length - selectedNames.length
+                    })
+                  : ''}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
         <TablePaginationControls
           pageIndex={pageIndex}
           pageCount={pageCount}
@@ -168,6 +236,7 @@ export function AddDevicesToGroupDialog({ groupId }: Props) {
             isPending ||
             availableDevicesQuery.isLoading ||
             availableDevicesQuery.isError ||
+            isRefreshingResults ||
             selected.length === 0
           }
           className='w-full'

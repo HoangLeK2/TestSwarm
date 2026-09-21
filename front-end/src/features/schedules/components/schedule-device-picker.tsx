@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { useLocale, useTranslations } from 'next-intl';
+import { useTranslations } from 'next-intl';
 import {
   ChevronLeft,
   ChevronRight,
@@ -23,19 +23,6 @@ import {
 } from '@/components/ui/popover';
 
 const PAGE_SIZE = 8;
-const SCHEDULE_DEVICE_PICKER_COPY_FALLBACKS = {
-  devicePickerReadyHint: {
-    en: 'Schedules normally run on ready devices. Check the status before selecting a phone.',
-    vi: 'Lịch thường chạy trên thiết bị sẵn sàng. Hãy kiểm tra trạng thái trước khi chọn máy.'
-  },
-  devicePickerReadyState: {
-    en: 'Ready',
-    vi: 'Sẵn sàng'
-  }
-} as const;
-
-type ScheduleDevicePickerCopyKey =
-  keyof typeof SCHEDULE_DEVICE_PICKER_COPY_FALLBACKS;
 
 function normalizeDeviceState(state: string | null | undefined) {
   return (state || 'UNKNOWN').trim().toUpperCase();
@@ -46,29 +33,6 @@ function isReadyLikeDeviceState(state: string | null | undefined) {
   return normalized === 'READY' || normalized === 'ONLINE';
 }
 
-function translateDevicePickerCopy(
-  t: (key: string) => string,
-  locale: string,
-  key: ScheduleDevicePickerCopyKey
-) {
-  try {
-    const translated = t(key);
-    if (
-      translated &&
-      translated !== key &&
-      translated !== `schedulesFeature.form.${key}`
-    ) {
-      return translated;
-    }
-  } catch {
-    // Use a readable fallback if the runtime message bundle is stale.
-  }
-
-  return SCHEDULE_DEVICE_PICKER_COPY_FALLBACKS[key][
-    locale === 'en' ? 'en' : 'vi'
-  ];
-}
-
 export function ScheduleDevicePicker({
   value,
   onChange
@@ -77,7 +41,6 @@ export function ScheduleDevicePicker({
   onChange: (next: string[]) => void;
 }) {
   const t = useTranslations('schedulesFeature.form');
-  const locale = useLocale();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [query, setQuery] = useState('');
@@ -94,16 +57,8 @@ export function ScheduleDevicePicker({
   });
   const items = data?.items ?? [];
   const pageCount = Math.max(1, data?.page_count ?? 1);
-  const readyHint = translateDevicePickerCopy(
-    t,
-    locale,
-    'devicePickerReadyHint'
-  );
-  const readyStateLabel = translateDevicePickerCopy(
-    t,
-    locale,
-    'devicePickerReadyState'
-  );
+  const readyHint = t('devicePickerReadyHint');
+  const readyStateLabel = t('devicePickerReadyState');
 
   useEffect(() => {
     setPage(1);

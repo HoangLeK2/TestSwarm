@@ -1,21 +1,25 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Smartphone } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import type { DeviceOut, RelayAgentOut } from '../../services/manage-api';
+import type {
+  DeviceListParams,
+  DeviceOut,
+  RelayAgentOut
+} from '../../services/manage-api';
 import { devicesApi, relayAgentsApi } from '../../services/manage-api';
-import { useDevices, useFleetStats } from '../../hooks/use-devices';
+import {
+  useDevicePage,
+  useDevices,
+  useFleetStats
+} from '../../hooks/use-devices';
 import { useDeviceListRealtime } from '../../hooks/use-device-list-realtime';
 import { useLifecycleWsConnected } from '../../lib/lifecycle-ws-store';
 import { RegisterDeviceDialog } from '../register-device-dialog';
 import { DataTable } from '@/components/ui/table/data-table';
 import { useDataTable } from '@/hooks/use-data-table';
-import { isDeviceOnlineForList } from '../../lib/device-online';
-import {
-  matchesDeviceFsmFilter,
-  type DeviceFsmFilterKey
-} from '../../lib/device-fsm';
+import type { DeviceFsmStateKey } from '../../lib/device-fsm';
 import { getDeviceColumns } from './columns';
 import { ConnectDialog } from './ConnectDialog';
 import { FleetStatsSummary } from './FleetStatsSummary';
@@ -35,8 +39,13 @@ import {
 } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { useDebouncedCallback } from '@/hooks/use-debounced-callback';
+import { parseAsInteger, useQueryStates } from 'nuqs';
 
-const DEFAULT_FILTER: DeviceFsmFilterKey = 'transport_online';
+type ServerDeviceStatusFilter = 'all' | DeviceFsmStateKey;
+
+const DEFAULT_FILTER: ServerDeviceStatusFilter = 'all';
+const DEFAULT_PAGE_SIZE = 10;
 
 export function DeviceList() {
   const locale = useLocale();
@@ -49,7 +58,11 @@ export function DeviceList() {
   useDeviceListRealtime();
   const wsLive = useLifecycleWsConnected();
 
-  const { data: devices, isLoading, error } = useDevices();
+  const [{ page, perPage }, setPagination] = useQueryStates({
+    page: parseAsInteger.withDefault(1),
+    perPage: parseAsInteger.withDefault(DEFAULT_PAGE_SIZE)
+  });
+  const { data: allDevices } = useDevices();
   const {
     data: fleetStats,
     isLoading: fleetStatsLoading,
@@ -58,9 +71,29 @@ export function DeviceList() {
   const [connectDevice, setConnectDevice] = useState<DeviceOut | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] =
-    useState<DeviceFsmFilterKey>(DEFAULT_FILTER);
+    useState<ServerDeviceStatusFilter>(DEFAULT_FILTER);
   const [sortLastSeenDesc, setSortLastSeenDesc] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
+  const updateSearch = useDebouncedCallback((value: string) => {
+    setDebouncedSearchQuery(value.trim());
+  }, 300);
+  const pageParams = useMemo<DeviceListParams>(
+    () => ({
+      page,
+      pageSize: perPage,
+      q: debouncedSearchQuery || undefined,
+      state: statusFilter === 'all' ? undefined : statusFilter,
+      sort: sortLastSeenDesc ? '-last_seen_at' : 'last_seen_at'
+    }),
+    [debouncedSearchQuery, page, perPage, sortLastSeenDesc, statusFilter]
+  );
+  const {
+    data: devicePage,
+    isLoading,
+    error,
+    refetch
+  } = useDevicePage(pageParams);
 
   const { data: relayAgents } = useQuery<RelayAgentOut[]>({
     queryKey: ['relay-agents'],
@@ -90,50 +123,28 @@ export function DeviceList() {
     return m;
   }, [relayAgents]);
 
-  const data: DeviceOut[] = useMemo(() => devices ?? [], [devices]);
+  const data: DeviceOut[] = useMemo(
+    () => devicePage?.items ?? [],
+    [devicePage?.items]
+  );
+  const totalDevices = devicePage?.total ?? 0;
+  const pageCount = Math.max(1, devicePage?.page_count ?? 1);
+  const hasActiveFilter =
+    debouncedSearchQuery.length > 0 || statusFilter !== DEFAULT_FILTER;
+  const fleetDevices = allDevices ?? data;
 
-  const filteredSortedData = useMemo(() => {
-    const isOnline = (d: DeviceOut) => isDeviceOnlineForList(d, relayMap);
-    const normalizedQuery = searchQuery.trim().toLocaleLowerCase(locale);
-
-    const filtered = data.filter((d) => {
-      if (!matchesDeviceFsmFilter(d, statusFilter, isOnline)) return false;
-      if (!normalizedQuery) return true;
-
-      const relay = relayMap[d.relay_id ?? ''] ?? relayMap[d.serial];
-      return [
-        d.name,
-        d.serial,
-        d.adb_serial,
-        d.brand,
-        d.model,
-        d.android_version,
-        relay?.name,
-        relay?.hostname,
-        relay?.relay_id
-      ].some((value) =>
-        value?.toLocaleLowerCase(locale).includes(normalizedQuery)
-      );
-    });
-
-    const toTs = (d: DeviceOut) =>
-      d.last_seen ? new Date(d.last_seen).getTime() : 0;
-    const sorted = [...filtered].sort((a, b) => {
-      const da = toTs(a);
-      const db = toTs(b);
-      return sortLastSeenDesc ? db - da : da - db;
-    });
-    return sorted;
-  }, [data, locale, relayMap, searchQuery, sortLastSeenDesc, statusFilter]);
+  useEffect(() => {
+    if (page > pageCount) void setPagination({ page: pageCount });
+  }, [page, pageCount, setPagination]);
 
   const registeredSerials = useMemo(() => {
     const serials = new Set<string>();
-    for (const device of data) {
+    for (const device of allDevices ?? []) {
       serials.add(device.serial);
       if (device.adb_serial) serials.add(device.adb_serial);
     }
     return serials;
-  }, [data]);
+  }, [allDevices]);
 
   const columns = useMemo(
     () =>
@@ -151,12 +162,29 @@ export function DeviceList() {
   );
 
   const { table } = useDataTable<DeviceOut>({
-    data: filteredSortedData,
-    columns
+    data,
+    columns,
+    pageCount,
+    initialState: {
+      pagination: { pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE }
+    }
   });
 
-  if (error && !devices)
-    return <p className='text-sm text-destructive'>{t('loadError')}</p>;
+  if (error && !devicePage)
+    return (
+      <div className='rounded-md border border-destructive/30 bg-destructive/5 p-4'>
+        <p className='text-sm font-medium text-destructive'>{t('loadError')}</p>
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
+          className='mt-3'
+          onClick={() => void refetch()}
+        >
+          {tCommon('retry')}
+        </Button>
+      </div>
+    );
 
   return (
     <div className='space-y-5'>
@@ -164,7 +192,7 @@ export function DeviceList() {
         <div className='min-w-0'>
           <div className='flex flex-wrap items-center gap-2'>
             <h2 className='text-xl font-semibold tracking-tight'>
-              {t('title', { count: devices?.length ?? 0 })}
+              {t('title', { count: totalDevices })}
             </h2>
             {user ? (
               <span
@@ -221,17 +249,17 @@ export function DeviceList() {
 
       <FleetStatsSummary
         stats={fleetStats}
-        devices={data}
+        devices={fleetDevices}
         relayMap={relayMap}
         isLoading={fleetStatsLoading}
         isError={fleetStatsError}
       />
 
-      {isLoading && !devices ? (
+      {isLoading && !devicePage ? (
         <p className='text-sm text-muted-foreground'>{t('loading')}</p>
       ) : null}
 
-      {!isLoading && !devices?.length && (
+      {!isLoading && totalDevices === 0 && !hasActiveFilter && (
         <Can
           object='devices'
           action='create'
@@ -262,23 +290,29 @@ export function DeviceList() {
         </Can>
       )}
 
-      {devices?.length ? (
-        <DataTable table={table} total={filteredSortedData.length}>
+      {totalDevices > 0 || hasActiveFilter ? (
+        <DataTable table={table} total={totalDevices}>
           <div className='border-b pb-3'>
             <div className='flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between'>
               <div className='flex flex-1 flex-col gap-2 sm:flex-row'>
                 <Input
                   value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    setSearchQuery(next);
+                    updateSearch(next);
+                    void setPagination({ page: 1 });
+                  }}
                   placeholder={t('filters.searchPlaceholder')}
                   aria-label={t('filters.searchLabel')}
                   className='h-9 w-full sm:max-w-md'
                 />
                 <Select
                   value={statusFilter}
-                  onValueChange={(v) =>
-                    setStatusFilter(v as DeviceFsmFilterKey)
-                  }
+                  onValueChange={(v) => {
+                    setStatusFilter(v as ServerDeviceStatusFilter);
+                    void setPagination({ page: 1 });
+                  }}
                 >
                   <SelectTrigger className='h-9 w-full sm:w-[180px]'>
                     <SelectValue placeholder={t('filters.statusPlaceholder')} />
@@ -287,11 +321,20 @@ export function DeviceList() {
                     <SelectItem value='all'>
                       {t('filters.statusAll')}
                     </SelectItem>
-                    <SelectItem value='transport_online'>
-                      {t('filters.statusOnline')}
+                    <SelectItem value='online'>
+                      {t('fsm.online' as `fsm.${DeviceFsmStateKey}`)}
                     </SelectItem>
-                    <SelectItem value='transport_offline'>
-                      {t('filters.statusOffline')}
+                    <SelectItem value='busy'>
+                      {t('fsm.busy' as `fsm.${DeviceFsmStateKey}`)}
+                    </SelectItem>
+                    <SelectItem value='reconnecting'>
+                      {t('fsm.reconnecting' as `fsm.${DeviceFsmStateKey}`)}
+                    </SelectItem>
+                    <SelectItem value='dead'>
+                      {t('fsm.dead' as `fsm.${DeviceFsmStateKey}`)}
+                    </SelectItem>
+                    <SelectItem value='unknown'>
+                      {t('fsm.unknown' as `fsm.${DeviceFsmStateKey}`)}
                     </SelectItem>
                   </SelectContent>
                 </Select>
@@ -299,7 +342,10 @@ export function DeviceList() {
                   variant='outline'
                   size='sm'
                   className='h-9 justify-start sm:justify-center'
-                  onClick={() => setSortLastSeenDesc((v) => !v)}
+                  onClick={() => {
+                    setSortLastSeenDesc((v) => !v);
+                    void setPagination({ page: 1 });
+                  }}
                   title={t('filters.sortLastSeen')}
                 >
                   {sortLastSeenDesc
@@ -315,8 +361,10 @@ export function DeviceList() {
                     className='h-9'
                     onClick={() => {
                       setSearchQuery('');
+                      setDebouncedSearchQuery('');
                       setStatusFilter(DEFAULT_FILTER);
                       setSortLastSeenDesc(true);
+                      void setPagination({ page: 1 });
                     }}
                   >
                     {t('filters.reset')}
@@ -325,8 +373,8 @@ export function DeviceList() {
               </div>
               <p className='shrink-0 text-xs text-muted-foreground'>
                 {t('filters.showing', {
-                  count: filteredSortedData.length,
-                  total: devices.length
+                  count: data.length,
+                  total: totalDevices
                 })}
               </p>
             </div>

@@ -282,6 +282,7 @@ export function InsertStepPicker({
         insertLocation.labelValues
       )
     : '';
+  const pickerGuidance = tInsert('pickerGuidance' as 'pickerTitle');
 
   return (
     <Popover
@@ -310,6 +311,11 @@ export function InsertStepPicker({
               {tInsert('insertContext.label', {
                 location: insertLocationLabel
               })}
+            </p>
+          ) : null}
+          {!query.trim() && category === 'actions' ? (
+            <p className='mt-1.5 rounded-md border border-primary/15 bg-background/80 px-2 py-1.5 text-[10px] leading-snug text-muted-foreground'>
+              {pickerGuidance}
             </p>
           ) : null}
           <div className='relative mt-2.5'>

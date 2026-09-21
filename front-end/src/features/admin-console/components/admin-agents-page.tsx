@@ -150,12 +150,14 @@ function PhoneAllocationAction({
 }) {
   const t = useTranslations('adminConsole.agents');
   const allowed = agent.workspaceKind === 'pool';
+  const agentLabel = agent.name || agent.hostname || agent.relay_id;
   const button = (
     <Button
       size='sm'
       variant='outline'
       className='h-8 px-2.5'
       disabled={!allowed}
+      aria-label={t('actions.phonesForAgent', { agent: agentLabel })}
       onClick={onOpen}
     >
       <Smartphone className='mr-1.5 size-3.5' />
@@ -1458,9 +1460,14 @@ function AgentPhoneAllocationDialog({
                 <div className='space-y-2 border-b p-3'>
                   <div className='flex items-center justify-between gap-2'>
                     <div>
-                      <p className='text-sm font-medium'>
-                        {t('phonePickerTitle')}
-                      </p>
+                      <div className='flex items-center gap-2'>
+                        <span className='flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary'>
+                          1
+                        </span>
+                        <p className='text-sm font-medium'>
+                          {t('phonePickerTitle')}
+                        </p>
+                      </div>
                       <p className='text-xs text-muted-foreground'>
                         {selectedCount > 0
                           ? t('phonePickerSelected', { count: selectedCount })
@@ -1560,9 +1567,14 @@ function AgentPhoneAllocationDialog({
               <section className='flex min-h-0 flex-col'>
                 <div className='space-y-2 border-b p-3'>
                   <div>
-                    <p className='text-sm font-medium'>
-                      {t('workspacePickerTitle')}
-                    </p>
+                    <div className='flex items-center gap-2'>
+                      <span className='flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary'>
+                        2
+                      </span>
+                      <p className='text-sm font-medium'>
+                        {t('workspacePickerTitle')}
+                      </p>
+                    </div>
                     <p className='text-xs text-muted-foreground'>
                       {targetWorkspaceName
                         ? t('workspacePickerSelected', {
@@ -1630,7 +1642,12 @@ function AgentPhoneAllocationDialog({
             </div>
 
             <div className='border-t bg-background px-5 py-3'>
-              <p className='text-sm font-medium'>{t('review.title')}</p>
+              <div className='flex items-center gap-2'>
+                <span className='flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary'>
+                  3
+                </span>
+                <p className='text-sm font-medium'>{t('review.title')}</p>
+              </div>
               <div className='mt-3 grid gap-3 md:grid-cols-3'>
                 <div className='rounded-md border bg-muted/20 p-3'>
                   <p className='text-xs font-medium text-muted-foreground'>
@@ -1759,12 +1776,17 @@ function AgentPhoneRow({
 }) {
   const t = useTranslations('adminConsole.agents.phoneAllocation');
   return (
-    <TableRow>
+    <TableRow
+      data-state={checked ? 'selected' : undefined}
+      className={checked ? 'bg-primary/5' : undefined}
+    >
       <TableCell>
         <Checkbox
           checked={checked}
           onCheckedChange={onToggle}
-          aria-label={phone.serial}
+          aria-label={t('selectPhone', {
+            phone: phone.name || phone.model || phone.serial
+          })}
         />
       </TableCell>
       <TableCell>

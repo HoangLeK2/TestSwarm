@@ -2,6 +2,7 @@
 
 import { useTranslations } from 'next-intl';
 import { ArrowLeft, Trash2, Smartphone } from 'lucide-react';
+import { toast } from 'sonner';
 import {
   useDeviceGroup,
   useRemoveDeviceFromGroup
@@ -11,6 +12,13 @@ import { EditDeviceGroupDialog } from './edit-device-group-dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
+import { useConfirm } from '@/providers/modal-provider';
+import { formatFarmApiError } from '@/lib/format-farm-api-error';
+import {
+  deviceDisplayName,
+  deviceModelLabel,
+  deviceSecondarySerial
+} from '@/features/devices/lib/device-display-name';
 
 interface Props {
   groupId: string;
@@ -19,22 +27,63 @@ interface Props {
 
 export function DeviceGroupDetail({ groupId, onBack }: Props) {
   const t = useTranslations('deviceGroupsFeature.detail');
-  const { data: group, isLoading } = useDeviceGroup(groupId);
+  const { data: group, isLoading, error } = useDeviceGroup(groupId);
   const removeMutation = useRemoveDeviceFromGroup();
   const perms = useResourcePermissions('device-groups');
+  const confirm = useConfirm();
 
   if (isLoading) {
     return <p className='text-sm text-muted-foreground'>{t('loading')}</p>;
+  }
+
+  if (error) {
+    return (
+      <p className='text-sm text-destructive'>
+        {formatFarmApiError(error, t('loadError'))}
+      </p>
+    );
   }
 
   if (!group) {
     return <p className='text-sm text-destructive'>{t('notFound')}</p>;
   }
 
+  const removeDevice = async (
+    device: NonNullable<typeof group.devices>[number]
+  ) => {
+    const deviceName = deviceDisplayName(device);
+    const ok = await confirm({
+      description: t('confirmRemoveDevice', {
+        device: deviceName,
+        group: group.name
+      }),
+      confirmText: t('removeConfirm'),
+      cancelText: t('removeCancel'),
+      confirmVariant: 'destructive',
+      zIndex: 10_000
+    });
+    if (!ok) return;
+    removeMutation.mutate(
+      { groupId, deviceId: device.id },
+      {
+        onSuccess: () =>
+          toast.success(t('removeSuccess', { device: deviceName })),
+        onError: (err) => {
+          toast.error(formatFarmApiError(err, t('removeFailed')));
+        }
+      }
+    );
+  };
+
   return (
     <div className='space-y-6'>
       <div className='flex items-center gap-3'>
-        <Button size='icon' variant='ghost' onClick={onBack}>
+        <Button
+          size='icon'
+          variant='ghost'
+          onClick={onBack}
+          aria-label={t('backAction')}
+        >
           <ArrowLeft size={18} />
         </Button>
         <div
@@ -42,7 +91,9 @@ export function DeviceGroupDetail({ groupId, onBack }: Props) {
           style={{ backgroundColor: group.color }}
         />
         <h2 className='text-lg font-semibold'>{group.name}</h2>
-        <Badge variant='secondary'>{group.device_count} devices</Badge>
+        <Badge variant='secondary'>
+          {t('deviceCount', { count: group.device_count })}
+        </Badge>
         {perms.canUpdate ? <EditDeviceGroupDialog group={group} /> : null}
       </div>
 
@@ -70,12 +121,25 @@ export function DeviceGroupDetail({ groupId, onBack }: Props) {
           >
             <div className='min-w-0 flex-1'>
               <p className='truncate text-sm font-medium'>
-                {device.name || device.serial}
+                {deviceDisplayName(device)}
               </p>
-              <p className='text-xs text-muted-foreground'>
-                {device.brand} {device.model} &middot; Android{' '}
-                {device.android_version}
-              </p>
+              <div className='space-y-0.5 text-xs text-muted-foreground'>
+                {deviceSecondarySerial(device) ? (
+                  <p className='truncate'>
+                    {t('serialLabel', {
+                      serial: deviceSecondarySerial(device)
+                    })}
+                  </p>
+                ) : null}
+                <p className='truncate'>
+                  {[
+                    deviceModelLabel(device),
+                    `Android ${device.android_version}`
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </p>
+              </div>
             </div>
             {perms.canUpdate ? (
               <Button
@@ -83,9 +147,10 @@ export function DeviceGroupDetail({ groupId, onBack }: Props) {
                 variant='ghost'
                 className='size-8 text-destructive hover:text-destructive'
                 disabled={removeMutation.isPending}
-                onClick={() =>
-                  removeMutation.mutate({ groupId, deviceId: device.id })
-                }
+                onClick={() => void removeDevice(device)}
+                aria-label={t('removeDeviceAction', {
+                  device: deviceDisplayName(device)
+                })}
               >
                 <Trash2 size={14} />
               </Button>

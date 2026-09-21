@@ -184,8 +184,16 @@ async def mark_allocated_unclaimed(
     relay_id: str,
     flush: bool = True,
 ) -> Device:
-    """Assign pool visibility to a workspace without registering it to a user."""
+    """Assign pool visibility to a workspace.
+
+    The first hand-off of a pool phone still needs a workspace user to claim it
+    so the phone gets an initial connect key. Once a phone has been paired at
+    least once, later returns to the same allocation flow should not make the
+    operator register it again; the managed agent can push a fresh key when the
+    user clicks Connect.
+    """
     old_org_id = device.org_id
+    was_previously_paired = bool(device.paired_at)
     should_cleanup = bool(device.user_id) or bool(
         old_org_id and old_org_id != target_org_id
     )
@@ -201,8 +209,12 @@ async def mark_allocated_unclaimed(
     device.managed_by_org_id = manager_org_id
     device.managed_by_relay_id = relay_id
     device.relay_serial = device.relay_serial or device.serial
-    device.status = DeviceRegistryStatus.UNPAIRED.value
-    device.unpaired_at = _now()
+    if was_previously_paired:
+        device.status = DeviceRegistryStatus.PAIRED.value
+        device.unpaired_at = None
+    else:
+        device.status = DeviceRegistryStatus.UNPAIRED.value
+        device.unpaired_at = _now()
     await rotate_device_key(db, device)
     if flush:
         await db.flush()

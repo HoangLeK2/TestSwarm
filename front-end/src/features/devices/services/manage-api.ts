@@ -9,6 +9,7 @@ export type DeviceOut = {
   name: string;
   device_key: string;
   user_id: string | null;
+  status: 'pending' | 'paired' | 'unpaired' | string;
   brand: string;
   model: string;
   android_version: string;

@@ -412,6 +412,69 @@ class TestSchedulerServiceEpic05:
         emit_event.assert_awaited_once()
 
 
+class TestSchedulerServiceUpdate:
+    @pytest.mark.asyncio
+    async def test_update_disable_syncs_status_and_clears_next_run(self):
+        from services.scheduler import SchedulerService
+
+        mock_db = AsyncMock()
+        existing = _make_schedule(
+            next_run_at=datetime(2026, 6, 1, tzinfo=timezone.utc)
+        )
+        updated = _make_schedule(is_enabled=False, status="disabled", next_run_at=None)
+
+        with (
+            patch("db.crud.schedule.get_schedule", return_value=existing),
+            patch(
+                "db.crud.schedule.update_schedule", return_value=updated
+            ) as update_schedule,
+        ):
+            service = SchedulerService(temporal_client=None, manager=None, queue=None)
+            result = await service.update(mock_db, "sched-001", {"is_enabled": False})
+
+        assert result is updated
+        update_schedule.assert_awaited_once()
+        assert update_schedule.await_args.kwargs["is_enabled"] is False
+        assert update_schedule.await_args.kwargs["status"] == "disabled"
+        assert update_schedule.await_args.kwargs["next_run_at"] is None
+        mock_db.commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_update_cron_clears_one_shot_run_at(self):
+        from services.scheduler import SchedulerService
+
+        mock_db = AsyncMock()
+        existing = _make_schedule(
+            schedule_kind="one_shot",
+            cron_expression=None,
+            run_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        )
+        updated = _make_schedule(
+            schedule_kind="cron",
+            cron_expression="0 9 * * *",
+            run_at=None,
+        )
+
+        with (
+            patch("db.crud.schedule.get_schedule", return_value=existing),
+            patch(
+                "db.crud.schedule.update_schedule", return_value=updated
+            ) as update_schedule,
+        ):
+            service = SchedulerService(temporal_client=None, manager=None, queue=None)
+            result = await service.update(
+                mock_db,
+                "sched-001",
+                {"cron_expression": "0 9 * * *", "timezone_name": "UTC"},
+            )
+
+        assert result is updated
+        update_schedule.assert_awaited_once()
+        assert update_schedule.await_args.kwargs["schedule_kind"] == "cron"
+        assert update_schedule.await_args.kwargs["run_at"] is None
+        assert update_schedule.await_args.kwargs["next_run_at"] is not None
+
+
 class TestSchedulerServiceDelete:
     @pytest.mark.asyncio
     async def test_delete_calls_temporal(self):

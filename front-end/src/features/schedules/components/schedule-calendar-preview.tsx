@@ -25,6 +25,13 @@ type Occurrence = {
   isEnabled: boolean;
 };
 
+type EventLayout = {
+  top: number;
+  minHeight: number;
+  laneIndex: number;
+  laneCount: number;
+};
+
 const DAY_COLUMNS = [
   { cronDow: 1, key: 'mon' },
   { cronDow: 2, key: 'tue' },
@@ -38,14 +45,14 @@ const DAY_COLUMNS = [
 const HOURS = Array.from({ length: 18 }, (_, index) => index + 6);
 const HOUR_HEIGHT = 48;
 const MAX_EVENTS_PER_DAY = 8;
+const VISUAL_EVENT_DURATION_MINUTES = 52;
 
 const EVENT_COLORS = [
-  'border-sky-500/35 bg-sky-500/15 text-sky-950 dark:text-sky-100',
-  'border-emerald-500/35 bg-emerald-500/15 text-emerald-950 dark:text-emerald-100',
-  'border-amber-500/40 bg-amber-500/15 text-amber-950 dark:text-amber-100',
-  'border-rose-500/35 bg-rose-500/15 text-rose-950 dark:text-rose-100',
-  'border-cyan-500/35 bg-cyan-500/15 text-cyan-950 dark:text-cyan-100',
-  'border-fuchsia-500/35 bg-fuchsia-500/15 text-fuchsia-950 dark:text-fuchsia-100'
+  'border-border border-l-sky-500 bg-sky-50/55 text-foreground hover:bg-sky-50 dark:border-l-sky-400 dark:bg-sky-950/25',
+  'border-border border-l-emerald-500 bg-emerald-50/55 text-foreground hover:bg-emerald-50 dark:border-l-emerald-400 dark:bg-emerald-950/25',
+  'border-border border-l-amber-500 bg-amber-50/55 text-foreground hover:bg-amber-50 dark:border-l-amber-400 dark:bg-amber-950/25',
+  'border-border border-l-rose-500 bg-rose-50/50 text-foreground hover:bg-rose-50 dark:border-l-rose-400 dark:bg-rose-950/20',
+  'border-border border-l-slate-500 bg-slate-50/70 text-foreground hover:bg-slate-100/70 dark:border-l-slate-400 dark:bg-slate-900/35'
 ];
 
 function pad2(value: number) {
@@ -122,6 +129,91 @@ function sampleTimes(times: number[]) {
     .slice(0, MAX_EVENTS_PER_DAY);
 }
 
+function eventTop(minuteOfDay: number, hourHeight: number) {
+  return ((minuteOfDay - HOURS[0] * 60) / 60) * hourHeight;
+}
+
+function buildEventLayouts(
+  occurrences: Occurrence[],
+  hourHeight: number,
+  minHeight: number
+) {
+  const layouts = new Map<string, EventLayout>();
+  let activeCluster: Array<Occurrence & { top: number; bottom: number }> = [];
+
+  const flushCluster = () => {
+    if (!activeCluster.length) return;
+
+    const laneBottoms: number[] = [];
+    const assigned = activeCluster.map((occurrence) => {
+      const laneIndex = laneBottoms.findIndex(
+        (bottom) => bottom <= occurrence.top
+      );
+      const nextLaneIndex = laneIndex === -1 ? laneBottoms.length : laneIndex;
+      laneBottoms[nextLaneIndex] = occurrence.bottom;
+      return { occurrence, laneIndex: nextLaneIndex };
+    });
+    const laneCount = Math.max(1, laneBottoms.length);
+
+    assigned.forEach(({ occurrence, laneIndex }) => {
+      layouts.set(occurrence.id, {
+        top: occurrence.top,
+        minHeight,
+        laneIndex,
+        laneCount
+      });
+    });
+    activeCluster = [];
+  };
+
+  occurrences
+    .map((occurrence) => {
+      const top = eventTop(occurrence.minuteOfDay, hourHeight);
+      return { ...occurrence, top, bottom: top + minHeight };
+    })
+    .sort((left, right) => {
+      if (left.top !== right.top) return left.top - right.top;
+      return left.title.localeCompare(right.title);
+    })
+    .forEach((occurrence) => {
+      const clusterBottom = Math.max(
+        ...activeCluster.map((item) => item.bottom),
+        Number.NEGATIVE_INFINITY
+      );
+      if (activeCluster.length && occurrence.top >= clusterBottom) {
+        flushCluster();
+      }
+      activeCluster.push(occurrence);
+    });
+
+  flushCluster();
+  return layouts;
+}
+
+function occurrenceLaneStyle(layout: EventLayout) {
+  if (layout.laneCount <= 1) {
+    return {
+      top: layout.top,
+      height: layout.minHeight,
+      minHeight: layout.minHeight,
+      left: 6,
+      right: 6
+    };
+  }
+
+  const widthPercent = 100 / layout.laneCount;
+  const leftInset = layout.laneIndex === 0 ? 6 : 1;
+  const rightInset = layout.laneIndex === layout.laneCount - 1 ? 6 : 1;
+
+  return {
+    top: layout.top,
+    height: layout.minHeight,
+    minHeight: layout.minHeight,
+    left: `calc(${widthPercent * layout.laneIndex}% + ${leftInset}px)`,
+    right: `calc(${100 - widthPercent * (layout.laneIndex + 1)}% + ${rightInset}px)`
+  };
+}
+
 function buildOccurrences(schedules: ScheduleCalendarPreviewItem[]) {
   const occurrences: Occurrence[] = [];
   const overflowByDay = new Map<number, number>();
@@ -186,26 +278,31 @@ export function ScheduleCalendarPreview({
   schedules,
   compact = false,
   className,
+  selectedScheduleId,
   onSelectSchedule
 }: {
   schedules: ScheduleCalendarPreviewItem[];
   compact?: boolean;
   className?: string;
+  selectedScheduleId?: string | null;
   onSelectSchedule?: (scheduleId: string) => void;
 }) {
   const t = useTranslations('schedulesFeature.preview');
   const { occurrences, overflowByDay, unsupportedCount } =
     buildOccurrences(schedules);
   const hasItems = schedules.length > 0;
-  const hourHeight = compact ? HOUR_HEIGHT : 72;
+  const hourHeight = compact ? HOUR_HEIGHT : 64;
+  const eventMinHeight = compact
+    ? 26
+    : Math.round((VISUAL_EVENT_DURATION_MINUTES / 60) * hourHeight);
   const gridHeight = HOURS.length * hourHeight;
 
   return (
     <section className={cn('rounded-lg border bg-background', className)}>
       <div
         className={cn(
-          'flex flex-wrap items-start justify-between gap-3 border-b',
-          compact ? 'p-3' : 'p-4'
+          'flex flex-wrap items-start justify-between gap-3 border-b bg-muted/10',
+          compact ? 'p-3' : 'px-4 py-3'
         )}
       >
         <div className='min-w-0'>
@@ -217,12 +314,15 @@ export function ScheduleCalendarPreview({
               )}
             />
             <h3
-              className={cn('font-semibold', compact ? 'text-sm' : 'text-lg')}
+              className={cn(
+                'font-semibold text-foreground',
+                compact ? 'text-sm' : 'text-base'
+              )}
             >
               {t('title')}
             </h3>
           </div>
-          <p className='mt-1 text-xs text-muted-foreground'>
+          <p className='mt-1 text-xs leading-5 text-muted-foreground'>
             {compact ? t('compactSubtitle') : t('subtitle')}
           </p>
         </div>
@@ -245,17 +345,17 @@ export function ScheduleCalendarPreview({
       ) : (
         <div
           className={cn(
-            'overflow-auto',
-            compact ? 'max-h-[26rem]' : 'max-h-[calc(100vh-14rem)]'
+            'overflow-auto bg-background',
+            compact ? 'max-h-[26rem]' : 'max-h-[calc(100vh-13rem)]'
           )}
         >
-          <div className={compact ? 'min-w-full' : 'min-w-[980px]'}>
+          <div className={compact ? 'min-w-full' : 'min-w-[1180px]'}>
             <div
               className={cn(
-                'grid border-b bg-muted/35 font-medium text-muted-foreground',
+                'sticky top-0 z-10 grid border-b bg-background/95 font-medium text-muted-foreground backdrop-blur',
                 compact
                   ? 'grid-cols-[3.5rem_repeat(7,minmax(0,1fr))] text-[11px]'
-                  : 'grid-cols-[5rem_repeat(7,minmax(0,1fr))] text-xs'
+                  : 'grid-cols-[4rem_repeat(7,minmax(9.5rem,1fr))] text-xs'
               )}
             >
               <div className='border-r px-2 py-2'>{t('time')}</div>
@@ -274,11 +374,11 @@ export function ScheduleCalendarPreview({
                 'relative grid',
                 compact
                   ? 'grid-cols-[3.5rem_repeat(7,minmax(0,1fr))]'
-                  : 'grid-cols-[5rem_repeat(7,minmax(0,1fr))]'
+                  : 'grid-cols-[4rem_repeat(7,minmax(9.5rem,1fr))]'
               )}
               style={{ height: gridHeight }}
             >
-              <div className='relative border-r bg-muted/20'>
+              <div className='relative border-r bg-background'>
                 {HOURS.map((hour) => (
                   <div
                     key={hour}
@@ -293,53 +393,67 @@ export function ScheduleCalendarPreview({
                 ))}
               </div>
 
-              {DAY_COLUMNS.map((day, dayIndex) => (
-                <div
-                  key={day.key}
-                  className='relative border-r last:border-r-0'
-                >
-                  {HOURS.map((hour) => (
-                    <div
-                      key={hour}
-                      className='border-b border-dashed border-border/80'
-                      style={{ height: hourHeight }}
-                    />
-                  ))}
+              {DAY_COLUMNS.map((day, dayIndex) => {
+                const dayOccurrences = occurrences.filter(
+                  (occurrence) => occurrence.dayIndex === dayIndex
+                );
+                const eventLayouts = buildEventLayouts(
+                  dayOccurrences,
+                  hourHeight,
+                  eventMinHeight
+                );
 
-                  {occurrences
-                    .filter((occurrence) => occurrence.dayIndex === dayIndex)
-                    .map((occurrence) => {
-                      const top =
-                        ((occurrence.minuteOfDay - HOURS[0] * 60) / 60) *
-                        hourHeight;
-                      if (top < 0 || top > gridHeight - 22) return null;
+                return (
+                  <div
+                    key={day.key}
+                    className='relative border-r bg-background last:border-r-0'
+                  >
+                    {HOURS.map((hour) => (
+                      <div
+                        key={hour}
+                        className='border-b border-border/70'
+                        style={{ height: hourHeight }}
+                      />
+                    ))}
+
+                    {dayOccurrences.map((occurrence) => {
+                      const layout = eventLayouts.get(occurrence.id);
+                      if (!layout) return null;
+                      if (layout.top < 0 || layout.top > gridHeight - 22) {
+                        return null;
+                      }
 
                       const content = (
-                        <>
-                          <div className='font-semibold'>
+                        <div className='flex min-w-0 items-center gap-1'>
+                          <span className='shrink-0 font-semibold tabular-nums'>
                             {formatTime(occurrence.minuteOfDay)}
-                          </div>
+                          </span>
                           {!compact && (
-                            <div className='truncate'>{occurrence.title}</div>
+                            <span className='truncate font-semibold'>
+                              {occurrence.title}
+                            </span>
                           )}
-                          {!compact && occurrence.subtitle && (
-                            <div className='truncate text-[10px] opacity-75'>
-                              {occurrence.subtitle}
-                            </div>
+                          {!occurrence.isEnabled && (
+                            <span className='ml-auto size-1.5 shrink-0 rounded-full bg-muted-foreground/45' />
                           )}
-                        </>
+                        </div>
                       );
 
                       const eventClassName = cn(
-                        'absolute left-1 right-1 overflow-hidden rounded-md border px-2 py-1 text-left leading-tight shadow-sm outline-none transition',
+                        'absolute overflow-hidden rounded-[3px] border border-l-4 px-2 py-1 text-left leading-tight outline-none transition-colors',
                         compact ? 'text-[10px]' : 'text-xs',
                         onSelectSchedule &&
-                          'cursor-pointer hover:ring-2 hover:ring-ring focus-visible:ring-2 focus-visible:ring-ring',
+                          'cursor-pointer hover:border-primary/30 focus-visible:ring-2 focus-visible:ring-ring',
+                        selectedScheduleId === occurrence.scheduleId &&
+                          'border-l-primary ring-1 ring-primary/25 ring-offset-1 ring-offset-background',
                         occurrence.colorClass,
-                        !occurrence.isEnabled && 'opacity-45 grayscale'
+                        !occurrence.isEnabled &&
+                          'border-border border-l-muted-foreground/50 bg-muted/40 text-muted-foreground'
                       );
-                      const style = { top, minHeight: compact ? 24 : 44 };
-                      const title = `${formatTime(occurrence.minuteOfDay)} - ${occurrence.title}`;
+                      const style = occurrenceLaneStyle(layout);
+                      const title = `${formatTime(occurrence.minuteOfDay)} - ${occurrence.title}${
+                        occurrence.subtitle ? ` — ${occurrence.subtitle}` : ''
+                      }`;
 
                       return onSelectSchedule ? (
                         <button
@@ -366,13 +480,14 @@ export function ScheduleCalendarPreview({
                       );
                     })}
 
-                  {(overflowByDay.get(dayIndex) ?? 0) > 0 && (
-                    <div className='absolute bottom-2 left-2 right-2 rounded-md border bg-background/95 px-2 py-1 text-center text-[11px] text-muted-foreground shadow-sm'>
-                      {t('more', { count: overflowByDay.get(dayIndex) ?? 0 })}
-                    </div>
-                  )}
-                </div>
-              ))}
+                    {(overflowByDay.get(dayIndex) ?? 0) > 0 && (
+                      <div className='absolute bottom-2 left-2 right-2 rounded-lg border bg-background/95 px-2 py-1 text-center text-[11px] text-muted-foreground shadow-sm backdrop-blur'>
+                        {t('more', { count: overflowByDay.get(dayIndex) ?? 0 })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>

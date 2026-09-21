@@ -317,6 +317,21 @@ test('insert picker receives step-tree insert locations from root and nested flo
   );
 });
 
+test('insert picker guidance is localized and scoped to action steps', () => {
+  const pickerSource = readFileSync(
+    new URL('./insert-step-picker.tsx', import.meta.url),
+    'utf8'
+  );
+
+  assert.match(pickerSource, /tInsert\('pickerGuidance'/);
+  assert.match(pickerSource, /category === 'actions'/);
+  assert.doesNotMatch(pickerSource, /useLocale/);
+  assert.doesNotMatch(
+    pickerSource,
+    /campaignsFeature\\.flowInsert\\.pickerGuidance/
+  );
+});
+
 test('nested branch and loop trailing insert gaps stay visible', () => {
   const bracketSource = readFileSync(
     new URL('./bracket-block.tsx', import.meta.url),
@@ -571,6 +586,9 @@ for (const [locale, messages] of [
       'title',
       'description',
       'stepNumber',
+      'selectedBadge',
+      'selectedAnnouncement',
+      'draftBadge',
       'configure',
       'configureDescription',
       'screenDescription',
@@ -581,7 +599,12 @@ for (const [locale, messages] of [
       'ready',
       'needsSetup',
       'next',
+      'nextTo',
+      'closePanel',
       'done',
+      'focusHint',
+      'feedbackStatus',
+      'draftSafetyHint',
       'footerNextHint',
       'footerDoneHint'
     ]) {
@@ -774,6 +797,11 @@ for (const [locale, messages] of [
     }
 
     assert.equal(typeof flowInsert?.itemDesc?.tap, 'string', `${locale}.tap`);
+    assert.equal(
+      typeof flowInsert?.pickerGuidance,
+      'string',
+      `${locale}.pickerGuidance`
+    );
     assert.equal(
       typeof flowInsert?.itemDesc?.social_sync_connections,
       'string',

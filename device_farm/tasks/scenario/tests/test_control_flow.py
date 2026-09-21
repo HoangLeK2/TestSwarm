@@ -193,6 +193,87 @@ def test_if_variable_preserves_loop_branch_variables_until_runtime():
     assert "PAGE_SEARCH_CURRENT = 'Booking.com' (from_list_index=1)" in observed[1]
 
 
+def test_loop_executes_random_pick_branch_each_iteration():
+    from tasks.scenario.context import ScenarioContext
+    from tasks.scenario.executor import ScenarioExecutor
+    from unittest.mock import MagicMock
+
+    device = MagicMock()
+    device.serial = "test"
+    device.screen_width = 1080
+    device.screen_height = 1920
+    sc = ScenarioContext.from_args(
+        device,
+        {
+            "variables": {"VALUES": ["first", "second", "third"]},
+            "steps": [
+                {
+                    "id": "cycle",
+                    "type": "loop",
+                    "count": 3,
+                    "loop_var": "VALUE_INDEX",
+                    "steps": [
+                        {
+                            "id": "pick",
+                            "type": "random_pick",
+                            "branches": [
+                                {
+                                    "weight": 1,
+                                    "steps": [
+                                        {
+                                            "id": "unexpected",
+                                            "type": "set_variable",
+                                            "name": "PICKED",
+                                            "value": "wrong",
+                                        }
+                                    ],
+                                },
+                                {
+                                    "weight": 5,
+                                    "steps": [
+                                        {
+                                            "id": "mark",
+                                            "type": "set_variable",
+                                            "name": "PICKED",
+                                            "from_list": "${VALUES}",
+                                            "from_list_index": "${VALUE_INDEX}",
+                                        }
+                                    ],
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+
+    with patch("tasks.scenario.steps.control_flow.random.choices", return_value=[1]) as choices:
+        result = ScenarioExecutor(sc).run()
+
+    loop_result = result["step_results"][0]
+    observed = []
+    for iteration in loop_result["sub_results"]:
+        random_result = iteration["result"]["step_results"][0]
+        mark_result = random_result["sub_result"]["step_results"][0]
+        observed.append(
+            (
+                random_result["chosen_branch"],
+                random_result["branch"],
+                mark_result["message"],
+            )
+        )
+
+    assert result["success"] is True
+    assert loop_result["iterations"] == 3
+    assert choices.call_count == 3
+    assert observed == [
+        (1, "branch1", "set_variable: PICKED = 'first' (from_list_index=0)"),
+        (1, "branch1", "set_variable: PICKED = 'second' (from_list_index=1)"),
+        (1, "branch1", "set_variable: PICKED = 'third' (from_list_index=2)"),
+    ]
+
+
 def test_loop_step_bubbles_nested_edge_extra_summary():
     from tasks.scenario.steps.control_flow import handle_loop
 

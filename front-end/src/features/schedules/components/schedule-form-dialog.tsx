@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import { useLocale, useTranslations } from 'next-intl';
+import { useTranslations } from 'next-intl';
 import {
   CalendarCheck2,
   Check,
@@ -81,59 +81,6 @@ type TargetOption = {
 };
 
 const TARGET_PICKER_PAGE_SIZE = 8;
-const SCHEDULE_FORM_COPY_FALLBACKS = {
-  deviceModeLabel: {
-    en: 'Target devices',
-    vi: 'Thiết bị chạy'
-  },
-  deviceModeAll: {
-    en: 'All ready devices',
-    vi: 'Tất cả thiết bị sẵn sàng'
-  },
-  deviceModeAllHelp: {
-    en: 'Let the scheduler use any device that is ready when the run starts.',
-    vi: 'Để hệ thống dùng bất kỳ thiết bị nào đang sẵn sàng khi lịch bắt đầu.'
-  },
-  deviceModeGroup: {
-    en: 'By group',
-    vi: 'Theo nhóm'
-  },
-  deviceModeGroupHelp: {
-    en: 'Limit this schedule to a saved device group.',
-    vi: 'Giới hạn lịch này trong một nhóm thiết bị đã lưu.'
-  },
-  deviceModeDevices: {
-    en: 'Pick devices',
-    vi: 'Chọn thiết bị cụ thể'
-  },
-  deviceModeDevicesHelp: {
-    en: 'Choose the exact devices that may run this schedule.',
-    vi: 'Chọn chính xác thiết bị được phép chạy lịch này.'
-  }
-} as const;
-
-type ScheduleFormCopyKey = keyof typeof SCHEDULE_FORM_COPY_FALLBACKS;
-
-function translateScheduleFormCopy(
-  t: (key: string) => string,
-  locale: string,
-  key: ScheduleFormCopyKey
-) {
-  try {
-    const translated = t(key);
-    if (
-      translated &&
-      translated !== key &&
-      translated !== `schedulesFeature.form.${key}`
-    ) {
-      return translated;
-    }
-  } catch {
-    // Use a readable fallback if the runtime message bundle is stale.
-  }
-
-  return SCHEDULE_FORM_COPY_FALLBACKS[key][locale === 'en' ? 'en' : 'vi'];
-}
 
 function normalizeTargetText(value: string): string {
   return value
@@ -386,32 +333,27 @@ export function ScheduleFormDialog({
   const updateMutation = useUpdateSchedule();
 
   const t = useTranslations('schedulesFeature.form');
-  const locale = useLocale();
 
   const title =
     mode === 'create'
       ? t('titleCreate')
       : t('titleEdit', { name: schedule?.name ?? '' });
-  const deviceModeLabel = translateScheduleFormCopy(
-    t,
-    locale,
-    'deviceModeLabel'
-  );
+  const deviceModeLabel = t('deviceModeLabel');
   const deviceModeOptions = [
     {
       value: 'all',
-      label: translateScheduleFormCopy(t, locale, 'deviceModeAll'),
-      description: translateScheduleFormCopy(t, locale, 'deviceModeAllHelp')
+      label: t('deviceModeAll'),
+      description: t('deviceModeAllHelp')
     },
     {
       value: 'group',
-      label: translateScheduleFormCopy(t, locale, 'deviceModeGroup'),
-      description: translateScheduleFormCopy(t, locale, 'deviceModeGroupHelp')
+      label: t('deviceModeGroup'),
+      description: t('deviceModeGroupHelp')
     },
     {
       value: 'devices',
-      label: translateScheduleFormCopy(t, locale, 'deviceModeDevices'),
-      description: translateScheduleFormCopy(t, locale, 'deviceModeDevicesHelp')
+      label: t('deviceModeDevices'),
+      description: t('deviceModeDevicesHelp')
     }
   ] satisfies {
     value: ScheduleDeviceMode;
@@ -544,9 +486,7 @@ export function ScheduleFormDialog({
 
   const onSubmit = async () => {
     if (!canPersistScenario(childStepEditorOpen)) {
-      toast.info(
-        'Đóng trình chỉnh sửa bước để áp dụng thay đổi trước khi lưu.'
-      );
+      toast.info(t('errorCloseStepEditor'));
       return;
     }
     if (!name.trim()) {
@@ -655,15 +595,15 @@ export function ScheduleFormDialog({
       patch.inline_steps = inlineSteps as any;
       patch.inline_variables = inlineVariables ?? {};
     } else {
-      patch.inline_steps = undefined;
-      patch.inline_variables = undefined;
+      patch.inline_steps = null;
+      patch.inline_variables = null;
     }
 
     updateMutation.mutate(
       { scheduleId: s.id, data: patch },
       {
         onSuccess: () => {
-          toast.success(t('updateSuccess'));
+          toast.success(t('updateSuccess', { name: name.trim() }));
           onOpenChange(false);
         },
         onError: (err: unknown) =>
@@ -985,7 +925,7 @@ export function ScheduleFormDialog({
                   </div>
                 </div>
 
-                {/* ── Lọc thiết bị ── */}
+                {/* Device filters */}
                 <div className='grid grid-cols-1 gap-4 sm:grid-cols-3'>
                   <div className='space-y-1'>
                     <Label>{t('filterStateLabel')}</Label>

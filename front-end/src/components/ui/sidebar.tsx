@@ -271,8 +271,9 @@ Sidebar.displayName = 'Sidebar';
 const SidebarTrigger = React.forwardRef<
   React.ElementRef<typeof Button>,
   React.ComponentProps<typeof Button>
->(({ className, onClick, ...props }, ref) => {
+>(({ className, onClick, 'aria-label': ariaLabel, ...props }, ref) => {
   const { toggleSidebar } = useSidebar();
+  const label = ariaLabel ?? 'Toggle Sidebar';
 
   return (
     <Button
@@ -285,10 +286,11 @@ const SidebarTrigger = React.forwardRef<
         onClick?.(event);
         toggleSidebar();
       }}
+      aria-label={label}
       {...props}
     >
       <ViewVerticalIcon />
-      <span className='sr-only'>Toggle Sidebar</span>
+      <span className='sr-only'>{label}</span>
     </Button>
   );
 });

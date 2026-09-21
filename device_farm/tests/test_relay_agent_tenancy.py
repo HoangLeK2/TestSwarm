@@ -309,3 +309,51 @@ async def test_relay_register_auto_claim_moves_reported_device_to_token_workspac
     assert manager_device.user_id == MANAGER_USER_ID
     assert manager_device.managed_by_org_id == MANAGER_ORG_ID
     assert manager_device.managed_by_relay_id == "relay-manager"
+
+
+@pytest.mark.asyncio
+async def test_relay_auto_claim_preserves_existing_device_display_name(
+    session_factory,
+):
+    serial = "serial-relay-register-display-name"
+    async with session_factory() as db:
+        with tenant_context(ORG_ID):
+            db.add(
+                Device(
+                    id="dev-relay-register-display-name",
+                    serial=serial,
+                    device_serial=serial,
+                    name="MH13",
+                    user_id=USER_ID,
+                    org_id=ORG_ID,
+                    managed_by_org_id=ORG_ID,
+                    managed_by_relay_id="relay-old",
+                    relay_serial=serial,
+                )
+            )
+            await db.commit()
+
+    async with session_factory() as db:
+        claimed = await claim_relay_reported_serials(
+            db,
+            serials=[serial],
+            user_id=MANAGER_USER_ID,
+            org_id=MANAGER_ORG_ID,
+            relay_id="relay-manager",
+        )
+        await db.commit()
+
+    assert claimed == [serial]
+
+    async with session_factory() as db:
+        manager_workspace_devices = await device_repo.list_devices(
+            db, org_id=MANAGER_ORG_ID
+        )
+
+    manager_device = next(
+        device for device in manager_workspace_devices if device.serial == serial
+    )
+    assert manager_device.name == "MH13"
+    assert manager_device.user_id == MANAGER_USER_ID
+    assert manager_device.managed_by_org_id == MANAGER_ORG_ID
+    assert manager_device.managed_by_relay_id == "relay-manager"

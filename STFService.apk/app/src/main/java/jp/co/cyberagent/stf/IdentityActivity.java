@@ -246,6 +246,16 @@ public class IdentityActivity extends AppCompatActivity {
             }
         });
 
+        // Register BEFORE any WsAgentService.start() below. LocalBroadcastManager has
+        // no sticky replay, so a connect that lands between start() and onResume would
+        // drop ACTION_CONNECTED and leave the banner stuck on "Reconnecting to …".
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(WsAgentService.ACTION_NEED_REAUTH);
+        filter.addAction(WsAgentService.ACTION_SERVER_ERROR);
+        filter.addAction(WsAgentService.ACTION_CONNECTION_FAILED);
+        filter.addAction(WsAgentService.ACTION_CONNECTED);
+        LocalBroadcastManager.getInstance(this).registerReceiver(reAuthReceiver, filter);
+
         ensureVisibility();
         refreshWifiIp();
         checkServiceStatus();
@@ -385,21 +395,17 @@ public class IdentityActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        IntentFilter filter = new IntentFilter();
-        filter.addAction(WsAgentService.ACTION_NEED_REAUTH);
-        filter.addAction(WsAgentService.ACTION_SERVER_ERROR);
-        filter.addAction(WsAgentService.ACTION_CONNECTION_FAILED);
-        filter.addAction(WsAgentService.ACTION_CONNECTED);
-        LocalBroadcastManager.getInstance(this).registerReceiver(reAuthReceiver, filter);
+        // Receiver is registered in onCreate and released in onDestroy: unregistering
+        // here would lose ACTION_CONNECTED whenever the app sits in the background.
         // Re-check all services when returning from Settings
         refreshWifiIp();
         checkServiceStatus();
     }
 
     @Override
-    protected void onPause() {
-        super.onPause();
+    protected void onDestroy() {
         LocalBroadcastManager.getInstance(this).unregisterReceiver(reAuthReceiver);
+        super.onDestroy();
     }
 
     // ──────────────────────────────────────────────────────────────────────

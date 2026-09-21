@@ -1,8 +1,17 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { Plus } from 'lucide-react';
-import { useTranslations } from 'next-intl';
+import { useEffect, useMemo, useState } from 'react';
+import { formatDistanceToNow } from 'date-fns';
+import { enUS, vi } from 'date-fns/locale';
+import {
+  CalendarCheck2,
+  CheckCircle2,
+  Clock3,
+  FileText,
+  PauseCircle,
+  Plus
+} from 'lucide-react';
+import { useLocale, useTranslations } from 'next-intl';
 import type { ScheduleOut } from '../services/api';
 import { useSchedules } from '../hooks/use-schedules';
 import { useCampaigns } from '@/features/campaigns/hooks/use-campaigns';
@@ -11,29 +20,34 @@ import {
   type CampaignOut
 } from '@/features/campaigns/types';
 import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-scenario-templates';
+import { useOrgScenarios } from '@/features/org-scenarios/hooks/use-org-scenarios';
 import { Button } from '@/components/ui/button';
 import { ScheduleFormDialog } from './schedule-form-dialog';
 import {
   ScheduleCalendarPreview,
   type ScheduleCalendarPreviewItem
 } from './schedule-calendar-preview';
-import { FileText } from 'lucide-react';
+import { ScheduleDetailPanel } from './schedule-detail-panel';
 import Link from 'next/link';
 import { ROUTES } from '@/config/routes';
 import { Can } from '@/features/auth';
 import { Badge } from '@/components/ui/badge';
-import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 
 export function Schedules() {
   const tList = useTranslations('schedulesFeature.list');
+  const locale = useLocale();
   const { data: schedules, isLoading, error } = useSchedules();
   const { data: campaigns = [] } = useCampaigns();
-  const perms = useResourcePermissions('schedules');
-
   const data: ScheduleOut[] = useMemo(() => schedules ?? [], [schedules]);
   const hasTemplateTargets = data.some((s) => s.target_type === 'template');
+  const hasOrgScenarioTargets = data.some(
+    (s) => s.target_type === 'org_scenario'
+  );
   const { data: templates = [] } = useScenarioTemplates(undefined, {
     enabled: hasTemplateTargets
+  });
+  const { data: orgScenarios = [] } = useOrgScenarios({
+    enabled: hasOrgScenarioTargets
   });
   const campaignById = useMemo(
     () => new Map(campaigns.map((campaign) => [campaign.id, campaign])),
@@ -43,6 +57,29 @@ export function Schedules() {
     () => new Map(templates.map((template) => [template.id, template])),
     [templates]
   );
+  const orgScenarioById = useMemo(
+    () => new Map(orgScenarios.map((scenario) => [scenario.id, scenario])),
+    [orgScenarios]
+  );
+  const enabledCount = useMemo(
+    () => data.filter((schedule) => schedule.is_enabled).length,
+    [data]
+  );
+  const pausedCount = Math.max(0, data.length - enabledCount);
+  const nextRunLabel = useMemo(() => {
+    const nextRun = data
+      .filter((schedule) => schedule.is_enabled && schedule.next_run_at)
+      .map((schedule) => new Date(schedule.next_run_at as string))
+      .filter((date) => !Number.isNaN(date.getTime()))
+      .sort((left, right) => left.getTime() - right.getTime())[0];
+
+    if (!nextRun) return tList('feedbackNoNextRun');
+
+    return formatDistanceToNow(nextRun, {
+      addSuffix: true,
+      locale: locale === 'vi' ? vi : enUS
+    });
+  }, [data, locale, tList]);
   const runningCampaigns = useMemo(
     () =>
       campaigns.filter((campaign) =>
@@ -60,7 +97,10 @@ export function Schedules() {
             : schedule.target_type === 'template'
               ? (templateById.get(schedule.target_id ?? '')?.name ??
                 tList('targetTemplate'))
-              : tList('targetFleet');
+              : schedule.target_type === 'org_scenario'
+                ? (orgScenarioById.get(schedule.target_id ?? '')?.name ??
+                  tList('targetOrgScenario'))
+                : tList('targetFleet');
 
         return {
           id: schedule.id,
@@ -71,18 +111,60 @@ export function Schedules() {
           isEnabled: Boolean(schedule.is_enabled)
         };
       }),
-    [data, campaignById, templateById, tList]
+    [data, campaignById, orgScenarioById, templateById, tList]
   );
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [editingSchedule, setEditingSchedule] = useState<ScheduleOut | null>(
+  const [selectedScheduleId, setSelectedScheduleId] = useState<string | null>(
     null
   );
+  const selectedSchedule = useMemo(
+    () =>
+      data.find((item) => item.id === selectedScheduleId) ?? data[0] ?? null,
+    [data, selectedScheduleId]
+  );
+  const selectedCalendarItem = selectedSchedule
+    ? calendarSchedules.find((item) => item.id === selectedSchedule.id)
+    : null;
+
+  useEffect(() => {
+    if (!data.length) {
+      setSelectedScheduleId(null);
+      return;
+    }
+    if (
+      !selectedScheduleId ||
+      !data.some((item) => item.id === selectedScheduleId)
+    ) {
+      setSelectedScheduleId(data[0].id);
+    }
+  }, [data, selectedScheduleId]);
+
+  const scheduleFeedback = [
+    {
+      icon: CalendarCheck2,
+      label: tList('feedbackTotalLabel'),
+      value: tList('feedbackCount', { count: data.length })
+    },
+    {
+      icon: CheckCircle2,
+      label: tList('feedbackEnabledLabel'),
+      value: tList('feedbackCount', { count: enabledCount })
+    },
+    {
+      icon: PauseCircle,
+      label: tList('feedbackPausedLabel'),
+      value: tList('feedbackCount', { count: pausedCount })
+    },
+    {
+      icon: Clock3,
+      label: tList('feedbackNextRunLabel'),
+      value: nextRunLabel
+    }
+  ];
 
   const handleSelectSchedule = (scheduleId: string) => {
-    const schedule = data.find((item) => item.id === scheduleId);
-    if (!schedule) return;
-    setEditingSchedule(schedule);
+    setSelectedScheduleId(scheduleId);
   };
 
   return (
@@ -123,68 +205,102 @@ export function Schedules() {
         </div>
       ) : (
         <>
-          {!!schedules?.length && (
-            <div className='flex flex-wrap items-center justify-between gap-3'>
-              <p className='text-muted-foreground'>
-                <span className='font-medium text-foreground'>
-                  {schedules?.length ?? 0}
-                </span>{' '}
-                {tList('countLabel')}
-              </p>
+          <section className='overflow-hidden rounded-xl border bg-card shadow-sm'>
+            <div className='flex flex-wrap items-start justify-between gap-4 border-b bg-muted/20 p-4'>
+              <div className='flex min-w-0 items-start gap-3'>
+                <span className='mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-xl border bg-background text-primary shadow-sm'>
+                  <CalendarCheck2 className='size-5' />
+                </span>
+                <div className='min-w-0'>
+                  <h2 className='text-lg font-semibold tracking-tight text-foreground'>
+                    {tList('guideTitle')}
+                  </h2>
+                  <p className='mt-1 max-w-3xl text-sm leading-6 text-muted-foreground'>
+                    {tList('guideDescription')}
+                  </p>
+                </div>
+              </div>
               <Can object='schedules' action='create'>
                 <Button size='sm' onClick={() => setCreateOpen(true)}>
                   <Plus size={16} className='mr-1' />
-                  {tList('trigger')}
+                  {tList('guidePrimaryCta')}
                 </Button>
               </Can>
             </div>
-          )}
+            <div className='grid gap-px bg-border sm:grid-cols-2 xl:grid-cols-4'>
+              {scheduleFeedback.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <div
+                    key={item.label}
+                    className='flex min-w-0 items-center gap-3 bg-card px-4 py-3'
+                    aria-label={`${item.label}: ${item.value}`}
+                  >
+                    <span className='flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground'>
+                      <Icon className='size-4' />
+                    </span>
+                    <div className='min-w-0'>
+                      <p className='text-xs text-muted-foreground'>
+                        {item.label}
+                      </p>
+                      <p className='truncate text-sm font-semibold text-foreground'>
+                        {item.value}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
 
           {!schedules?.length ? (
-            <div className='rounded-xl border border-dashed border-border bg-muted/20 p-16 text-center'>
-              <FileText className='mx-auto mb-4 size-12 text-muted-foreground/80' />
+            <div className='rounded-xl border border-dashed border-border bg-muted/20 p-8 text-center'>
+              <FileText className='mx-auto mb-4 size-10 text-muted-foreground/80' />
               <p className='text-sm font-medium text-foreground'>
                 {tList('emptyTitle')}
               </p>
-              <p className='mt-1 text-sm text-muted-foreground'>
+              <p className='mx-auto mt-1 max-w-md text-sm leading-6 text-muted-foreground'>
                 {tList('emptyDescription')}
               </p>
-              <div className='mx-auto mt-6 max-w-[42rem] rounded-lg border border-border/60 bg-background/50 p-4 text-center'>
-                <p className='text-xs font-semibold text-foreground'>
-                  {tList('quickStartTitle')}
-                </p>
-                <ol className='mx-auto mt-2 list-decimal space-y-1 pl-4 text-left text-xs text-muted-foreground'>
-                  <li>{tList('quickStartStep1')}</li>
-                  <li>{tList('quickStartStep2')}</li>
-                  <li>{tList('quickStartStep3')}</li>
-                </ol>
-                <div className='mt-3 flex flex-wrap justify-center gap-2'>
-                  <Button asChild size='sm' variant='outline'>
-                    <Link href={ROUTES.DEVICE_GROUPS.ROOT}>
-                      {tList('quickStartGoDeviceGroups')}
-                    </Link>
+              <div className='mt-5 flex flex-wrap justify-center gap-2'>
+                <Can object='schedules' action='create'>
+                  <Button size='sm' onClick={() => setCreateOpen(true)}>
+                    <Plus size={16} className='mr-1' />
+                    {tList('guidePrimaryCta')}
                   </Button>
-                  <Button asChild size='sm' variant='outline'>
-                    <Link href={ROUTES.CAMPAIGNS.ROOT}>
-                      {tList('quickStartGoCampaigns')}
-                    </Link>
-                  </Button>
-                  <Can object='schedules' action='create'>
-                    <Button size='sm' onClick={() => setCreateOpen(true)}>
-                      <Plus size={16} className='mr-1' />
-                      {tList('trigger')}
-                    </Button>
-                  </Can>
-                </div>
+                </Can>
+                <Button asChild size='sm' variant='outline'>
+                  <Link href={ROUTES.CAMPAIGNS.ROOT}>
+                    {tList('quickStartGoCampaigns')}
+                  </Link>
+                </Button>
+                <Button asChild size='sm' variant='ghost'>
+                  <Link href={ROUTES.DEVICE_GROUPS.ROOT}>
+                    {tList('quickStartGoDeviceGroups')}
+                  </Link>
+                </Button>
               </div>
             </div>
           ) : (
-            <ScheduleCalendarPreview
-              schedules={calendarSchedules}
-              onSelectSchedule={
-                perms.canUpdate ? handleSelectSchedule : undefined
-              }
-            />
+            <section className='overflow-hidden rounded-xl border bg-card shadow-sm'>
+              <div className='grid items-start gap-px bg-border lg:grid-cols-[minmax(0,1fr)_20rem] 2xl:grid-cols-[minmax(0,1fr)_22rem]'>
+                <div className='order-1 bg-card lg:sticky lg:top-4 lg:order-2 lg:self-start'>
+                  <ScheduleDetailPanel
+                    schedule={selectedSchedule}
+                    targetLabel={selectedCalendarItem?.targetLabel ?? null}
+                    onDeleted={() => setSelectedScheduleId(null)}
+                  />
+                </div>
+                <div className='order-2 min-w-0 bg-card lg:order-1'>
+                  <ScheduleCalendarPreview
+                    schedules={calendarSchedules}
+                    selectedScheduleId={selectedSchedule?.id ?? null}
+                    onSelectSchedule={handleSelectSchedule}
+                    className='min-w-0 border-0 shadow-none'
+                  />
+                </div>
+              </div>
+            </section>
           )}
 
           {createOpen && (
@@ -192,17 +308,6 @@ export function Schedules() {
               open={createOpen}
               onOpenChange={setCreateOpen}
               mode='create'
-            />
-          )}
-
-          {editingSchedule && (
-            <ScheduleFormDialog
-              open={Boolean(editingSchedule)}
-              onOpenChange={(nextOpen) => {
-                if (!nextOpen) setEditingSchedule(null);
-              }}
-              mode='edit'
-              schedule={editingSchedule}
             />
           )}
         </>

@@ -185,6 +185,9 @@ def _build_scope(filters: FleetQueryFilters, relay_serials: set[str] | None) -> 
                 Device.serial.ilike(needle),
                 Device.adb_serial.ilike(needle),
                 Device.relay_serial.ilike(needle),
+                Device.brand.ilike(needle),
+                Device.model.ilike(needle),
+                Device.android_version.ilike(needle),
             )
         )
     if filters.state:

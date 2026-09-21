@@ -216,6 +216,7 @@ import {
 import { syncCampaignDetailCaches } from '../lib/control-record-cache';
 import { sanitizeScenarioStepsForApi } from '../lib/sanitize-scenario-steps-for-api';
 import { useConfirm } from '@/providers/modal-provider';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 const MAX_MULTI_CONTROL_DEVICES = 20;
 const MAX_MULTI_FOLLOWER_DEVICES = MAX_MULTI_CONTROL_DEVICES - 1;
@@ -258,6 +259,7 @@ export function ControlRecordView({
   const tRequirements = useTranslations(
     'campaignsFeature.stepEditor.requirements'
   );
+  const isMobile = useIsMobile();
   const tGate = useTranslations('executionMessages');
   const tCapabilityPreflight = useTranslations(
     'campaignsFeature.capabilityPreflight'
@@ -3277,6 +3279,8 @@ export function ControlRecordView({
       variant='workbench'
       labels={{
         closePickerTitle: t('multiControl.closePicker'),
+        deviceActionsLabel: t('workbench.deviceActionsLabel'),
+        deviceActionsHint: t('workbench.deviceActionsHint'),
         startRecording: t('startRecording'),
         stopRecording: t('stopRecording'),
         tryRun: t('workbench.tryRunOnDevice'),
@@ -3447,7 +3451,7 @@ export function ControlRecordView({
         </div>
       ) : null}
 
-      {selectedDevice ? (
+      {selectedDevice && isMobile ? (
         <div className='flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-5 py-10 md:hidden'>
           <div className='max-w-sm text-center'>
             <div className='mx-auto flex size-14 items-center justify-center rounded-2xl bg-muted text-muted-foreground ring-1 ring-border'>

@@ -96,7 +96,10 @@ export function ConnectDialog({
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [pushingUrl, setPushingUrl] = useState(false);
   const allocatedUnclaimed = Boolean(
-    !isPendingDevice(device) && device.managed_by_relay_id && !device.user_id
+    !isPendingDevice(device) &&
+      device.managed_by_relay_id &&
+      !device.user_id &&
+      device.status === 'unpaired'
   );
   const [connectedDevice, setConnectedDevice] = useState<DeviceOut | null>(
     null

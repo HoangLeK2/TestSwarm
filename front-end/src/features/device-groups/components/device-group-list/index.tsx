@@ -1,8 +1,9 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { FolderOpen } from 'lucide-react';
+import { toast } from 'sonner';
 import {
   useDeviceGroups,
   useDeleteDeviceGroup
@@ -18,10 +19,12 @@ import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { ROUTES } from '@/config/routes';
 import { Can } from '@/features/auth';
+import { formatFarmApiError } from '@/lib/format-farm-api-error';
 
 export function DeviceGroupList() {
   const t = useTranslations('deviceGroupsFeature.list');
   const tCommon = useTranslations('common');
+  const locale = useLocale();
   const confirm = useConfirm();
   const { data: groups, isLoading, error } = useDeviceGroups();
   const deleteMutation = useDeleteDeviceGroup();
@@ -45,12 +48,18 @@ export function DeviceGroupList() {
               zIndex: 10_000
             });
             if (!ok) return;
-            deleteMutation.mutate(group.id);
+            deleteMutation.mutate(group.id, {
+              onSuccess: () => toast.success(t('deleteSuccess')),
+              onError: (err) => {
+                toast.error(formatFarmApiError(err, t('deleteFailed')));
+              }
+            });
           })();
         },
-        (group) => setSelectedGroup(group)
+        (group) => setSelectedGroup(group),
+        locale
       ),
-    [t, tCommon, confirm, deleteMutation]
+    [t, tCommon, confirm, deleteMutation, locale]
   );
 
   const { table } = useDataTable<DeviceGroupOut>({
@@ -69,6 +78,31 @@ export function DeviceGroupList() {
 
   return (
     <div className='space-y-6'>
+      <div className='flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between'>
+        <div className='max-w-3xl space-y-1.5'>
+          <h1 className='text-2xl font-semibold tracking-tight'>
+            {t('title')}
+          </h1>
+          <p className='text-sm leading-6 text-muted-foreground'>
+            {t('description')}
+          </p>
+        </div>
+        {!!groups?.length && (
+          <Can object='device-groups' action='create'>
+            <CreateDeviceGroupDialog />
+          </Can>
+        )}
+      </div>
+
+      <div className='rounded-lg border border-border bg-muted/20 px-4 py-3'>
+        <p className='text-sm font-medium text-foreground'>
+          {t('operatorCueTitle')}
+        </p>
+        <p className='mt-1 text-sm leading-6 text-muted-foreground'>
+          {t('operatorCueDescription')}
+        </p>
+      </div>
+
       {isLoading || error ? (
         <div>
           {isLoading && (
@@ -88,9 +122,6 @@ export function DeviceGroupList() {
                 </span>{' '}
                 {t('countLabel')}
               </p>
-              <Can object='device-groups' action='create'>
-                <CreateDeviceGroupDialog />
-              </Can>
             </div>
           )}
 

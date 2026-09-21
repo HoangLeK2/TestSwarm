@@ -59,6 +59,7 @@ from db.crud.fleet_stats import (
 from db.crud.device_group import update_device_tags
 from db.crud.device_state import get_device_state, get_device_states_map
 from db.models.enums import DeviceFsmState
+from db.models.enums import DeviceRegistryStatus
 from db.models.enums import McpSessionStatus
 from db.models.device import Device
 from db.models.device_fsm import DeviceFsmSnapshot
@@ -278,6 +279,7 @@ async def list_allocated_devices(
         .where(Device.org_id == org_id)
         .where(Device.user_id.is_(None))
         .where(Device.managed_by_relay_id.isnot(None))
+        .where(Device.status == DeviceRegistryStatus.UNPAIRED.value)
         .order_by(Device.created_at.asc())
         .limit(limit)
     )

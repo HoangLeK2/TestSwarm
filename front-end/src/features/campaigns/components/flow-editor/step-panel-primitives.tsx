@@ -259,6 +259,7 @@ export function StepPanelHeader({
   campaignScenarios?: RunScenarioCampaignOption[];
 }) {
   const { getStepTypeName, getStepSummary } = useCampaignFlowI18n();
+  const tSetup = useTranslations('campaignsFeature.stepEditor.setupFlow');
   const typeName = formatStepLabelForCard(getStepTypeName(step.type));
   const userTitle = String((step as { title?: string }).title ?? '').trim();
   const runScenarioId =
@@ -292,14 +293,22 @@ export function StepPanelHeader({
         <StepIcon type={step.type} size={18} />
       </span>
       <div className='min-w-0 flex-1 pt-0.5'>
-        <h3 className='text-sm font-semibold leading-tight text-foreground'>
-          {typeName}
-        </h3>
+        <div className='flex min-w-0 flex-wrap items-center gap-1.5'>
+          <h3 className='min-w-0 text-sm font-semibold leading-tight text-foreground'>
+            {typeName}
+          </h3>
+          <span className='rounded-full border border-primary/20 bg-primary/5 px-1.5 py-0.5 text-[10px] font-medium text-primary'>
+            {tSetup('selectedBadge')}
+          </span>
+        </div>
         {subtitle ? (
           <p className='mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground'>
             {subtitle}
           </p>
         ) : null}
+        <p className='sr-only' aria-live='polite'>
+          {tSetup('selectedAnnouncement', { step: typeName })}
+        </p>
       </div>
     </div>
   );
@@ -662,13 +671,14 @@ export function AppLifecycleStepFields({
     return (
       <StepPanelSection title={tSec('appTarget')}>
         <StepPanelField label={tApp('packageLabel')}>
-          <Input
-            className='h-9 font-mono text-sm'
+          <StepPanelInput
+            className='h-8 font-mono text-xs'
             value={step.package ?? ''}
-            onChange={(e) => update({ package: e.target.value })}
+            onValueCommit={(value) => update({ package: value })}
             placeholder={tApp('placeholderPackage')}
           />
         </StepPanelField>
+        <StepPanelHint>{tApp('packageHint')}</StepPanelHint>
       </StepPanelSection>
     );
   }
@@ -677,13 +687,14 @@ export function AppLifecycleStepFields({
     return (
       <StepPanelSection title={tSec('appTarget')}>
         <StepPanelField label={tApp('packageLabel')}>
-          <Input
-            className='h-9 font-mono text-sm'
+          <StepPanelInput
+            className='h-8 font-mono text-xs'
             value={step.package ?? ''}
-            onChange={(e) => update({ package: e.target.value })}
+            onValueCommit={(value) => update({ package: value })}
             placeholder={tApp('placeholderPackage')}
           />
         </StepPanelField>
+        <StepPanelHint>{tApp('packageHint')}</StepPanelHint>
         <StepPanelHint>
           <span className='text-amber-700 dark:text-amber-300'>
             {tApp('clearWarning')}
@@ -698,13 +709,14 @@ export function AppLifecycleStepFields({
       <>
         <StepPanelSection title={tSec('appTarget')}>
           <StepPanelField label={tApp('packageLabel')}>
-            <Input
-              className='h-9 font-mono text-sm'
+            <StepPanelInput
+              className='h-8 font-mono text-xs'
               value={step.package ?? ''}
-              onChange={(e) => update({ package: e.target.value })}
+              onValueCommit={(value) => update({ package: value })}
               placeholder={tApp('placeholderPackage')}
             />
           </StepPanelField>
+          <StepPanelHint>{tApp('packageHint')}</StepPanelHint>
         </StepPanelSection>
         <StepPanelSection title={tSec('timing')}>
           <StepPanelField label={tApp('timeoutSeconds')}>
@@ -734,21 +746,22 @@ export function AppLifecycleStepFields({
       <>
         <StepPanelSection title={tSec('appTarget')}>
           <StepPanelField label={tApp('packageLabel')}>
-            <Input
-              className='h-9 font-mono text-sm'
+            <StepPanelInput
+              className='h-8 font-mono text-xs'
               value={step.package ?? ''}
-              onChange={(e) => update({ package: e.target.value })}
+              onValueCommit={(value) => update({ package: value })}
               placeholder={tApp('placeholderChrome')}
             />
           </StepPanelField>
+          <StepPanelHint>{tApp('packageHint')}</StepPanelHint>
           <StepPanelField label={tApp('activityLabel')}>
-            <Input
-              className='h-9 font-mono text-sm'
+            <StepPanelInput
+              className='h-8 font-mono text-xs'
               value={step.activity ?? step.component ?? ''}
-              onChange={(e) =>
+              onValueCommit={(value) =>
                 update({
-                  activity: e.target.value || undefined,
-                  component: e.target.value || undefined
+                  activity: value || undefined,
+                  component: value || undefined
                 })
               }
               placeholder={tApp('activityPlaceholder')}

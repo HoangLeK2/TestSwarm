@@ -6,7 +6,7 @@ import * as React from 'react';
 
 import { Button } from '@/components/ui/button';
 
-export function ModeToggle() {
+export function ModeToggle({ label = 'Toggle theme' }: { label?: string }) {
   const { setTheme, resolvedTheme } = useTheme();
 
   const handleThemeToggle = React.useCallback(
@@ -38,9 +38,10 @@ export function ModeToggle() {
       size='icon'
       className='group/toggle size-8'
       onClick={handleThemeToggle}
+      aria-label={label}
     >
       <IconBrightness />
-      <span className='sr-only'>Toggle theme</span>
+      <span className='sr-only'>{label}</span>
     </Button>
   );
 }

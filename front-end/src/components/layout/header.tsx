@@ -6,12 +6,15 @@ import { SidebarTrigger } from '../ui/sidebar';
 import { ModeToggle } from './ThemeToggle/theme-toggle';
 import { UserNav } from './user-nav';
 import { NotificationBell } from '@/features/notifications/components/notification-bell';
+import { useTranslations } from 'next-intl';
 
 export default function Header({
   className
 }: {
   className?: string | undefined;
 }) {
+  const t = useTranslations('layout');
+
   return (
     <header
       data-navbar-style='sticky'
@@ -22,7 +25,10 @@ export default function Header({
     >
       <div className={cn('flex w-full items-center justify-between')}>
         <div className='flex items-center gap-2 px-4'>
-          <SidebarTrigger className='-ml-1' />
+          <SidebarTrigger
+            className='-ml-1'
+            aria-label={t('toggleSidebar')}
+          />
           <Separator orientation='vertical' className='mr-2 h-4' />
           <Breadcrumbs />
         </div>
@@ -30,7 +36,7 @@ export default function Header({
         <div className='flex items-center gap-2 px-4'>
           <NotificationBell />
           <LanguageSwitcher />
-          <ModeToggle />
+          <ModeToggle label={t('toggleTheme')} />
           <UserNav />
         </div>
       </div>

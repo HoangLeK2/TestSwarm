@@ -51,8 +51,7 @@ import {
   type WebCodecsSupport
 } from '../lib/device-tile-preview-policy';
 import {
-  deviceDisplayName,
-  deviceSecondarySerial
+  deviceDisplayName
 } from '../lib/device-display-name';
 
 /** Lazy by default so multiple dashboard tabs do not exhaust browser stream connections. */
@@ -134,17 +133,18 @@ function HealthIndicator({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className='inline-flex h-6 min-w-0 items-center gap-1 rounded border px-1.5 text-[10px]'>
-          <span
-            className={cn(
-              'size-1.5 shrink-0 rounded-full',
-              ok ? 'bg-emerald-500' : 'bg-amber-500'
-            )}
-            aria-hidden
-          />
-          <span className='truncate'>
-            {label}: {value}
+        <span className='inline-flex h-7 w-full min-w-0 items-center justify-between gap-2 rounded-md border bg-background/60 px-2 text-[11px]'>
+          <span className='inline-flex min-w-0 items-center gap-1.5 text-muted-foreground'>
+            <span
+              className={cn(
+                'size-1.5 shrink-0 rounded-full',
+                ok ? 'bg-emerald-500' : 'bg-amber-500'
+              )}
+              aria-hidden
+            />
+            <span className='truncate'>{label}</span>
           </span>
+          <span className='shrink-0 font-medium text-foreground'>{value}</span>
         </span>
       </TooltipTrigger>
       <TooltipContent side='bottom' className='max-w-64 text-xs'>
@@ -324,7 +324,12 @@ function DeviceTilePreviewInner({
 }: DeviceTilePreviewProps) {
   const t = useTranslations('devicesFarm');
   const id = serialToId(device.serial);
-  const secondarySerial = deviceSecondarySerial(device);
+  const rawDisplayName = deviceDisplayName(device, '');
+  const primarySerial = device.registered_serial || device.serial;
+  const displayTitle =
+    rawDisplayName && rawDisplayName !== primarySerial
+      ? rawDisplayName
+      : t('unnamedDevice');
   const isActive = isVisibleDeviceFarmActiveDevice(device);
   const health = device.health;
   const commandReady = health ? health.command.status === 'ready' : isActive;
@@ -461,6 +466,13 @@ function DeviceTilePreviewInner({
     loadStream &&
     !shouldUseWebRtcPreview &&
     (frameStale || (!isPreviewQueued && !hasFrame && loadingElapsedSec >= 12));
+  const operationalState = agentOffline
+    ? 'offline'
+    : isUnresponsive
+      ? 'noVideo'
+      : commandReady
+        ? 'ready'
+        : 'busy';
 
   useEffect(() => {
     if (!GRID_PREVIEW_H264) {
@@ -630,36 +642,37 @@ function DeviceTilePreviewInner({
         <div className='border-b border-border/60 px-3 py-3'>
           <div className='flex min-w-0 items-start justify-between gap-2'>
             <div className='min-w-0'>
-              <div className='flex min-w-0 items-center gap-1.5'>
+              <div className='flex min-w-0 flex-wrap items-center gap-1.5'>
                 <span className='truncate text-sm font-semibold leading-5 text-foreground'>
-                  {deviceDisplayName(device)}
+                  {displayTitle}
                 </span>
-                {!isActive || agentOffline ? (
-                  <Badge
-                    variant='outline'
-                    className='shrink-0 border-red-500/30 bg-red-500/10 text-[10px] text-red-700 dark:text-red-300'
-                  >
-                    {t('badgeOffline')}
-                  </Badge>
-                ) : isUnresponsive ? (
-                  <Badge
-                    variant='outline'
-                    className='shrink-0 border-amber-500/30 bg-amber-500/10 text-[10px] text-amber-800 dark:text-amber-200'
-                  >
-                    {t('badgeUnresponsive')}
-                  </Badge>
-                ) : null}
-              </div>
-              {secondarySerial ? (
-                <p
-                  className='mt-0.5 truncate font-mono text-[11px] leading-4 text-muted-foreground'
-                  title={secondarySerial}
+                <Badge
+                  variant='outline'
+                  className={cn(
+                    'shrink-0 text-[10px]',
+                    operationalState === 'offline'
+                      ? 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300'
+                      : operationalState === 'noVideo'
+                        ? 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200'
+                        : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                  )}
                 >
-                  {secondarySerial}
+                  {t(`operationalStatus.${operationalState}`)}
+                </Badge>
+              </div>
+              {primarySerial ? (
+                <p
+                  className='mt-0.5 truncate text-[11px] leading-4 text-muted-foreground'
+                  title={primarySerial}
+                >
+                  {t('serialLabel', { serial: primarySerial })}
                 </p>
               ) : null}
             </div>
           </div>
+          <p className='mt-1.5 text-[11px] leading-4 text-muted-foreground'>
+            {t(`operationalHint.${operationalState}`)}
+          </p>
 
           <div className='mt-2 flex min-w-0 items-center gap-1.5'>
             {onOpenSteps ? (
@@ -680,7 +693,7 @@ function DeviceTilePreviewInner({
                     device.serial
                   )}
                 >
-                  {t('controlDevice')}
+                  {t('openControl')}
                 </Link>
               </Button>
             ) : (
@@ -691,11 +704,11 @@ function DeviceTilePreviewInner({
                 disabled
                 aria-disabled='true'
               >
-                {t('controlDevice')}
+                {t('openControl')}
               </Button>
             )}
           </div>
-          <div className='mt-2 grid grid-cols-3 gap-1'>
+          <div className='mt-2 grid gap-1.5'>
             <HealthIndicator
               label={t('health.agentLabel')}
               value={t(
@@ -724,7 +737,7 @@ function DeviceTilePreviewInner({
               ok={commandReady}
             />
           </div>
-          <p className='mt-1 truncate text-[10px] text-muted-foreground'>
+          <p className='mt-1.5 truncate text-[10px] text-muted-foreground'>
             {t('health.heartbeat')}:{' '}
             {(health?.last_signal_at ?? health?.agent.observed_at)
               ? new Intl.DateTimeFormat(undefined, {

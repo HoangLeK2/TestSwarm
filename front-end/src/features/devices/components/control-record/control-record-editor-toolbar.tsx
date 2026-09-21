@@ -35,6 +35,8 @@ import { cn } from '@/lib/utils';
 
 type ControlRecordEditorToolbarLabels = {
   closePickerTitle: string;
+  deviceActionsLabel: string;
+  deviceActionsHint: string;
   startRecording: string;
   stopRecording: string;
   tryRun: string;
@@ -185,35 +187,43 @@ export function ControlRecordEditorToolbar({
             <span className='truncate'>{pageSummary}</span>
           </div>
         ) : null}
-        <Button
-          size='sm'
-          variant={recording ? 'destructive' : 'default'}
-          className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
-          onClick={onToggleRecording}
-          disabled={!hasSelectedDevice}
+        <div
+          className='flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-50/60 px-1.5 dark:bg-amber-950/20'
+          title={labels.deviceActionsHint}
         >
-          {recording ? (
-            <Square className='size-3.5' />
-          ) : (
-            <Circle className='size-3.5 fill-current' />
-          )}
-          {recording ? labels.stopRecording : labels.startRecording}
-        </Button>
-        <Button
-          size='sm'
-          variant='outline'
-          className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
-          onClick={onOpenPlayer}
-          disabled={!hasSelectedDevice || selectedDeviceBusy}
-          title={
-            hasSelectedDevice && selectedDeviceBusy
-              ? labels.busyTitle
-              : undefined
-          }
-        >
-          <Play className='size-3.5' />
-          {labels.tryRun}
-        </Button>
+          <span className='hidden text-[10px] font-semibold uppercase text-amber-800 dark:text-amber-200 xl:inline'>
+            {labels.deviceActionsLabel}
+          </span>
+          <Button
+            size='sm'
+            variant={recording ? 'destructive' : 'default'}
+            className='h-6 shrink-0 gap-1.5 px-2 text-xs'
+            onClick={onToggleRecording}
+            disabled={!hasSelectedDevice}
+          >
+            {recording ? (
+              <Square className='size-3.5' />
+            ) : (
+              <Circle className='size-3.5 fill-current' />
+            )}
+            {recording ? labels.stopRecording : labels.startRecording}
+          </Button>
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-6 shrink-0 gap-1.5 border-amber-500/40 bg-background px-2 text-xs'
+            onClick={onOpenPlayer}
+            disabled={!hasSelectedDevice || selectedDeviceBusy}
+            title={
+              hasSelectedDevice && selectedDeviceBusy
+                ? labels.busyTitle
+                : labels.deviceActionsHint
+            }
+          >
+            <Play className='size-3.5' />
+            {labels.tryRun}
+          </Button>
+        </div>
       </div>
       <div className='h-5 w-px shrink-0 bg-border' />
       <div className='flex shrink-0 items-center gap-1.5'>

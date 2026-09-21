@@ -814,6 +814,7 @@ async def _claim_relay_serial(db, row, serial: str, user) -> str:
         user_id=user.id,
         org_id=getattr(user, "org_id", None),
         allow_relay_reclaim=True,
+        preserve_existing_name=True,
     )
     if existing.managed_by_org_id is None:
         existing.managed_by_org_id = getattr(user, "org_id", None)

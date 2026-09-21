@@ -30,7 +30,11 @@ import { removeDeviceFromCache } from '../../hooks/use-devices';
 import { useOrganization } from '@/features/organization/hooks/use-organization';
 import { TagsCell } from './TagsCell';
 import { DeviceUpdateDialog } from '../device-update-dialog';
-import { deviceDisplayName } from '../../lib/device-display-name';
+import {
+  deviceDisplayName,
+  deviceModelLabel,
+  deviceSecondarySerial
+} from '../../lib/device-display-name';
 import { DeviceCmdButton } from './BootstrapDialog';
 import type { ConfirmModalOptions } from '@/providers/modal-provider';
 import {
@@ -214,6 +218,10 @@ export function getDeviceColumns({
       cell: ({ row }) => {
         const d = row.original;
         const pending = isPendingDevice(d);
+        const displayName = deviceDisplayName(d);
+        const secondarySerial = pending
+          ? t('notConnected')
+          : deviceSecondarySerial(d);
 
         return (
           <div className='flex flex-col'>
@@ -221,11 +229,13 @@ export function getDeviceColumns({
               href={ROUTES.DEVICES.DETAIL(d.serial)}
               className='truncate text-sm font-medium hover:underline'
             >
-              {deviceDisplayName(d)}
+              {displayName}
             </Link>
-            <span className='font-mono text-[11px] text-muted-foreground'>
-              {pending ? t('notConnected') : d.serial}
-            </span>
+            {secondarySerial ? (
+              <span className='font-mono text-[11px] text-muted-foreground'>
+                {secondarySerial}
+              </span>
+            ) : null}
           </div>
         );
       }
@@ -272,12 +282,16 @@ export function getDeviceColumns({
       header: t('columns.specs'),
       cell: ({ row }) => {
         const d = row.original;
+        const modelLabel = deviceModelLabel(d);
+        const displayName = deviceDisplayName(d);
+        const showModel = modelLabel && modelLabel !== displayName;
+        const showAdbSerial = d.adb_serial && d.adb_serial !== d.serial;
         return (
           <div className='space-y-0.5 text-[11px] text-muted-foreground'>
-            {d.brand && (
+            {showModel && (
               <div>
                 <span className='font-medium'>{t('labels.model')}:</span>{' '}
-                {d.brand} {d.model}
+                {modelLabel}
               </div>
             )}
             {d.android_version && (
@@ -286,7 +300,7 @@ export function getDeviceColumns({
                 {d.android_version} (SDK {d.sdk_version})
               </div>
             )}
-            {d.adb_serial && (
+            {showAdbSerial && (
               <div>
                 <span className='font-medium'>{t('labels.adbSerial')}:</span>{' '}
                 <span className='font-mono'>{d.adb_serial}</span>

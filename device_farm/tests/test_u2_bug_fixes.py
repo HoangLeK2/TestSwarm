@@ -1087,6 +1087,27 @@ class TestDeviceClientLaunchApp:
 class TestWatchdogAtxProbe:
     """Docker/agent-boot watchdog probes must use relay before direct TCP."""
 
+    def test_ready_relay_without_scrcpy_stays_healthy(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d.state = DeviceState.READY
+        d._agent_send = None
+        d._scrcpy_active = False
+        d.reconnect_attempts = 2
+        relay = _FakeRelay(["logical-serial"])
+
+        wd = WatchdogThread(manager=Mock(), config=Config())
+        wd._bad_since[d.serial] = time.monotonic()
+
+        with patch(
+            "runtime.transports.adb_relay_server.get_relay_manager",
+            return_value=relay,
+        ):
+            wd._check_device(d)
+
+        assert d.serial not in wd._bad_since
+        assert d.reconnect_attempts == 0
+        assert d.state == DeviceState.READY
+
     def test_relay_probe_success_does_not_mark_atx_miss(self):
         d = DeviceClient(serial="logical-serial", index=0, config=Config())
         d._adb_serial = "172.16.0.86:5555"

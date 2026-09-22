@@ -81,6 +81,7 @@ class ScheduleRunWorkflow:
     @workflow.run
     async def run(self, inp: ScheduleRunInput) -> ScheduleRunOutput:
         schedule_id = inp.schedule_id
+        scheduled_for = workflow.now().isoformat()
 
         schedule_config: dict = await workflow.execute_activity(
             "load_schedule",
@@ -101,7 +102,7 @@ class ScheduleRunWorkflow:
         if not run_id:
             run_id = await workflow.execute_activity(
                 "create_run_record",
-                schedule_id,
+                args=[schedule_id, scheduled_for],
                 start_to_close_timeout=_SHORT,
                 retry_policy=_DB_RETRY,
             )
@@ -130,6 +131,7 @@ class ScheduleRunWorkflow:
                 dispatch_result,
                 schedule_config.get("cron_expression", ""),
                 schedule_config.get("timezone", "Asia/Ho_Chi_Minh"),
+                scheduled_for,
             ],
             start_to_close_timeout=_MEDIUM,
             retry_policy=_FINALIZE_RETRY,

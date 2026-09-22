@@ -64,6 +64,7 @@ from db.models.enums import McpSessionStatus
 from db.models.device import Device
 from db.models.device_fsm import DeviceFsmSnapshot
 from db.models.mcp_session import McpSession
+from db.models.relay_agent import RelayAgent
 from core.env import device_farm_ws_public_base
 from services.fleet_stats import derive_session_owner_type
 from services import relay_onboarding
@@ -297,11 +298,15 @@ async def list_allocated_devices(
         )
 
     rows = list((await db.execute(stmt)).scalars().all())
+    managed_relays = await _managed_relay_map(db, rows)
     states_map = await get_device_states_map(db, [device.id for device in rows])
     return [
         _to_out(
             device,
             relay_id=getattr(device, "managed_by_relay_id", None),
+            managed_relay=managed_relays.get(
+                str(getattr(device, "managed_by_relay_id", "") or "")
+            ),
             state=states_map.get(device.id).state
             if states_map.get(device.id)
             else DeviceFsmState.UNKNOWN.value,
@@ -527,6 +532,7 @@ async def list_devices(
                 return None
 
             result_items: list[DeviceOut] = []
+            managed_relays = await _managed_relay_map(db, devices_by_id.values())
             for row in fleet_page.items:
                 device = devices_by_id.get(row.db_id)
                 if device is None:
@@ -537,6 +543,9 @@ async def list_devices(
                         device,
                         relay_id=resolve_relay_id(device),
                         adb_serial=row.adb_serial,
+                        managed_relay=managed_relays.get(
+                            str(getattr(device, "managed_by_relay_id", "") or "")
+                        ),
                         state=effective_state,
                         transport_online=_transport_online_for(
                             device, ctrl, relay_manager, adb_serial=row.adb_serial
@@ -636,6 +645,7 @@ async def list_devices(
         return _agent_boot_authoritative_state(device, state)
 
     out = []
+    managed_relays = await _managed_relay_map(db, devices)
     for d in devices:
         d_state = _state_for(d, states_map)
         runtime_adb_serial = _resolve_runtime_adb_serial(d)
@@ -644,6 +654,9 @@ async def list_devices(
                 d,
                 relay_id=_resolve_relay_id(d),
                 adb_serial=runtime_adb_serial,
+                managed_relay=managed_relays.get(
+                    str(getattr(d, "managed_by_relay_id", "") or "")
+                ),
                 state=d_state,
                 transport_online=_transport_online_for(
                     d, ctrl, relay_manager, adb_serial=runtime_adb_serial
@@ -999,9 +1012,13 @@ async def claim_allocated_device_route(
         raise HTTPException(status_code=status_code, detail={"code": code}) from exc
     await db.commit()
     state_row = await get_device_state(db, device.id)
+    managed_relays = await _managed_relay_map(db, [device])
     return _to_out(
         device,
         relay_id=getattr(device, "managed_by_relay_id", None),
+        managed_relay=managed_relays.get(
+            str(getattr(device, "managed_by_relay_id", "") or "")
+        ),
         state=state_row.state if state_row else DeviceFsmState.UNKNOWN.value,
     )
 
@@ -1448,14 +1465,69 @@ def _transport_online_for(d, ctrl, relay, adb_serial: str | None = None) -> bool
     )
 
 
+async def _managed_relay_map(db, devices) -> dict[str, RelayAgent]:
+    """Relay identity for phones served by another workspace's agent.
+
+    `/relay-agents` is scoped to the caller's workspace, but allocated phones can
+    be carried by the pool workspace's agent. Resolve only the relays referenced
+    by the returned devices, under each managing org's tenant context.
+    """
+    by_org: dict[str, set[str]] = {}
+    for device in devices:
+        relay_id = str(getattr(device, "managed_by_relay_id", "") or "").strip()
+        if not relay_id:
+            continue
+        org_id = str(
+            getattr(device, "managed_by_org_id", None)
+            or getattr(device, "org_id", "")
+            or ""
+        ).strip()
+        if not org_id:
+            continue
+        by_org.setdefault(org_id, set()).add(relay_id)
+
+    relays: dict[str, RelayAgent] = {}
+    for org_id, relay_ids in by_org.items():
+        if not relay_ids:
+            continue
+        with tenant_context(org_id):
+            rows = (
+                (
+                    await db.execute(
+                        select(RelayAgent)
+                        .where(RelayAgent.org_id == org_id)
+                        .where(RelayAgent.relay_id.in_(sorted(relay_ids)))
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        for row in rows:
+            relays[str(row.relay_id)] = row
+    return relays
+
+
 def _to_out(
     d,
     *,
     relay_id: str | None = None,
     adb_serial: str | None = None,
+    managed_relay=None,
     state: str = DeviceFsmState.UNKNOWN.value,
     transport_online: bool = False,
 ) -> DeviceOut:
+    managed_by_relay_id = getattr(d, "managed_by_relay_id", None)
+    managed_relay_name = (
+        str(getattr(managed_relay, "name", "") or "").strip() or None
+    )
+    managed_relay_hostname = (
+        str(getattr(managed_relay, "hostname", "") or "").strip() or None
+    )
+    managed_relay_label = (
+        managed_relay_name
+        or managed_relay_hostname
+        or (str(managed_by_relay_id).strip() if managed_by_relay_id else None)
+    )
     return DeviceOut(
         id=d.id,
         db_id=d.id,
@@ -1475,7 +1547,10 @@ def _to_out(
         adb_serial=adb_serial if adb_serial is not None else getattr(d, "adb_serial", None),
         relay_serial=getattr(d, "relay_serial", None),
         managed_by_org_id=getattr(d, "managed_by_org_id", None),
-        managed_by_relay_id=getattr(d, "managed_by_relay_id", None),
+        managed_by_relay_id=managed_by_relay_id,
+        managed_by_relay_name=managed_relay_name,
+        managed_by_relay_hostname=managed_relay_hostname,
+        managed_by_relay_label=managed_relay_label,
         adb_ip=getattr(d, "adb_ip", None),
         adb_port=getattr(d, "adb_port", 5555),
         tags=getattr(d, "tags", "") or "",

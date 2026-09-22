@@ -408,6 +408,8 @@ async def run_now_endpoint(
                 },
             )
         raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     return TriggerResponse(run_id=run_id)
 
 

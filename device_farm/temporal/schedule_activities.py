@@ -19,6 +19,18 @@ from temporal.schedule_shared import ScheduleDispatchResult
 log = logging.getLogger(__name__)
 
 
+def _parse_scheduled_for(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 @asynccontextmanager
 async def _schedule_tenant_db(schedule_id: str):
     """Activity DB session with tenant context resolved from schedule_id."""
@@ -83,6 +95,26 @@ class ScheduleActivities:
     - Dispatch delegates to existing campaign_dispatch service
     """
 
+    def __init__(
+        self,
+        *,
+        queue=None,
+        manager=None,
+        temporal_client=None,
+        temporal_config=None,
+    ) -> None:
+        # Workers polling the same queue must all register these activities.
+        # Keep runtime dependencies on the activity instance so each worker
+        # uses the Temporal client bound to its own asyncio event loop.
+        self._queue = queue if queue is not None else _queue_ref
+        self._manager = manager if manager is not None else _manager_ref
+        self._temporal_client = (
+            temporal_client if temporal_client is not None else _temporal_client_ref
+        )
+        self._temporal_config = (
+            temporal_config if temporal_config is not None else _temporal_config_ref
+        )
+
     @activity.defn
     async def load_schedule(self, schedule_id: str) -> dict[str, Any]:
         """Load schedule config from DB. Returns serializable dict."""
@@ -122,18 +154,21 @@ class ScheduleActivities:
             }
 
     @activity.defn
-    async def create_run_record(self, schedule_id: str) -> str:
+    async def create_run_record(
+        self, schedule_id: str, scheduled_for: str | None = None
+    ) -> str:
         """Create a ScheduleRun record and return its ID."""
         from db.crud.schedule import create_schedule_run
 
         activity.heartbeat("create_run_record")
+        scheduled_at = _parse_scheduled_for(scheduled_for) or datetime.now(timezone.utc)
         async with _schedule_tenant_db(schedule_id) as (db, org_id):
             run = await create_schedule_run(
                 db,
                 schedule_id=schedule_id,
                 status="pending",
                 trigger_source="temporal",
-                scheduled_at=datetime.now(timezone.utc),
+                scheduled_at=scheduled_at,
                 org_id=org_id,
             )
             await db.commit()
@@ -214,7 +249,7 @@ class ScheduleActivities:
         if not target_id:
             raise ValueError("campaign target_type requires target_id")
 
-        temporal_client = _temporal_client_ref
+        temporal_client = self._temporal_client
         if temporal_client is None:
             raise RuntimeError(
                 f"Temporal is required for campaign dispatch (campaign_id={target_id!r}). "
@@ -226,7 +261,10 @@ class ScheduleActivities:
         from db.crud.execution import get_execution
         from db.database import activity_session
         from services.campaign.dispatcher import CampaignDispatchError, dispatch_campaign
-        from services.campaign.execution_runtime import start_execution_runtime
+        from services.campaign.execution_runtime import (
+            runtime_start_failure_message,
+            start_execution_runtime,
+        )
 
         async with activity_session() as db:
             campaign = await campaign_repo.get_campaign_entity(db, target_id)
@@ -245,7 +283,22 @@ class ScheduleActivities:
 
             device_ids: list[str] | None = None
             device_group_ids: list[str] | None = None
-            if campaign.target_group_id:
+            schedule_serials = [
+                str(serial).strip()
+                for serial in (cfg.get("device_serials") or [])
+                if str(serial).strip()
+            ]
+            if schedule_serials:
+                from db.crud.device import list_devices_by_serial_aliases
+
+                devices = await list_devices_by_serial_aliases(db, schedule_serials)
+                device_ids = [str(device.id) for device in devices]
+                max_devices = cfg.get("max_devices")
+                if max_devices:
+                    device_ids = device_ids[: int(max_devices)]
+            elif cfg.get("device_group_id"):
+                device_group_ids = [str(cfg["device_group_id"])]
+            elif campaign.target_group_id:
                 device_group_ids = [str(campaign.target_group_id)]
             else:
                 devices = await legacy_repo.list_campaign_devices(db, target_id)
@@ -273,8 +326,8 @@ class ScheduleActivities:
                 org_id=org_id,
                 actor_user_id=actor_user_id,
                 temporal_client=temporal_client,
-                temporal_config=_temporal_config_ref,
-                manager=_manager_ref,
+                temporal_config=self._temporal_config,
+                manager=self._manager,
             )
             workflow_ids: list[str] = []
             execution_ids: list[str] = []
@@ -291,9 +344,7 @@ class ScheduleActivities:
             runtime_stats.get("fallback", 0) or 0
         )
         if started_count <= 0:
-            raise RuntimeError(
-                f"Campaign dispatch started no workflows for campaign {target_id!r}"
-            )
+            raise RuntimeError(runtime_start_failure_message(fan_out, target_id))
 
         return {
             "devices_dispatched": started_count,
@@ -374,6 +425,7 @@ class ScheduleActivities:
             filter_model=filter_model,
             max_devices=max_devices,
             org_id=cfg.get("org_id"),
+            manager=self._manager,
         )
 
         if not devices:
@@ -390,7 +442,7 @@ class ScheduleActivities:
                 if isinstance(values, dict):
                     registry.setdefault(key, {}).update(values)
 
-        queue = _queue_ref
+        queue = self._queue
         if queue is None:
             raise RuntimeError("No task queue available")
 
@@ -436,6 +488,7 @@ class ScheduleActivities:
         dispatch_result: ScheduleDispatchResult | dict[str, Any],
         cron_expression: str,
         timezone_name: str,
+        scheduled_for: str | None = None,
     ) -> None:
         """
         Update ScheduleRun status + schedule metadata (last_run_at, next_run_at, run_count).
@@ -445,10 +498,11 @@ class ScheduleActivities:
         from services.scheduler import finalize_schedule_run_record
 
         activity.heartbeat("finalize_run")
-        # Capture finalization time once. This is used as finished_at and as the
-        # base for computing next_run_at. It reflects when dispatch completed
-        # (finalize_schedule_run runs immediately after dispatch_schedule).
+        # Capture finalization time once for the run's actual finish. Use the
+        # scheduled fire time as the cursor for the next cron occurrence so a
+        # slow campaign dispatch does not drift future runs.
         finished_at = datetime.now(timezone.utc)
+        scheduled_at = _parse_scheduled_for(scheduled_for)
         if isinstance(dispatch_result, dict):
             normalized = ScheduleDispatchResult(
                 run_id=str(dispatch_result.get("run_id", run_id)),
@@ -475,6 +529,7 @@ class ScheduleActivities:
                 },
                 cron_expression=cron_expression,
                 timezone_name=timezone_name,
+                scheduled_for=scheduled_at,
                 organization_id=org_id,
                 error_code="DISPATCH_FAILED" if normalized.error else None,
                 error_message=normalized.error,
@@ -493,13 +548,14 @@ async def _resolve_fleet_devices(
     max_devices: int | None,
     org_id: str | None = None,
     device_serials: list[str] | None = None,
+    manager=None,
 ):
     """Resolve devices from DeviceManager (async to avoid asyncpg event-loop conflicts).
 
     An explicit `device_serials` list wins over `device_group_id`: it replaces the
     candidate set, then the usual state/model/max filters still apply.
     """
-    manager = _manager_ref
+    manager = manager if manager is not None else _manager_ref
     if manager is None:
         return []
 

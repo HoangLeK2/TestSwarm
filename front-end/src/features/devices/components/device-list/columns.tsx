@@ -365,15 +365,25 @@ export function getDeviceColumns({
       cell: ({ row }) => {
         const d = row.original;
         const relay = resolveDeviceRelay(d, relayMap);
-        if (!relay)
+        const relayLabel =
+          relay?.name ||
+          d.managed_by_relay_label ||
+          relay?.hostname ||
+          relay?.relay_id ||
+          d.managed_by_relay_name ||
+          d.managed_by_relay_hostname ||
+          d.managed_by_relay_id ||
+          d.relay_id;
+        if (!relayLabel)
           return <span className='text-[11px] text-muted-foreground'>—</span>;
+        const online = relay ? relay.status === 'online' : d.transport_online;
         return (
           <div className='flex items-center gap-1'>
             <span
-              className={`size-1.5 rounded-full ${relay.status === 'online' ? 'bg-green-500' : 'bg-gray-400'}`}
+              className={`size-1.5 rounded-full ${online ? 'bg-green-500' : 'bg-gray-400'}`}
             />
             <span className='font-mono text-[11px]'>
-              {relay.name || relay.relay_id}
+              {relayLabel}
             </span>
           </div>
         );

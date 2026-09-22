@@ -249,6 +249,29 @@ async def test_disconnect_keeps_the_serial_map(session_factory, raw_token):
 
 
 @pytest.mark.asyncio
+async def test_startup_reconciliation_keeps_the_serial_map():
+    """Deploy/startup must not make assigned pool phones disappear from admin views."""
+    from web.server import _reconcile_relay_agents_after_startup
+
+    class CaptureDb:
+        def __init__(self) -> None:
+            self.statements: list[str] = []
+
+        async def execute(self, statement) -> None:
+            self.statements.append(str(statement))
+
+    db = CaptureDb()
+
+    await _reconcile_relay_agents_after_startup(db)
+
+    assert len(db.statements) == 1
+    sql = db.statements[0].lower()
+    assert "status='offline'" in sql
+    assert "where status='online'" in sql
+    assert "serials" not in sql
+
+
+@pytest.mark.asyncio
 async def test_disconnect_does_not_clear_disabled(session_factory, raw_token):
     relay_id = await _register(session_factory, raw_token, hostname="host", relay_id="")
 

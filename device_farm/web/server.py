@@ -118,6 +118,21 @@ from .ws_lifecycle import DeviceLifecycleWsManager
 
 log = logging.getLogger(__name__)
 api_trace_log = importlib.import_module("structlog").get_logger("api_trace")
+
+
+async def _reconcile_relay_agents_after_startup(db) -> None:
+    """Mark stale relay rows offline without erasing the last reported phones."""
+    from sqlalchemy import text as _text
+
+    await db.execute(
+        _text(
+            "UPDATE relay_agents SET status='offline', "
+            "disconnected_at=NOW() "
+            "WHERE status='online'"
+        )
+    )
+
+
 STREAM_GUARDRAIL_WARN_INTERVAL_S = max(
     1.0,
     float(os.getenv("DEVICE_FARM_STREAM_GUARDRAIL_WARN_INTERVAL_S", "15")),
@@ -662,16 +677,9 @@ def create_app(
                 # Relay agent reconciliation: mark stale 'online' rows offline.
                 try:
                     from db.database import AsyncSessionLocal as _AslRec
-                    from sqlalchemy import text as _text
 
                     async with _AslRec() as _db:
-                        await _db.execute(
-                            _text(
-                                "UPDATE relay_agents SET status='offline', "
-                                "disconnected_at=NOW(), serials='[]'::json "
-                                "WHERE status='online'"
-                            )
-                        )
+                        await _reconcile_relay_agents_after_startup(_db)
                         await _db.commit()
                 except Exception as _rec_exc:
                     log.warning("relay agent reconciliation failed (non-fatal): %s", _rec_exc)

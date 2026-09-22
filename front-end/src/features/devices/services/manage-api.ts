@@ -22,6 +22,9 @@ export type DeviceOut = {
   relay_serial?: string | null;
   managed_by_org_id?: string | null;
   managed_by_relay_id?: string | null;
+  managed_by_relay_name?: string | null;
+  managed_by_relay_hostname?: string | null;
+  managed_by_relay_label?: string | null;
   adb_ip: string | null;
   adb_port: number;
   tags?: string;

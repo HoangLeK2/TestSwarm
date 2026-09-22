@@ -671,7 +671,7 @@ export function ScheduleFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='z-[1000] flex max-h-[92vh] w-[calc(100vw-2rem)] flex-col overflow-hidden p-0 sm:max-w-[760px] xl:max-w-[1180px]'>
+      <DialogContent className='z-[1000] grid h-[min(92dvh,56rem)] w-[calc(100vw-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-[760px] xl:max-w-[1180px]'>
         <DialogHeader className='shrink-0 border-b bg-background px-5 py-4'>
           <div className='flex flex-wrap items-start justify-between gap-3'>
             <div className='min-w-0 space-y-1'>
@@ -689,7 +689,7 @@ export function ScheduleFormDialog({
           </div>
         </DialogHeader>
 
-        <div className='flex-1 overflow-y-auto bg-muted/10 p-4 sm:p-5'>
+        <div className='min-h-0 overflow-y-auto overscroll-y-contain bg-muted/10 p-4 [-webkit-overflow-scrolling:touch] sm:p-5'>
           <div className='grid gap-5 xl:grid-cols-[minmax(34rem,1fr)_34rem]'>
             <div className='space-y-5'>
               <ScheduleFormSection

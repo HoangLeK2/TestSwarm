@@ -237,6 +237,37 @@ class TestSchedulerServiceCreate:
         assert result is mock_schedule
 
     @pytest.mark.asyncio
+    async def test_create_keeps_db_schedule_when_temporal_registration_fails(self):
+        """A reachable DB schedule can still run by fallback when Temporal is down."""
+        from services.scheduler import SchedulerService
+
+        mock_temporal = AsyncMock()
+        mock_schedule = _make_schedule()
+        mock_db = AsyncMock()
+
+        with patch("db.crud.schedule.create_schedule", return_value=mock_schedule):
+            service = SchedulerService(
+                temporal_client=mock_temporal, manager=None, queue=None
+            )
+            with patch.object(
+                service,
+                "_create_temporal_schedule",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("tcp connect error"),
+            ) as mock_ts:
+                result = await service.create(
+                    mock_db,
+                    name="Test",
+                    target_type="campaign",
+                    target_id="camp-001",
+                    cron_expression="*/30 * * * *",
+                    is_enabled=True,
+                )
+
+        mock_ts.assert_awaited_once_with("sched-001", "*/30 * * * *", "Asia/Ho_Chi_Minh")
+        assert result is mock_schedule
+
+    @pytest.mark.asyncio
     async def test_create_disabled_skips_temporal(self):
         """Disabled schedule does not register Temporal Schedule."""
         from services.scheduler import SchedulerService
@@ -411,8 +442,60 @@ class TestSchedulerServiceEpic05:
         update_after.assert_awaited_once()
         emit_event.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_finalize_next_run_uses_scheduled_fire_time_not_finished_at(self):
+        from services.scheduler import finalize_schedule_run_record
+
+        mock_db = AsyncMock()
+        scheduled_for = datetime(2026, 9, 22, 3, 0, tzinfo=timezone.utc)
+        finished_at = datetime(2026, 9, 22, 3, 47, tzinfo=timezone.utc)
+
+        with (
+            patch("db.crud.schedule.update_schedule_run", new_callable=AsyncMock),
+            patch("db.crud.schedule.update_schedule_after_run", new_callable=AsyncMock) as update_after,
+            patch("services.scheduler.emit_schedule_run_terminal", new_callable=AsyncMock),
+        ):
+            await finalize_schedule_run_record(
+                mock_db,
+                run_id="run-001",
+                schedule_id="sched-001",
+                status="completed",
+                finished_at=finished_at,
+                scheduled_for=scheduled_for,
+                dispatch_result={"devices_dispatched": 1},
+                cron_expression="*/30 * * * *",
+                timezone_name="UTC",
+                organization_id="org-1",
+            )
+
+        assert update_after.await_args.kwargs["last_run_at"] == finished_at
+        assert update_after.await_args.kwargs["next_run_at"] == datetime(
+            2026, 9, 22, 3, 30, tzinfo=timezone.utc
+        )
+
 
 class TestSchedulerServiceUpdate:
+    @pytest.mark.asyncio
+    async def test_update_temporal_spec_recreates_missing_schedule(self):
+        from services.scheduler import SchedulerService
+
+        handle = MagicMock()
+        handle.update = AsyncMock(side_effect=RuntimeError("workflow not found for ID"))
+        temporal = MagicMock()
+        temporal.get_schedule_handle.return_value = handle
+        service = SchedulerService(temporal_client=temporal, manager=None, queue=None)
+
+        with patch.object(
+            service, "_create_temporal_schedule", new_callable=AsyncMock
+        ) as create_temporal:
+            await service._update_temporal_schedule_spec(
+                "sched-001", "*/15 * * * *", "Asia/Ho_Chi_Minh"
+            )
+
+        create_temporal.assert_awaited_once_with(
+            "sched-001", "*/15 * * * *", "Asia/Ho_Chi_Minh"
+        )
+
     @pytest.mark.asyncio
     async def test_update_disable_syncs_status_and_clears_next_run(self):
         from services.scheduler import SchedulerService
@@ -566,6 +649,62 @@ class TestScheduleActivities:
         assert result == "run-abc"
 
     @pytest.mark.asyncio
+    async def test_temporal_dispatch_campaign_prefers_schedule_device_serials(self):
+        from temporal.schedule_activities import ScheduleActivities
+        from services.campaign.dispatcher import FanOutExecutionView, FanOutResult
+
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        campaign = MagicMock(
+            id="camp-001",
+            org_id="org-001",
+            created_by="user-001",
+            user_id=None,
+            target_group_id=None,
+        )
+        selected_device = MagicMock(id="device-from-schedule")
+        fan_out = FanOutResult(
+            dispatch_id="dispatch-001",
+            campaign_id="camp-001",
+            dispatch_strategy="parallel",
+            executions=[
+                FanOutExecutionView(
+                    execution_id="exec-001",
+                    device_id="device-from-schedule",
+                    status="running",
+                    effective_vars={},
+                )
+            ],
+        )
+        with patch("temporal.schedule_activities._temporal_client_ref", object()), \
+             patch("db.database.activity_session", lambda: _mock_db_session(mock_db)), \
+             patch("db.crud.campaign_entity.get_campaign_entity", return_value=campaign), \
+             patch("db.crud.device.list_devices_by_serial_aliases", return_value=[selected_device]), \
+             patch("db.crud.list_campaign_devices", new_callable=AsyncMock) as campaign_devices, \
+             patch("services.campaign.dispatcher.dispatch_campaign", return_value=fan_out) as dispatch, \
+             patch(
+                 "services.campaign.execution_runtime.start_execution_runtime",
+                 return_value={"temporal": 1, "fallback": 0},
+             ), \
+             patch("db.crud.execution.get_execution", return_value=MagicMock(meta={"workflow_id": "wf-001"})):
+            activities = ScheduleActivities()
+            result = await activities._dispatch_campaign(
+                {
+                    "target_id": "camp-001",
+                    "org_id": "org-001",
+                    "user_id": "user-001",
+                    "device_serials": ["phone-001"],
+                },
+                stagger=False,
+                stagger_interval=60,
+            )
+
+        assert result["devices_dispatched"] == 1
+        assert dispatch.await_args.kwargs["device_ids"] == ["device-from-schedule"]
+        assert dispatch.await_args.kwargs["device_group_ids"] is None
+        campaign_devices.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_dispatch_campaign_propagates_fan_out_error(self):
         from temporal.schedule_activities import ScheduleActivities
         from services.campaign.dispatcher import CampaignDispatchError
@@ -664,10 +803,14 @@ class TestScheduleActivities:
             activities = ScheduleActivities()
             await activities.finalize_schedule_run(
                 "run-001", "sched-001", dispatch_result,
-                "*/30 * * * *", "Asia/Ho_Chi_Minh"
+                "*/30 * * * *", "Asia/Ho_Chi_Minh",
+                "2026-09-22T03:00:00+00:00",
             )
 
         mock_finalize.assert_awaited_once()
+        assert mock_finalize.await_args.kwargs["scheduled_for"] == datetime(
+            2026, 9, 22, 3, 0, tzinfo=timezone.utc
+        )
         # Should commit
         mock_db.commit.assert_awaited_once()
 
@@ -701,14 +844,138 @@ class TestScheduleActivities:
             activities = ScheduleActivities()
             await activities.finalize_schedule_run(
                 "run-001", "sched-001", dispatch_result,
-                "*/30 * * * *", "UTC"
+                "*/30 * * * *", "UTC",
+                "2026-09-22T03:00:00+00:00",
             )
 
         assert captured["status"] == "failed"
         assert "No devices available" in captured["error_message"]
+        assert captured["scheduled_for"] == datetime(
+            2026, 9, 22, 3, 0, tzinfo=timezone.utc
+        )
+
+
+class TestTemporalScheduleWorkerRegistration:
+    @pytest.mark.asyncio
+    async def test_every_device_worker_registers_schedule_activities_with_local_deps(self):
+        from temporal import worker as worker_module
+
+        manager = MagicMock()
+        task_queue = MagicMock()
+        client = object()
+        cfg = SimpleNamespace(
+            task_queue="device-scenario",
+            worker_max_concurrent_activities=25,
+            worker_max_concurrent_workflows=60,
+            worker_max_cached_workflows=200,
+        )
+
+        with patch.object(worker_module, "Worker", return_value=MagicMock()) as worker_cls:
+            await worker_module.create_temporal_worker(
+                manager,
+                cfg,
+                client=client,
+                queue=task_queue,
+                worker_index=3,
+            )
+
+        registered = {
+            getattr(fn, "__name__", ""): fn
+            for fn in worker_cls.call_args.kwargs["activities"]
+        }
+        schedule_activity_names = {
+            "load_schedule",
+            "create_run_record",
+            "dispatch_schedule",
+            "finalize_schedule_run",
+        }
+        assert schedule_activity_names <= registered.keys()
+
+        schedule_activities = registered["dispatch_schedule"].__self__
+        assert schedule_activities._queue is task_queue
+        assert schedule_activities._manager is manager
+        assert schedule_activities._temporal_client is client
+        assert schedule_activities._temporal_config is cfg
 
 
 class TestSchedulerCampaignDispatch:
+    def test_runtime_start_failure_reports_fan_out_reason(self):
+        from services.campaign.execution_runtime import runtime_start_failure_message
+        from services.campaign.dispatcher import FanOutExecutionView, FanOutResult
+
+        fan_out = FanOutResult(
+            dispatch_id="dispatch-001",
+            campaign_id="camp-001",
+            dispatch_strategy="parallel",
+            executions=[
+                FanOutExecutionView(
+                    execution_id="exec-001",
+                    device_id="device-001",
+                    status="failed",
+                    effective_vars={},
+                    failure_reason="account_unavailable",
+                )
+            ],
+        )
+
+        assert runtime_start_failure_message(fan_out, "camp-001") == (
+            "Campaign dispatch started no workflows: account_unavailable"
+        )
+
+    @pytest.mark.asyncio
+    async def test_dispatch_campaign_prefers_schedule_device_serials(self):
+        from services.scheduler import _dispatch_campaign
+        from services.campaign.dispatcher import FanOutExecutionView, FanOutResult
+
+        mock_db = AsyncMock()
+        campaign = MagicMock(
+            id="camp-001",
+            org_id="org-001",
+            created_by="user-001",
+            user_id=None,
+            target_group_id=None,
+        )
+        selected_device = MagicMock(id="device-from-schedule")
+        fan_out = FanOutResult(
+            dispatch_id="dispatch-001",
+            campaign_id="camp-001",
+            dispatch_strategy="parallel",
+            executions=[
+                FanOutExecutionView(
+                    execution_id="exec-001",
+                    device_id="device-from-schedule",
+                    status="running",
+                    effective_vars={},
+                )
+            ],
+        )
+        with patch("db.database.AsyncSessionLocal", lambda: _mock_db_session(mock_db)), \
+             patch("db.crud.campaign_entity.get_campaign_entity", return_value=campaign), \
+             patch("db.crud.device.list_devices_by_serial_aliases", return_value=[selected_device]), \
+             patch("db.crud.list_campaign_devices", new_callable=AsyncMock) as campaign_devices, \
+             patch("services.campaign.dispatcher.dispatch_campaign", return_value=fan_out) as dispatch, \
+             patch(
+                 "services.campaign.execution_runtime.start_execution_runtime",
+                 return_value={"temporal": 1, "fallback": 0},
+             ), \
+             patch("db.crud.execution.get_execution", return_value=MagicMock(meta={"workflow_id": "wf-001"})):
+            result = await _dispatch_campaign(
+                {
+                    "target_id": "camp-001",
+                    "org_id": "org-001",
+                    "user_id": "user-001",
+                    "device_serials": ["phone-001"],
+                },
+                queue=None,
+                temporal_client=object(),
+                temporal_config=None,
+            )
+
+        assert result["devices_dispatched"] == 1
+        assert dispatch.await_args.kwargs["device_ids"] == ["device-from-schedule"]
+        assert dispatch.await_args.kwargs["device_group_ids"] is None
+        campaign_devices.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_dispatch_campaign_propagates_fan_out_error(self):
         from services.scheduler import _dispatch_campaign
@@ -785,6 +1052,53 @@ class TestSchedulerCampaignDispatch:
                     temporal_config=None,
                 )
 
+    @pytest.mark.asyncio
+    async def test_dispatch_campaign_uses_runtime_fallback_without_temporal_client(self):
+        from services.scheduler import _dispatch_campaign
+        from services.campaign.dispatcher import FanOutExecutionView, FanOutResult
+
+        mock_db = AsyncMock()
+        campaign = MagicMock(
+            id="camp-001",
+            org_id="org-001",
+            created_by="user-001",
+            user_id=None,
+            target_group_id=None,
+        )
+        device = MagicMock(id="device-001")
+        fan_out = FanOutResult(
+            dispatch_id="dispatch-001",
+            campaign_id="camp-001",
+            dispatch_strategy="parallel",
+            executions=[
+                FanOutExecutionView(
+                    execution_id="exec-001",
+                    device_id="device-001",
+                    status="running",
+                    effective_vars={},
+                )
+            ],
+        )
+        with patch("db.database.AsyncSessionLocal", lambda: _mock_db_session(mock_db)), \
+             patch("db.crud.campaign_entity.get_campaign_entity", return_value=campaign), \
+             patch("db.crud.list_campaign_devices", return_value=[device]), \
+             patch("services.campaign.dispatcher.dispatch_campaign", return_value=fan_out), \
+             patch(
+                 "services.campaign.execution_runtime.start_execution_runtime",
+                 return_value={"temporal": 0, "fallback": 1},
+             ) as start_runtime, \
+             patch("db.crud.execution.get_execution", return_value=MagicMock(meta={})):
+            result = await _dispatch_campaign(
+                {"target_id": "camp-001", "org_id": "org-001", "user_id": "user-001"},
+                queue=None,
+                temporal_client=None,
+                temporal_config=None,
+            )
+
+        assert result["devices_dispatched"] == 1
+        start_runtime.assert_awaited_once()
+        assert start_runtime.await_args.kwargs["temporal_client"] is None
+
 
 class TestSchedulerOrgScenarioDispatch:
     @pytest.mark.asyncio
@@ -845,6 +1159,29 @@ class TestSchedulerOrgScenarioDispatch:
 
         dispatch_org.assert_awaited_once()
         assert result["devices_dispatched"] == 1
+
+
+class TestScheduleTargetTypeMigration:
+    @pytest.mark.asyncio
+    async def test_org_scenario_allowed_in_schedule_target_constraint(self):
+        from importlib import import_module
+
+        migration = import_module("db.migrations.137_schedule_target_type_org_scenario")
+
+        class FakeConn:
+            def __init__(self):
+                self.statements: list[str] = []
+
+            async def execute(self, statement, *args, **kwargs):
+                self.statements.append(str(statement))
+
+        conn = FakeConn()
+        await migration.upgrade(conn)
+
+        sql = "\n".join(conn.statements)
+        assert "DROP CONSTRAINT IF EXISTS check_schedule_target_type" in sql
+        assert "ADD CONSTRAINT check_schedule_target_type" in sql
+        assert "'org_scenario'" in sql
 
 
 # ── _compute_next_run helper ──────────────────────────────────────────────────
@@ -1152,8 +1489,11 @@ class TestScheduleRunWorkflow:
             }
 
         @_activity.defn(name="create_run_record")
-        async def _create_run_record(schedule_id: str) -> str:
+        async def _create_run_record(
+            schedule_id: str, scheduled_for: str | None = None
+        ) -> str:
             run_id_holder["val"] = "run-test-001"
+            assert scheduled_for
             return "run-test-001"
 
         @_activity.defn(name="dispatch_schedule")
@@ -1165,7 +1505,15 @@ class TestScheduleRunWorkflow:
             )
 
         @_activity.defn(name="finalize_schedule_run")
-        async def _finalize_schedule_run(run_id, schedule_id, dispatch_result, cron_expression, timezone_name):
+        async def _finalize_schedule_run(
+            run_id,
+            schedule_id,
+            dispatch_result,
+            cron_expression,
+            timezone_name,
+            scheduled_for=None,
+        ):
+            assert scheduled_for
             pass
 
         async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -1225,7 +1573,10 @@ class TestScheduleRunWorkflow:
             }
 
         @_activity.defn(name="create_run_record")
-        async def _create_run_record(schedule_id: str) -> str:
+        async def _create_run_record(
+            schedule_id: str, scheduled_for: str | None = None
+        ) -> str:
+            assert scheduled_for
             return "run-fail-001"
 
         @_activity.defn(name="dispatch_schedule")
@@ -1236,7 +1587,10 @@ class TestScheduleRunWorkflow:
             )
 
         @_activity.defn(name="finalize_schedule_run")
-        async def _finalize_schedule_run(run_id, schedule_id, dispatch_result, cron, tz):
+        async def _finalize_schedule_run(
+            run_id, schedule_id, dispatch_result, cron, tz, scheduled_for=None
+        ):
+            assert scheduled_for
             pass
 
         async with await WorkflowEnvironment.start_time_skipping() as env:

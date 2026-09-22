@@ -56,3 +56,7 @@
 {"ts": "2026-06-04T07:18:11.792657+00:00", "serial": "logical-serial", "event": "recovery_start", "reason": "atx_connect_failed"}
 {"ts": "2026-06-04T07:21:55.576806+00:00", "serial": "logical-serial", "event": "recovery_start", "reason": "u2_legacy_reconnect_failed"}
 {"ts": "2026-06-04T07:21:55.592118+00:00", "serial": "logical-serial", "event": "recovery_start", "reason": "atx_connect_failed"}
+{"ts": "2026-09-22T16:45:25.807451+00:00", "serial": "logical-serial", "event": "recovery_start", "reason": "u2_legacy_reconnect_failed"}
+{"ts": "2026-09-22T16:45:25.836309+00:00", "serial": "logical-serial", "event": "recovery_start", "reason": "atx_connect_failed"}
+{"ts": "2026-09-22T16:50:00.326961+00:00", "serial": "logical-serial", "event": "recovery_start", "reason": "u2_legacy_reconnect_failed"}
+{"ts": "2026-09-22T16:50:00.352260+00:00", "serial": "logical-serial", "event": "recovery_start", "reason": "atx_connect_failed"}

@@ -56,6 +56,23 @@ def workflow_id_for_execution(execution_id: str) -> str:
     return _temporal_workflow_id_for_execution(execution_id)
 
 
+def runtime_start_failure_message(
+    fan_out: FanOutResult,
+    campaign_id: str,
+) -> str:
+    """Explain why a successful fan-out produced no runnable workflows."""
+    reasons = sorted(
+        {
+            str(view.failure_reason).strip()
+            for view in fan_out.executions
+            if view.failure_reason and str(view.failure_reason).strip()
+        }
+    )
+    if reasons:
+        return "Campaign dispatch started no workflows: " + ", ".join(reasons)
+    return f"Campaign dispatch started no workflows for campaign {campaign_id!r}"
+
+
 def _scenario_refs_with_recovery_refs(
     scenario_refs: list[dict[str, Any]],
     recovery_policy: dict[str, Any],

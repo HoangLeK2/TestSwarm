@@ -336,6 +336,20 @@ async def test_run_now_returns_400_when_trigger_raises_value_error():
 
 
 @pytest.mark.asyncio
+async def test_run_now_returns_400_when_dispatch_raises_runtime_error():
+    scheduler = MagicMock()
+    scheduler.trigger_now = AsyncMock(side_effect=RuntimeError("Dispatch target is empty"))
+    app = _build_app(scheduler)
+
+    with patch("api.routes.schedules.get_schedule", new=AsyncMock(return_value=_fake_schedule())):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.post("/api/schedules/sched-1/run-now")
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Dispatch target is empty"
+
+
+@pytest.mark.asyncio
 async def test_run_now_disabled_schedule_returns_409_business_code():
     scheduler = MagicMock()
     app = _build_app(scheduler)

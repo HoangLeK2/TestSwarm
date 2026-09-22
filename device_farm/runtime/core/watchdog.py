@@ -151,10 +151,9 @@ class WatchdogThread(threading.Thread):
                 self._check_atx_agent(device, atx_host)
             return
 
-        # Relay USB placeholder: no agent APK, scrcpy yielded to another DeviceClient
-        # (NAT WS path registered the same relay ADB serial). Ghost cleanup clears
-        # _scrcpy_active — without this branch the next tick hits "no agent" and
-        # falsely reports Not healthy for the placeholder serial.
+        # A live relay connection is the transport health signal even when scrcpy
+        # is intentionally idle. Requiring an active scrcpy receiver here makes a
+        # healthy relay-only phone turn DEAD after 120 seconds with no viewer.
         if (
             not agent_alive
             and device.state in (DeviceState.READY, DeviceState.BUSY)
@@ -165,9 +164,9 @@ class WatchdogThread(threading.Thread):
 
                 r = get_relay_manager()
                 if r is not None and r.relay_for_serial(serial) is not None:
-                    if r.get_scrcpy_receiver(serial) is not None:
-                        self._bad_since.pop(serial, None)
-                        return
+                    self._bad_since.pop(serial, None)
+                    device.reconnect_attempts = 0
+                    return
             except Exception:
                 pass
 

@@ -1619,6 +1619,7 @@ async def test_workspace_owner_lists_allocated_unclaimed_phones(session_factory)
         with tenant_context("org-1"):
             agent = await db.get(RelayAgent, "ra-1")
             assert agent is not None
+            agent.name = "Pool Rack A"
             agent.serials = ["SN001", "SN002"]
         await db.commit()
 
@@ -1638,6 +1639,7 @@ async def test_workspace_owner_lists_allocated_unclaimed_phones(session_factory)
         allocated = await client.get("/api/devices/allocated")
         filtered = await client.get("/api/devices/allocated?q=SN001")
         claim = await client.post("/api/devices/dev-1/claim-allocated")
+        claimed_devices = await client.get("/api/devices?page=1&pageSize=10")
         after_claim = await client.get("/api/devices/allocated")
 
     assert allocated.status_code == 200
@@ -1645,9 +1647,15 @@ async def test_workspace_owner_lists_allocated_unclaimed_phones(session_factory)
     assert allocated.json()[0]["user_id"] is None
     assert allocated.json()[0]["managed_by_org_id"] == "org-1"
     assert allocated.json()[0]["managed_by_relay_id"] == "relay-1"
+    assert allocated.json()[0]["managed_by_relay_name"] == "Pool Rack A"
+    assert allocated.json()[0]["managed_by_relay_hostname"] == "host-a"
+    assert allocated.json()[0]["managed_by_relay_label"] == "Pool Rack A"
     assert filtered.status_code == 200
     assert [item["serial"] for item in filtered.json()] == ["SN001"]
     assert claim.status_code == 200
+    assert claim.json()["managed_by_relay_label"] == "Pool Rack A"
+    assert claimed_devices.status_code == 200
+    assert claimed_devices.json()["items"][0]["managed_by_relay_label"] == "Pool Rack A"
     assert after_claim.status_code == 200
     assert after_claim.json() == []
 

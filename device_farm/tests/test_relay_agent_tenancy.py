@@ -312,6 +312,50 @@ async def test_relay_register_auto_claim_moves_reported_device_to_token_workspac
 
 
 @pytest.mark.asyncio
+async def test_relay_register_auto_claim_preserves_pool_workspace_allocation(
+    session_factory,
+):
+    serial = "serial-relay-register-allocated"
+    async with session_factory() as db:
+        with tenant_context(ORG_ID):
+            db.add(
+                Device(
+                    id="dev-relay-register-allocated",
+                    serial=serial,
+                    device_serial=serial,
+                    name="Allocated Phone",
+                    user_id=None,
+                    org_id=ORG_ID,
+                    managed_by_org_id=MANAGER_ORG_ID,
+                    managed_by_relay_id="relay-manager",
+                    relay_serial=serial,
+                )
+            )
+            await db.commit()
+
+    async with session_factory() as db:
+        claimed = await claim_relay_reported_serials(
+            db,
+            serials=[serial],
+            user_id=MANAGER_USER_ID,
+            org_id=MANAGER_ORG_ID,
+            relay_id="relay-manager-reconnected",
+        )
+        await db.commit()
+
+    assert claimed == [serial]
+
+    async with session_factory() as db:
+        allocated_device = await lookup_device_by_serial(db, serial)
+
+    assert allocated_device is not None
+    assert allocated_device.org_id == ORG_ID
+    assert allocated_device.user_id is None
+    assert allocated_device.managed_by_org_id == MANAGER_ORG_ID
+    assert allocated_device.managed_by_relay_id == "relay-manager-reconnected"
+
+
+@pytest.mark.asyncio
 async def test_relay_auto_claim_preserves_existing_device_display_name(
     session_factory,
 ):

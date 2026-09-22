@@ -119,15 +119,28 @@ async def claim_relay_reported_serials(
         if not serial or serial.startswith("pending-") or serial in seen:
             continue
         seen.add(serial)
-        device = await get_or_claim_device_for_user(
-            db,
-            serial=serial,
-            display_name=serial,
-            user_id=user_id,
-            org_id=org_id,
-            allow_relay_reclaim=True,
-            preserve_existing_name=True,
+        ref = await lookup_device_by_serial(db, serial)
+        allocated_by_current_manager = bool(
+            ref
+            and ref.managed_by_org_id == org_id
+            and ref.org_id
+            and ref.org_id != org_id
         )
+        if allocated_by_current_manager:
+            with tenant_context(ref.org_id):
+                device = await repo.get_device(db, ref.device_id)
+            if device is None:
+                raise DeviceRegistrationError(500, "device lookup failed")
+        else:
+            device = await get_or_claim_device_for_user(
+                db,
+                serial=serial,
+                display_name=serial,
+                user_id=user_id,
+                org_id=org_id,
+                allow_relay_reclaim=True,
+                preserve_existing_name=True,
+            )
         device.managed_by_org_id = org_id
         device.managed_by_relay_id = relay_id
         device.relay_serial = serial

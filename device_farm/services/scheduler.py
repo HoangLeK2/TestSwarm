@@ -120,6 +120,7 @@ async def finalize_schedule_run_record(
     dispatch_result: dict[str, Any],
     cron_expression: Optional[str],
     timezone_name: str,
+    scheduled_for: Optional[datetime] = None,
     organization_id: Optional[str] = None,
     execution_id: Optional[str] = None,
     error_message: Optional[str] = None,
@@ -128,8 +129,9 @@ async def finalize_schedule_run_record(
     """Persist terminal run state, update schedule cursor, and emit domain event."""
     from db.crud.schedule import update_schedule_run, update_schedule_after_run
 
+    cursor_base = scheduled_for or finished_at
     next_run = (
-        compute_next_run(cron_expression, timezone_name, base=finished_at)
+        compute_next_run(cron_expression, timezone_name, base=cursor_base)
         if cron_expression
         else None
     )
@@ -294,7 +296,17 @@ class SchedulerService:
         await db.commit()
 
         if self._client is not None and is_enabled and kind == "cron":
-            await self._create_temporal_schedule(schedule.id, cron_expression, timezone_name)
+            try:
+                await self._create_temporal_schedule(
+                    schedule.id, cron_expression, timezone_name
+                )
+            except Exception as exc:
+                log.warning(
+                    "[scheduler] Temporal registration failed for schedule %s: %s — "
+                    "keeping DB schedule for fallback mode",
+                    schedule.id,
+                    exc,
+                )
         else:
             log.debug(
                 "[scheduler] schedule %s created without Temporal (fallback mode)", schedule.id
@@ -801,13 +813,16 @@ class SchedulerService:
                 # Temporal schedule already registered — treat as success.
                 log.info("[scheduler] Temporal schedule %s already exists, skipping create", schedule_id)
             else:
-                # Unexpected error — the schedule will NOT fire until this is resolved.
-                log.error(
+                # Keep the DB schedule usable when Temporal is configured but
+                # temporarily unreachable. The fallback scheduler polls DB
+                # schedules, so creating the schedule must not fail solely
+                # because Temporal registration is down.
+                log.warning(
                     "[scheduler] create_temporal_schedule failed for %s: %s — "
-                    "schedule will not fire until Temporal registration succeeds",
-                    schedule_id, exc,
+                    "keeping DB schedule for fallback scheduler",
+                    schedule_id,
+                    exc,
                 )
-                raise
 
     async def _update_temporal_schedule_spec(
         self, schedule_id: str, cron_expression: str, timezone_name: str
@@ -829,6 +844,16 @@ class SchedulerService:
 
             await handle.update(_updater)
         except Exception as exc:
+            message = str(exc).lower()
+            if "not found" in message:
+                log.info(
+                    "[scheduler] Temporal schedule %s is missing; recreating it",
+                    schedule_id,
+                )
+                await self._create_temporal_schedule(
+                    schedule_id, cron_expression, timezone_name
+                )
+                return
             log.warning("[scheduler] update_temporal_schedule_spec failed: %s", exc)
 
     async def _set_temporal_schedule_paused(
@@ -1027,6 +1052,7 @@ class SchedulerEngine:
                     dispatch_result=result,
                     cron_expression=schedule.cron_expression,
                     timezone_name=schedule.timezone,
+                    scheduled_for=now,
                     organization_id=getattr(schedule, "org_id", None),
                     error_code="DISPATCH_FAILED" if error else None,
                     error_message=error,
@@ -1077,18 +1103,15 @@ async def _dispatch_campaign(
     if not target_id:
         raise ValueError("campaign dispatch requires target_id")
 
-    if temporal_client is None:
-        raise RuntimeError(
-            f"Temporal is required for campaign dispatch (campaign_id={target_id!r}). "
-            "Ensure temporal.enabled=true and the Temporal server is reachable."
-        )
-
     from db import crud as legacy_repo
     from db.crud import campaign_entity as campaign_repo
     from db.crud.execution import get_execution
     from db.database import AsyncSessionLocal
     from services.campaign.dispatcher import CampaignDispatchError, dispatch_campaign
-    from services.campaign.execution_runtime import start_execution_runtime
+    from services.campaign.execution_runtime import (
+        runtime_start_failure_message,
+        start_execution_runtime,
+    )
 
     async with AsyncSessionLocal() as db:
         campaign = await campaign_repo.get_campaign_entity(db, target_id)
@@ -1107,7 +1130,22 @@ async def _dispatch_campaign(
 
         device_ids: list[str] | None = None
         device_group_ids: list[str] | None = None
-        if campaign.target_group_id:
+        schedule_serials = [
+            str(serial).strip()
+            for serial in (cfg.get("device_serials") or [])
+            if str(serial).strip()
+        ]
+        if schedule_serials:
+            from db.crud.device import list_devices_by_serial_aliases
+
+            devices = await list_devices_by_serial_aliases(db, schedule_serials)
+            device_ids = [str(device.id) for device in devices]
+            max_devices = cfg.get("max_devices")
+            if max_devices:
+                device_ids = device_ids[: int(max_devices)]
+        elif cfg.get("device_group_id"):
+            device_group_ids = [str(cfg["device_group_id"])]
+        elif campaign.target_group_id:
             device_group_ids = [str(campaign.target_group_id)]
         else:
             devices = await legacy_repo.list_campaign_devices(db, target_id)
@@ -1153,9 +1191,7 @@ async def _dispatch_campaign(
         runtime_stats.get("fallback", 0) or 0
     )
     if started_count <= 0:
-        raise RuntimeError(
-            f"Campaign dispatch started no workflows for campaign {target_id!r}"
-        )
+        raise RuntimeError(runtime_start_failure_message(fan_out, target_id))
 
     return {
         "devices_dispatched": started_count,

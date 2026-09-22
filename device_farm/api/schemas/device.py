@@ -33,6 +33,9 @@ class DeviceOut(BaseModel):
     relay_serial: Optional[str] = None
     managed_by_org_id: Optional[str] = None
     managed_by_relay_id: Optional[str] = None
+    managed_by_relay_name: Optional[str] = None
+    managed_by_relay_hostname: Optional[str] = None
+    managed_by_relay_label: Optional[str] = None
     adb_ip: Optional[str] = None
     adb_port: int = 5555
     tags: str = ""

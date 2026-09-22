@@ -15,7 +15,7 @@ from core.config import TemporalConfig
 from temporal.activities import DeviceActivities, set_device_registry, set_temporal_config
 from temporal.relay_onboarding_activities import RelayOnboardingActivities
 from temporal.relay_onboarding_workflows import RelayOnboardingWorkflow
-from temporal.schedule_activities import ScheduleActivities, set_scheduler_deps
+from temporal.schedule_activities import ScheduleActivities
 from temporal.schedule_workflow import ScheduleRunWorkflow
 from temporal.shared import CONTROL_TASK_QUEUE_NAME, TASK_QUEUE_NAME
 from temporal.capacity_probe import capacity_probe, db_hold_probe
@@ -83,9 +83,9 @@ async def create_temporal_worker(
     separate slot pool and were never the thing being starved, so splitting them
     would add moving parts for nothing.
 
-    Among device workers, worker_index=0 is still the only one registering
-    schedule activities, so Temporal never routes a schedule task to a worker
-    with uninitialized deps.
+    Every device worker registers schedule activities because all of them poll
+    the same task queue. Each activity instance receives that worker's own
+    Temporal client so campaign dispatch never crosses asyncio event loops.
     """
     if client is None:
         client = await _create_client(cfg)
@@ -132,11 +132,8 @@ async def create_temporal_worker(
     ]
 
     if role == ROLE_CONTROL:
-        # Deliberately no set_scheduler_deps here. Those globals hold a Temporal
-        # client, and this worker's client is bound to this worker's event loop —
-        # injecting it would hand dispatch_schedule (which runs on device worker
-        # 0's loop) a client from a different loop. Schedule activities are not
-        # dispatched to this queue, so the deps are not needed either.
+        # Schedule activities stay on the device queue; this worker only runs
+        # short control-plane activities.
         task_queue = cfg.control_task_queue or CONTROL_TASK_QUEUE_NAME
         workflows: list = []
         activity_list = [
@@ -159,17 +156,18 @@ async def create_temporal_worker(
             ContinuousCrawlTargetWorkflow,
         ]
         activity_list = [*device_activities, *control_activities]
-        if worker_index == 0:
-            set_scheduler_deps(
-                queue=queue, manager=manager, temporal_client=client, temporal_config=cfg
-            )
-            _schedule_activities = ScheduleActivities()
-            activity_list += [
-                _schedule_activities.load_schedule,
-                _schedule_activities.create_run_record,
-                _schedule_activities.dispatch_schedule,
-                _schedule_activities.finalize_schedule_run,
-            ]
+        _schedule_activities = ScheduleActivities(
+            queue=queue,
+            manager=manager,
+            temporal_client=client,
+            temporal_config=cfg,
+        )
+        activity_list += [
+            _schedule_activities.load_schedule,
+            _schedule_activities.create_run_record,
+            _schedule_activities.dispatch_schedule,
+            _schedule_activities.finalize_schedule_run,
+        ]
         max_activities = cfg.worker_max_concurrent_activities
 
     with _worker_init_lock:

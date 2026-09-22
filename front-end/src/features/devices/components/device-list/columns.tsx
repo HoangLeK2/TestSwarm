@@ -382,9 +382,7 @@ export function getDeviceColumns({
             <span
               className={`size-1.5 rounded-full ${online ? 'bg-green-500' : 'bg-gray-400'}`}
             />
-            <span className='font-mono text-[11px]'>
-              {relayLabel}
-            </span>
+            <span className='font-mono text-[11px]'>{relayLabel}</span>
           </div>
         );
       }

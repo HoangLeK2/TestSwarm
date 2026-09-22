@@ -38,7 +38,11 @@ function place(root: Bucket, entry: StepLogEntry): void {
     if (!match?.[2]) continue;
     let group = current.iters.get(prefix);
     if (!group) {
-      group = { loopId: match[1], iter: Number(match[2]), bucket: emptyBucket() };
+      group = {
+        loopId: match[1],
+        iter: Number(match[2]),
+        bucket: emptyBucket()
+      };
       current.iters.set(prefix, group);
     }
     current = group.bucket;
@@ -92,7 +96,8 @@ export function stepLogNodeStats(nodes: StepLogNode[]): {
   for (const node of nodes) {
     if (node.kind === 'step') {
       steps += 1;
-      if (node.entry.status === 'failed' || node.entry.ok === false) failed += 1;
+      if (node.entry.status === 'failed' || node.entry.ok === false)
+        failed += 1;
       continue;
     }
     const child = stepLogNodeStats(node.children);

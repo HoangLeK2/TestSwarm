@@ -59,7 +59,13 @@ test('nests an inner loop inside the outer iteration it ran in', () => {
   ] as never);
 
   assert.deepEqual(shape(tree), [
-    { iter: 0, children: [{ iter: 0, children: ['tap'] }, { iter: 1, children: ['tap'] }] }
+    {
+      iter: 0,
+      children: [
+        { iter: 0, children: ['tap'] },
+        { iter: 1, children: ['tap'] }
+      ]
+    }
   ]);
 });
 

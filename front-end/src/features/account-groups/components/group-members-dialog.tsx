@@ -61,9 +61,7 @@ export function GroupMembersDialog({
     open ? group.id : ''
   );
   const { data: allAccounts, isLoading: accountsLoading } = useAccounts(
-    open
-      ? { platform: group.platform, limit: ACCOUNTS_PAGE_LIMIT }
-      : undefined
+    open ? { platform: group.platform, limit: ACCOUNTS_PAGE_LIMIT } : undefined
   );
   const addMembers = useAddAccountGroupMembers();
   const removeMember = useRemoveAccountGroupMember();

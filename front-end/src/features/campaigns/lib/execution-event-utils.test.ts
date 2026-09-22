@@ -733,7 +733,12 @@ test('foldEventsToStepLog preserves every repeated step occurrence and action pr
 // win re-stamped every round's first step into the following round, so the
 // history dialog showed round 1 starting at its second step.
 test('activity events do not re-path a finished loop step into the next round', () => {
-  const step = (path: string, index: number, at: string, durationMs: number) => [
+  const step = (
+    path: string,
+    index: number,
+    at: string,
+    durationMs: number
+  ) => [
     {
       event_id: `s-${path}`,
       event_type: 'step.started',
@@ -790,13 +795,10 @@ test('activity events do not re-path a finished loop step into the next round', 
     ...step('loop#1/second_step', 1, '2026-09-15T16:36:45.763Z', 1550.0)
   ] as never);
 
-  assert.deepEqual(
-    rows.map((row) => row.step_path).sort(),
-    [
-      'loop#0/first_step',
-      'loop#0/second_step',
-      'loop#1/first_step',
-      'loop#1/second_step'
-    ]
-  );
+  assert.deepEqual(rows.map((row) => row.step_path).sort(), [
+    'loop#0/first_step',
+    'loop#0/second_step',
+    'loop#1/first_step',
+    'loop#1/second_step'
+  ]);
 });

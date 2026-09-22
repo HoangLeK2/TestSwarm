@@ -50,9 +50,7 @@ import {
   selectDeviceTilePreviewMode,
   type WebCodecsSupport
 } from '../lib/device-tile-preview-policy';
-import {
-  deviceDisplayName
-} from '../lib/device-display-name';
+import { deviceDisplayName } from '../lib/device-display-name';
 
 /** Lazy by default so multiple dashboard tabs do not exhaust browser stream connections. */
 const GRID_PREVIEW_EAGER =

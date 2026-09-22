@@ -6,7 +6,6 @@ import {
   resolveRunScenarioDisplayRef
 } from './run-scenario-card-label.ts';
 
-
 test('run_scenario display uses campaign scenario name before UUID', () => {
   const scenarioId = 'cf7d7b47-7ba2-49fe-92a2-75c2e9b443ef';
 
@@ -51,7 +50,10 @@ test('run_scenario manual name still wins over matching org scenario name', () =
 test('run_scenario card falls back to UUID while scenario catalog is loading', () => {
   const scenarioId = '34091ee6-80ec-4db4-94a1-449f2b3be2d3';
   assert.equal(
-    resolveRunScenarioCardRef({ type: 'run_scenario', scenario_id: scenarioId }),
+    resolveRunScenarioCardRef({
+      type: 'run_scenario',
+      scenario_id: scenarioId
+    }),
     scenarioId
   );
 });

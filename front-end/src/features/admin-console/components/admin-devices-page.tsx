@@ -223,7 +223,9 @@ export function AdminDevicesPage() {
                   <TableHead>{t('table.state')}</TableHead>
                   <TableHead>{t('table.relay')}</TableHead>
                   <TableHead>{t('table.lastSeen')}</TableHead>
-                  <TableHead className='text-right'>{t('table.actions')}</TableHead>
+                  <TableHead className='text-right'>
+                    {t('table.actions')}
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -438,7 +440,9 @@ function DeviceTransferDialog({
                         key={workspace.id}
                         type='button'
                         className={`flex w-full items-center justify-between gap-3 border-b p-3 text-left text-sm last:border-b-0 hover:bg-muted/50 ${
-                          selected ? 'bg-primary/5 text-primary' : 'bg-background'
+                          selected
+                            ? 'bg-primary/5 text-primary'
+                            : 'bg-background'
                         }`}
                         aria-pressed={selected}
                         onClick={() => setWorkspaceId(workspace.id)}
@@ -471,7 +475,9 @@ function DeviceTransferDialog({
                 })}
               </div>
             ) : (
-              <p className='text-sm text-muted-foreground'>{t('noChangeHint')}</p>
+              <p className='text-sm text-muted-foreground'>
+                {t('noChangeHint')}
+              </p>
             )}
 
             <DialogFooter>
@@ -481,7 +487,9 @@ function DeviceTransferDialog({
               <Button type='submit' disabled={pending || !targetChanged}>
                 {pending ? <SubmitSpinner /> : null}
                 {selectedWorkspace
-                  ? t('transferTo', { workspace: selectedWorkspace.businessName })
+                  ? t('transferTo', {
+                      workspace: selectedWorkspace.businessName
+                    })
                   : t('transfer')}
               </Button>
             </DialogFooter>

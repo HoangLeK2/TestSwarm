@@ -41,9 +41,12 @@ for (const file of walk(path.join(root, 'src'))) {
   const aliases = [
     ...new Set([
       't',
-      ...[...src.matchAll(/(?:const|let)\s+(t[A-Z]\w*)\s*=\s*useTranslations/g)]
-        .map((m) => m[1]),
-      ...[...src.matchAll(/(t[A-Z]\w*)\s*:\s*useTranslations/g)].map((m) => m[1])
+      ...[
+        ...src.matchAll(/(?:const|let)\s+(t[A-Z]\w*)\s*=\s*useTranslations/g)
+      ].map((m) => m[1]),
+      ...[...src.matchAll(/(t[A-Z]\w*)\s*:\s*useTranslations/g)].map(
+        (m) => m[1]
+      )
     ])
   ];
   const callRe = new RegExp(

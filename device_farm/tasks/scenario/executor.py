@@ -219,17 +219,19 @@ def _resolve_step_for_execution(
 
 def _error_policy(step: Dict[str, Any], scenario: Dict[str, Any]) -> str:
     """Return parent-owned error policy for a failed step."""
-    step_type = str(step.get("type") or "")
-    dsl_policy = step.get("error_policy", "")
-    if dsl_policy in ("ignore", "continue"):
-        return "continue"
-    if dsl_policy == "stop":
-        return "stop"
+    # The editor's fields win over error_policy: saving a body stamps
+    # error_policy="stop" on every top-level step (normalize_step), which
+    # silently overrode "skip on error" chosen in the UI.
     step_policy = step.get("on_error", "")
     if step_policy in ("pause", "continue", "stop"):
         return step_policy
     if step.get("ignore_error"):
         return "continue"
+    dsl_policy = step.get("error_policy", "")
+    if dsl_policy in ("ignore", "continue"):
+        return "continue"
+    if dsl_policy == "stop":
+        return "stop"
     scenario_policy = scenario.get("on_error", "")
     if scenario_policy in ("pause", "continue", "stop"):
         return scenario_policy

@@ -12,8 +12,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select';
-
-type TFn = (key: string, values?: Record<string, any>) => string;
+import { cronExpressionToHumanReadable } from './cron-describe';
 
 type SimpleCronKind =
   | 'everyMinutes'
@@ -50,129 +49,7 @@ type SimpleCronParams = {
   stepHours: number;
 };
 
-function pad2(n: number) {
-  return String(n).padStart(2, '0');
-}
-
-export function cronExpressionToHumanReadable(
-  cronExpression: string,
-  t?: TFn
-): string {
-  const parts = cronExpression.trim().split(/\s+/);
-  if (parts.length !== 5) return cronExpression;
-
-  const [minField, hourField, domField, monField, dowField] = parts;
-
-  const tr = (key: string, fallback: string, values?: Record<string, any>) =>
-    t ? t(key, values) : fallback;
-
-  const everyMin = minField.match(/^\*\/(\d+)$/);
-  if (
-    everyMin &&
-    hourField === '*' &&
-    domField === '*' &&
-    monField === '*' &&
-    dowField === '*'
-  ) {
-    return tr('everyMinutes', `Every ${Number(everyMin[1])} minutes`, {
-      interval: Number(everyMin[1])
-    });
-  }
-
-  const everyHour = hourField.match(/^\*\/(\d+)$/);
-  if (everyHour && domField === '*' && monField === '*' && dowField === '*') {
-    const minute = Number(minField);
-    return tr(
-      'everyHoursAtMinute',
-      `Every ${Number(everyHour[1])} hours at ${pad2(minute)}:00`,
-      {
-        interval: Number(everyHour[1]),
-        minute: pad2(minute)
-      }
-    );
-  }
-
-  if (
-    !minField.includes('/') &&
-    !hourField.includes('/') &&
-    domField === '*' &&
-    monField === '*' &&
-    dowField === '*'
-  ) {
-    const minute = Number(minField);
-    const hour = Number(hourField);
-    if (Number.isFinite(minute) && Number.isFinite(hour)) {
-      return tr('dailyAt', `Every day at ${pad2(hour)}:${pad2(minute)}`, {
-        hour: pad2(hour),
-        minute: pad2(minute)
-      });
-    }
-  }
-
-  const winMin = minField.match(/^\*\/(\d+)$/);
-  const winHourRange = hourField.match(/^(\d{1,2})-(\d{1,2})$/);
-  if (
-    winMin &&
-    winHourRange &&
-    domField === '*' &&
-    monField === '*' &&
-    dowField === '*'
-  ) {
-    const intervalMinutes = Number(winMin[1]);
-    const startHour = Number(winHourRange[1]);
-    const endHour = Number(winHourRange[2]);
-    return tr(
-      'windowMinutes',
-      `Every ${intervalMinutes} minutes between ${pad2(startHour)}:00 and ${pad2(endHour)}:00`,
-      {
-        interval: intervalMinutes,
-        start: pad2(startHour),
-        end: pad2(endHour)
-      }
-    );
-  }
-
-  const winHourStep = hourField.match(/^(\d{1,2})-(\d{1,2})\/(\d+)$/);
-  if (winHourStep && domField === '*' && monField === '*' && dowField === '*') {
-    const minute = Number(minField);
-    const startHour = Number(winHourStep[1]);
-    const endHour = Number(winHourStep[2]);
-    const stepHours = Number(winHourStep[3]);
-    return tr(
-      'windowHoursStep',
-      `Every ${stepHours} hours between ${pad2(startHour)}:00 and ${pad2(endHour)}:00 at ${pad2(minute)}:00`,
-      {
-        step: stepHours,
-        start: pad2(startHour),
-        end: pad2(endHour),
-        minute: pad2(minute)
-      }
-    );
-  }
-
-  const winHourRangeOnly = hourField.match(/^(\d{1,2})-(\d{1,2})$/);
-  if (
-    winHourRangeOnly &&
-    domField === '*' &&
-    monField === '*' &&
-    dowField === '*'
-  ) {
-    const minute = Number(minField);
-    const startHour = Number(winHourRangeOnly[1]);
-    const endHour = Number(winHourRangeOnly[2]);
-    return tr(
-      'windowHoursRangeOnly',
-      `Every hour between ${pad2(startHour)}:00 and ${pad2(endHour)}:00 at ${pad2(minute)}:00`,
-      {
-        start: pad2(startHour),
-        end: pad2(endHour),
-        minute: pad2(minute)
-      }
-    );
-  }
-
-  return cronExpression;
-}
+export { cronExpressionToHumanReadable } from './cron-describe';
 
 function parseCronExpression(cronExpression: string): ParsedCron | null {
   const parts = cronExpression.trim().split(/\s+/);
@@ -297,30 +174,47 @@ function applyParsedCron(parsed: ParsedCron): Partial<SimpleCronParams> & {
   }
 }
 
+const DEFAULT_PARAMS: SimpleCronParams = {
+  intervalMinutes: 30,
+  intervalHours: 2,
+  minute: 0,
+  hour: 8,
+  startHour: 8,
+  endHour: 22,
+  stepHours: 2
+};
+
+// Each preset keeps its own values: editing "every N minutes" must not
+// change the window preset's interval, nor "daily at 08:59" the minute of
+// "every N hours".
+type ParamsByKind = Record<SimpleCronKind, SimpleCronParams>;
+
+const DEFAULT_PARAMS_BY_KIND: ParamsByKind = {
+  everyMinutes: DEFAULT_PARAMS,
+  everyHours: DEFAULT_PARAMS,
+  dailyAt: DEFAULT_PARAMS,
+  windowMinutes: DEFAULT_PARAMS,
+  windowHours: DEFAULT_PARAMS
+};
+
 function createInitialSimpleState(value: string) {
   const parsed = parseCronExpression(value);
-  const defaults: SimpleCronParams = {
-    intervalMinutes: 30,
-    intervalHours: 2,
-    minute: 0,
-    hour: 8,
-    startHour: 8,
-    endHour: 22,
-    stepHours: 2
-  };
 
   if (!parsed) {
     return {
       tab: 'advanced' as const,
       kind: 'everyMinutes' as SimpleCronKind,
-      params: defaults
+      paramsByKind: DEFAULT_PARAMS_BY_KIND
     };
   }
 
   return {
     tab: 'simple' as const,
     kind: parsed.kind,
-    params: { ...defaults, ...applyParsedCron(parsed) }
+    paramsByKind: {
+      ...DEFAULT_PARAMS_BY_KIND,
+      [parsed.kind]: { ...DEFAULT_PARAMS, ...applyParsedCron(parsed) }
+    }
   };
 }
 
@@ -335,17 +229,20 @@ export function CronBuilder({
   const initial = useMemo(() => createInitialSimpleState(value), [value]);
   const [tab, setTab] = useState<'simple' | 'advanced'>(initial.tab);
   const [kind, setKind] = useState<SimpleCronKind>(initial.kind);
-  const [params, setParams] = useState<SimpleCronParams>(initial.params);
+  const [paramsByKind, setParamsByKind] = useState<ParamsByKind>(
+    initial.paramsByKind
+  );
+  const params = paramsByKind[kind];
   const lastExternalValueRef = useRef(value);
 
   const updateParam = useCallback(
     <K extends keyof SimpleCronParams>(key: K, next: SimpleCronParams[K]) => {
-      setParams((current) => {
-        const merged = { ...current, [key]: next };
+      setParamsByKind((current) => {
+        const merged = { ...current[kind], [key]: next };
         const cron = buildCronFromSimpleKind(kind, merged);
         lastExternalValueRef.current = cron;
         onChange(cron);
-        return merged;
+        return { ...current, [kind]: merged };
       });
     },
     [kind, onChange]
@@ -353,12 +250,12 @@ export function CronBuilder({
 
   const changeKind = useCallback(
     (nextKind: SimpleCronKind) => {
-      const cron = buildCronFromSimpleKind(nextKind, params);
+      const cron = buildCronFromSimpleKind(nextKind, paramsByKind[nextKind]);
       lastExternalValueRef.current = cron;
       setKind(nextKind);
       onChange(cron);
     },
-    [onChange, params]
+    [onChange, paramsByKind]
   );
 
   useLayoutEffect(() => {
@@ -374,8 +271,26 @@ export function CronBuilder({
     const next = applyParsedCron(parsed);
     setTab('simple');
     setKind(next.kind);
-    setParams((current) => ({ ...current, ...next }));
+    setParamsByKind((current) => ({
+      ...current,
+      [next.kind]: { ...current[next.kind], ...next }
+    }));
   }, [value]);
+
+  // `*/N` restarts every hour (minutes) or every day (hours), so a
+  // non-divisor N gives uneven gaps — say so instead of letting it surprise.
+  const minutesHint =
+    60 % params.intervalMinutes !== 0 ? (
+      <p className='text-[11px] text-muted-foreground'>
+        {t('intervalMinutesUneven')}
+      </p>
+    ) : null;
+  const hoursHint =
+    24 % params.intervalHours !== 0 ? (
+      <p className='text-[11px] text-muted-foreground'>
+        {t('intervalHoursUneven')}
+      </p>
+    ) : null;
 
   const preview = useMemo(
     () => cronExpressionToHumanReadable(value, t),
@@ -439,14 +354,16 @@ export function CronBuilder({
               <Input
                 type='number'
                 min={1}
+                max={59}
                 value={params.intervalMinutes}
                 onChange={(e) =>
                   updateParam(
                     'intervalMinutes',
-                    Math.max(1, Number(e.target.value) || 1)
+                    Math.max(1, Math.min(59, Number(e.target.value) || 1))
                   )
                 }
               />
+              {minutesHint}
             </div>
           )}
 
@@ -457,11 +374,12 @@ export function CronBuilder({
                 <Input
                   type='number'
                   min={1}
+                  max={23}
                   value={params.intervalHours}
                   onChange={(e) =>
                     updateParam(
                       'intervalHours',
-                      Math.max(1, Number(e.target.value) || 1)
+                      Math.max(1, Math.min(23, Number(e.target.value) || 1))
                     )
                   }
                 />
@@ -481,6 +399,7 @@ export function CronBuilder({
                   }
                 />
               </div>
+              {hoursHint && <div className='sm:col-span-2'>{hoursHint}</div>}
             </div>
           )}
 
@@ -526,11 +445,12 @@ export function CronBuilder({
                 <Input
                   type='number'
                   min={1}
+                  max={59}
                   value={params.intervalMinutes}
                   onChange={(e) =>
                     updateParam(
                       'intervalMinutes',
-                      Math.max(1, Number(e.target.value) || 1)
+                      Math.max(1, Math.min(59, Number(e.target.value) || 1))
                     )
                   }
                 />
@@ -565,6 +485,9 @@ export function CronBuilder({
                   }
                 />
               </div>
+              {minutesHint && (
+                <div className='sm:col-span-3'>{minutesHint}</div>
+              )}
             </div>
           )}
 
@@ -575,11 +498,12 @@ export function CronBuilder({
                 <Input
                   type='number'
                   min={1}
+                  max={23}
                   value={params.stepHours}
                   onChange={(e) =>
                     updateParam(
                       'stepHours',
-                      Math.max(1, Number(e.target.value) || 1)
+                      Math.max(1, Math.min(23, Number(e.target.value) || 1))
                     )
                   }
                 />

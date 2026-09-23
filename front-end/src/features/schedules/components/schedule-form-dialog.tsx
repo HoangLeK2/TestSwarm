@@ -140,8 +140,9 @@ function PaginatedTargetPicker({
   );
   const selected = options.find((option) => option.value === value);
 
+  // modal: see ScheduleDevicePicker — keeps wheel scroll inside the Dialog.
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover modal open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
           variant='outline'

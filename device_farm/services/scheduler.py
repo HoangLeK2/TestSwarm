@@ -366,10 +366,8 @@ class SchedulerService:
             return None
         await db.commit()
 
-        if cron and self._client is not None:
-            await self._update_temporal_schedule_spec(
-                schedule_id, cron, schedule.timezone
-            )
+        if cron or enabled is not None:
+            await self._sync_temporal_schedule(schedule)
 
         return schedule
 
@@ -411,8 +409,7 @@ class SchedulerService:
         )
         await db.commit()
 
-        if self._client is not None:
-            await self._set_temporal_schedule_paused(schedule_id, paused=not enabled)
+        await self._sync_temporal_schedule(schedule)
 
         return schedule
 
@@ -750,6 +747,30 @@ class SchedulerService:
         return run.id
 
     # ── Temporal Schedule sync ────────────────────────────────────────────────
+
+    async def _sync_temporal_schedule(self, schedule) -> None:
+        """Make the Temporal Schedule match the DB row.
+
+        In Temporal mode the SchedulerEngine poller is not started, so the
+        Temporal Schedule is the only thing that fires cron runs. A schedule
+        created disabled has none yet, and one paused by toggle stays paused
+        until explicitly unpaused — either way the DB says "next run 09:00"
+        and nothing fires.
+        """
+        if self._client is None or schedule is None:
+            return
+        if (
+            schedule.is_enabled
+            and schedule.schedule_kind == "cron"
+            and schedule.cron_expression
+        ):
+            # Recreates the Temporal Schedule when it does not exist yet.
+            await self._update_temporal_schedule_spec(
+                schedule.id, schedule.cron_expression, schedule.timezone
+            )
+            await self._set_temporal_schedule_paused(schedule.id, paused=False)
+        else:
+            await self._set_temporal_schedule_paused(schedule.id, paused=True)
 
     async def _create_temporal_schedule(
         self, schedule_id: str, cron_expression: str, timezone_name: str

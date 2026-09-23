@@ -323,17 +323,18 @@ def _error_policy(step: dict, cfg: dict) -> str:
         Scenario-level: {"continue_on_error": true, "steps": [...]}
         Pause all:      {"on_error": "pause", "steps": [...]}
     """
-    step_type = str(step.get("type") or "")
-    dsl_policy = step.get("error_policy", "")
-    if dsl_policy in ("ignore", "continue"):
-        return "continue"
-    if dsl_policy == "stop":
-        return "stop"
+    # Same precedence as tasks/scenario/executor.py: the editor's fields win
+    # over the error_policy="stop" that normalize_step stamps on save.
     step_policy = step.get("on_error", "")
     if step_policy in ("pause", "continue", "stop"):
         return step_policy
     if step.get("ignore_error"):
         return "continue"
+    dsl_policy = step.get("error_policy", "")
+    if dsl_policy in ("ignore", "continue"):
+        return "continue"
+    if dsl_policy == "stop":
+        return "stop"
     cfg_policy = cfg.get("on_error", "")
     if cfg_policy in ("pause", "continue", "stop"):
         return cfg_policy

@@ -330,6 +330,57 @@ class TestSchedulerServiceToggle:
         mock_pause.assert_awaited_once_with("sched-001", paused=False)
         assert result.is_enabled is True
 
+    @pytest.mark.asyncio
+    async def test_toggle_enable_registers_missing_temporal_schedule(self):
+        # Created disabled → no Temporal Schedule exists. Enabling must create
+        # it, otherwise the cron never fires while the UI shows a next run.
+        from services.scheduler import SchedulerService
+
+        updated = _make_schedule(is_enabled=True, cron_expression="0 9 * * *")
+        with patch("db.crud.schedule.get_schedule", return_value=_make_schedule(is_enabled=False)), \
+             patch("db.crud.schedule.update_schedule", return_value=updated):
+            service = SchedulerService(temporal_client=AsyncMock(), manager=None, queue=None)
+            with patch.object(service, "_update_temporal_schedule_spec", new_callable=AsyncMock) as mock_spec, \
+                 patch.object(service, "_set_temporal_schedule_paused", new_callable=AsyncMock) as mock_pause:
+                await service.toggle(AsyncMock(), "sched-001", enabled=True)
+
+        mock_spec.assert_awaited_once_with("sched-001", "0 9 * * *", "Asia/Ho_Chi_Minh")
+        mock_pause.assert_awaited_once_with("sched-001", paused=False)
+
+    @pytest.mark.asyncio
+    async def test_update_enable_unpauses_temporal_schedule(self):
+        # Toggled off (Temporal paused) then re-enabled from the edit form:
+        # the PATCH must unpause, not only rewrite the spec.
+        from services.scheduler import SchedulerService
+
+        updated = _make_schedule(is_enabled=True, cron_expression="0 9 * * *")
+        with patch("db.crud.schedule.get_schedule", return_value=_make_schedule(is_enabled=False, status="disabled")), \
+             patch("db.crud.schedule.update_schedule", return_value=updated):
+            service = SchedulerService(temporal_client=AsyncMock(), manager=None, queue=None)
+            with patch.object(service, "_update_temporal_schedule_spec", new_callable=AsyncMock) as mock_spec, \
+                 patch.object(service, "_set_temporal_schedule_paused", new_callable=AsyncMock) as mock_pause:
+                await service.update(
+                    AsyncMock(), "sched-001", {"cron_expression": "0 9 * * *", "is_enabled": True}
+                )
+
+        mock_spec.assert_awaited_once_with("sched-001", "0 9 * * *", "Asia/Ho_Chi_Minh")
+        mock_pause.assert_awaited_once_with("sched-001", paused=False)
+
+    @pytest.mark.asyncio
+    async def test_update_disable_pauses_temporal_schedule(self):
+        from services.scheduler import SchedulerService
+
+        updated = _make_schedule(is_enabled=False, status="disabled", next_run_at=None)
+        with patch("db.crud.schedule.get_schedule", return_value=_make_schedule()), \
+             patch("db.crud.schedule.update_schedule", return_value=updated):
+            service = SchedulerService(temporal_client=AsyncMock(), manager=None, queue=None)
+            with patch.object(service, "_update_temporal_schedule_spec", new_callable=AsyncMock) as mock_spec, \
+                 patch.object(service, "_set_temporal_schedule_paused", new_callable=AsyncMock) as mock_pause:
+                await service.update(AsyncMock(), "sched-001", {"is_enabled": False})
+
+        mock_spec.assert_not_awaited()
+        mock_pause.assert_awaited_once_with("sched-001", paused=True)
+
 
 class TestSchedulerServiceEpic05:
     @pytest.mark.asyncio

@@ -33,7 +33,10 @@ export function useScheduleRuns(
     staleTime: 2_000,
     refetchInterval: (query) => {
       const data = query.state.data as ScheduleRunOut[] | undefined;
-      return data && data.some((r) => ['pending', 'running'].includes(r.status))
+      return data &&
+        data.some((r) =>
+          ['pending', 'queued', 'running'].includes(r.status.toLowerCase())
+        )
         ? 2000
         : false;
     }

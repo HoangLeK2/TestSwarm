@@ -81,7 +81,9 @@ export function ScheduleDevicePicker({
 
   return (
     <div className='space-y-2'>
-      <Popover open={open} onOpenChange={setOpen}>
+      {/* modal: the content is portaled outside the Dialog, whose scroll lock
+          otherwise swallows wheel events over this list. */}
+      <Popover modal open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <Button
             variant='outline'

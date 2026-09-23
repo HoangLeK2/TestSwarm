@@ -1,39 +1,23 @@
 'use client';
 
-import { useMemo, useState, type ReactNode } from 'react';
-import { formatDistanceToNow } from 'date-fns';
-import { vi } from 'date-fns/locale';
-import { Clock, History, XCircle, CheckCircle } from 'lucide-react';
-import { useTranslations } from 'next-intl';
-import { Badge } from '@/components/ui/badge';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { enUS, vi } from 'date-fns/locale';
+import { ChevronLeft, History } from 'lucide-react';
+import { useLocale, useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger
 } from '@/components/ui/dialog';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow
-} from '@/components/ui/table';
 import { useScheduleRun, useScheduleRuns } from '../hooks/use-schedules';
-
-function statusVariant(
-  status: string
-): 'secondary' | 'default' | 'outline' | 'destructive' {
-  const s = status.toLowerCase();
-  if (['failed', 'error', 'cancelled'].includes(s)) return 'destructive';
-  if (['running', 'pending', 'queued'].includes(s)) return 'outline';
-  if (['success', 'succeeded', 'completed', 'done'].includes(s))
-    return 'default';
-  return 'secondary';
-}
+import { ScheduleRunDetailPanel } from './schedule-run-detail-panel';
+import { ScheduleRunStatusBadge } from './schedule-run-display';
+import { ScheduleRunHistoryList } from './schedule-run-history-list';
+import { cn } from '@/lib/utils';
 
 export function ScheduleRunHistoryDialog({
   scheduleId,
@@ -49,45 +33,54 @@ export function ScheduleRunHistoryDialog({
   onOpenChange?: (open: boolean) => void;
 }) {
   const t = useTranslations('schedulesFeature.list');
+  const locale = useLocale();
+  const dateLocale = locale === 'vi' ? vi : enUS;
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const open = controlledOpen ?? uncontrolledOpen;
   const setOpen = onOpenChange ?? setUncontrolledOpen;
-
-  const { data: runs, isLoading } = useScheduleRuns(scheduleId, open);
-
-  const [detailOpen, setDetailOpen] = useState(false);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
 
+  const {
+    data: runs = [],
+    isLoading,
+    isFetching,
+    error: runsError,
+    refetch: refetchRuns
+  } = useScheduleRuns(scheduleId, open);
+  const selectedRun = useMemo(
+    () => runs.find((run) => run.id === selectedRunId) ?? null,
+    [runs, selectedRunId]
+  );
   const {
     data: runDetail,
     isLoading: isDetailLoading,
-    error: detailError
+    error: detailError,
+    refetch: refetchDetail
   } = useScheduleRun(scheduleId, selectedRunId);
 
-  const headerStatus = useMemo(() => {
-    if (!runs?.length) return null;
-    const latest = runs[0]?.status ?? '';
-    const v = statusVariant(latest);
-    if (v === 'destructive')
-      return <XCircle className='mr-2 size-4 text-red-600' />;
-    if (v === 'default')
-      return <CheckCircle className='mr-2 size-4 text-green-600' />;
-    return <Clock className='mr-2 size-4' />;
-  }, [runs]);
+  useEffect(() => {
+    if (!open || !runs.length) return;
+    if (!selectedRunId || !runs.some((run) => run.id === selectedRunId)) {
+      setSelectedRunId(runs[0].id);
+    }
+  }, [open, runs, selectedRunId]);
 
-  const statusLabel = (status: string) => {
-    const s = status.toLowerCase();
-    if (s === 'pending' || s === 'queued' || s === 'running')
-      return t('statusRunning');
-    if (['success', 'succeeded', 'completed', 'done'].includes(s))
-      return t('statusCompleted');
-    if (['failed', 'error', 'cancelled', 'canceled'].includes(s))
-      return t('statusFailed');
-    return status;
+  const handleOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen);
+    if (!nextOpen) {
+      setSelectedRunId(null);
+      setMobileDetailOpen(false);
+    }
+  };
+
+  const handleSelectRun = (runId: string) => {
+    setSelectedRunId(runId);
+    setMobileDetailOpen(true);
   };
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       {trigger ? (
         <DialogTrigger asChild>{trigger}</DialogTrigger>
       ) : controlledOpen === undefined ? (
@@ -99,250 +92,91 @@ export function ScheduleRunHistoryDialog({
             title={t('history')}
             aria-label={t('history')}
           >
-            <History size={14} />
+            <History size={14} aria-hidden />
             <span>{t('history')}</span>
           </Button>
         </DialogTrigger>
       ) : null}
 
-      <DialogContent className='z-[1000] flex h-[calc(100vh-4rem)] max-h-[46rem] w-[calc(100vw-2rem)] !max-w-[72rem] flex-col gap-0 overflow-hidden !p-0'>
-        <DialogHeader className='shrink-0 border-b px-6 py-5 pr-12'>
-          <DialogTitle className='flex items-center text-base'>
-            {headerStatus}
-            {t('historyTitle', { name: scheduleName })}
-          </DialogTitle>
-        </DialogHeader>
-
-        {isLoading ? (
-          <p className='px-6 py-5 text-sm text-muted-foreground'>
-            {t('historyLoading')}
-          </p>
-        ) : !runs?.length ? (
-          <p className='px-6 py-5 text-sm text-muted-foreground'>
-            {t('historyEmpty')}
-          </p>
-        ) : (
-          <div className='min-h-0 flex-1 overflow-auto p-6'>
-            <div className='overflow-hidden rounded-lg border'>
-              <div className='max-h-[64vh] overflow-auto'>
-                <Table className='min-w-[58rem]'>
-                  <TableHeader className='sticky top-0 z-10 bg-muted'>
-                    <TableRow className='bg-muted hover:bg-muted'>
-                      <TableHead className='w-[8rem]'>
-                        {t('runColStatus')}
-                      </TableHead>
-                      <TableHead className='w-[10rem]'>
-                        {t('runColStarted')}
-                      </TableHead>
-                      <TableHead className='w-[10rem]'>
-                        {t('runColFinished')}
-                      </TableHead>
-                      <TableHead className='w-[7rem] text-right'>
-                        {t('runColDispatched')}
-                      </TableHead>
-                      <TableHead className='w-[7rem] text-right'>
-                        {t('runColSucceeded')}
-                      </TableHead>
-                      <TableHead className='w-[7rem] text-right'>
-                        {t('runColFailed')}
-                      </TableHead>
-                      <TableHead className='min-w-[14rem]'>
-                        {t('runColError')}
-                      </TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {runs.map((r) => (
-                      <TableRow
-                        key={r.id}
-                        className='cursor-pointer hover:bg-muted/40'
-                        onClick={() => {
-                          setSelectedRunId(r.id);
-                          setDetailOpen(true);
-                        }}
-                      >
-                        <TableCell className='py-3'>
-                          <Badge
-                            variant={statusVariant(r.status)}
-                            className='inline-flex items-center text-[11px]'
-                          >
-                            {statusLabel(r.status)}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className='whitespace-nowrap py-3 text-xs text-muted-foreground'>
-                          {r.started_at
-                            ? formatDistanceToNow(new Date(r.started_at), {
-                                addSuffix: true,
-                                locale: vi
-                              })
-                            : '-'}
-                        </TableCell>
-                        <TableCell className='whitespace-nowrap py-3 text-xs text-muted-foreground'>
-                          {r.finished_at
-                            ? formatDistanceToNow(new Date(r.finished_at), {
-                                addSuffix: true,
-                                locale: vi
-                              })
-                            : '-'}
-                        </TableCell>
-                        <TableCell className='py-3 text-right text-xs'>
-                          {r.devices_dispatched}
-                        </TableCell>
-                        <TableCell className='py-3 text-right text-xs text-green-600'>
-                          {r.devices_succeeded}
-                        </TableCell>
-                        <TableCell className='py-3 text-right text-xs text-destructive'>
-                          {r.devices_failed}
-                        </TableCell>
-                        <TableCell className='max-w-[24rem] py-3'>
-                          <span className='block truncate text-xs text-muted-foreground'>
-                            {r.error_message ?? '-'}
-                          </span>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+      <DialogContent className='flex h-[calc(100vh-2rem)] max-h-[50rem] w-[calc(100vw-2rem)] !max-w-6xl flex-col gap-0 overflow-hidden !p-0'>
+        <DialogHeader className='shrink-0 border-b px-5 py-4 pr-12 md:px-6 md:py-5'>
+          <div className='flex items-start gap-3'>
+            <span className='rounded-lg bg-muted p-2 text-muted-foreground'>
+              <History className='size-5' aria-hidden />
+            </span>
+            <div className='min-w-0 flex-1'>
+              <div className='flex flex-wrap items-center gap-2'>
+                <DialogTitle className='truncate text-base md:text-lg'>
+                  {t('historyTitle', { name: scheduleName })}
+                </DialogTitle>
+                {runs[0] ? (
+                  <ScheduleRunStatusBadge status={runs[0].status} />
+                ) : null}
               </div>
+              <DialogDescription className='mt-1'>
+                {runs.length
+                  ? t('historyDescription', { count: runs.length })
+                  : t('historyDescriptionEmpty')}
+              </DialogDescription>
             </div>
           </div>
-        )}
-      </DialogContent>
+        </DialogHeader>
 
-      <Dialog
-        open={detailOpen}
-        onOpenChange={(v) => {
-          setDetailOpen(v);
-          if (!v) setSelectedRunId(null);
-        }}
-      >
-        <DialogContent className='z-[1100] max-h-[90vh] max-w-3xl overflow-y-auto'>
-          <DialogHeader>
-            <DialogTitle>
-              {t('detailsTitle', { name: scheduleName })}
-            </DialogTitle>
-          </DialogHeader>
-
-          {isDetailLoading ? (
-            <p className='pt-2 text-sm text-muted-foreground'>
-              {t('detailsLoading')}
-            </p>
-          ) : detailError ? (
-            <p className='pt-2 text-sm text-destructive'>{t('detailsError')}</p>
-          ) : !runDetail ? (
-            <p className='pt-2 text-sm text-muted-foreground'>
-              {t('detailsEmpty')}
-            </p>
-          ) : (
-            <div className='space-y-4 pt-2'>
-              <div className='flex items-center justify-between gap-3'>
-                <Badge
-                  variant={statusVariant(runDetail.status)}
-                  className='inline-flex items-center text-[11px]'
-                >
-                  {runDetail.status}
-                </Badge>
-                <span className='font-mono text-[11px] text-muted-foreground'>
-                  {runDetail.id}
+        <div className='flex min-h-0 flex-1 flex-col md:grid md:grid-cols-[minmax(18rem,0.8fr)_minmax(0,1.2fr)] md:grid-rows-1'>
+          <section
+            className={cn(
+              'min-h-0 flex-1 flex-col border-b bg-muted/20 md:flex md:border-b-0 md:border-r',
+              mobileDetailOpen ? 'hidden' : 'flex'
+            )}
+          >
+            <div className='flex items-center justify-between border-b px-4 py-3'>
+              <h2 className='text-sm font-semibold'>{t('recentRuns')}</h2>
+              {runs.length ? (
+                <span className='text-xs text-muted-foreground'>
+                  {t('runCount', { count: runs.length })}
                 </span>
-              </div>
-
-              <div className='grid grid-cols-2 gap-3'>
-                <div className='space-y-1'>
-                  <div className='text-xs text-muted-foreground'>
-                    {t('runColStarted')}
-                  </div>
-                  <div className='text-[11px]'>
-                    {runDetail.started_at
-                      ? formatDistanceToNow(new Date(runDetail.started_at), {
-                          addSuffix: true,
-                          locale: vi
-                        })
-                      : '-'}
-                  </div>
-                </div>
-                <div className='space-y-1'>
-                  <div className='text-xs text-muted-foreground'>
-                    {t('runColFinished')}
-                  </div>
-                  <div className='text-[11px]'>
-                    {runDetail.finished_at
-                      ? formatDistanceToNow(new Date(runDetail.finished_at), {
-                          addSuffix: true,
-                          locale: vi
-                        })
-                      : '-'}
-                  </div>
-                </div>
-              </div>
-
-              <div className='grid grid-cols-3 gap-3'>
-                <div className='space-y-1'>
-                  <div className='text-xs text-muted-foreground'>
-                    {t('runColDispatched')}
-                  </div>
-                  <div className='text-[11px]'>
-                    {runDetail.devices_dispatched}
-                  </div>
-                </div>
-                <div className='space-y-1'>
-                  <div className='text-xs text-muted-foreground'>
-                    {t('runColSucceeded')}
-                  </div>
-                  <div className='text-[11px] text-green-600'>
-                    {runDetail.devices_succeeded}
-                  </div>
-                </div>
-                <div className='space-y-1'>
-                  <div className='text-xs text-muted-foreground'>
-                    {t('runColFailed')}
-                  </div>
-                  <div className='text-[11px] text-destructive'>
-                    {runDetail.devices_failed}
-                  </div>
-                </div>
-              </div>
-
-              <div className='space-y-1'>
-                <div className='text-xs text-muted-foreground'>
-                  {t('runColError')}
-                </div>
-                <div className='whitespace-pre-wrap rounded border bg-muted/10 p-3 text-[11px] text-muted-foreground'>
-                  {runDetail.error_message ?? '-'}
-                </div>
-              </div>
-
-              <div className='space-y-1'>
-                <div className='text-xs text-muted-foreground'>
-                  {t('taskIds')}
-                </div>
-                {runDetail.task_ids?.length ? (
-                  <div className='rounded border bg-muted/10 p-3'>
-                    <ul className='space-y-1'>
-                      {runDetail.task_ids.map((id) => (
-                        <li
-                          key={id}
-                          className='truncate font-mono text-[11px] text-muted-foreground'
-                        >
-                          {id}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : (
-                  <p className='text-[11px] text-muted-foreground'>-</p>
-                )}
-              </div>
-
-              <div className='flex justify-end pt-2'>
-                <Button size='sm' onClick={() => setDetailOpen(false)}>
-                  {t('close')}
-                </Button>
-              </div>
+              ) : null}
             </div>
-          )}
-        </DialogContent>
-      </Dialog>
+            <ScheduleRunHistoryList
+              runs={runs}
+              selectedRunId={selectedRunId}
+              isLoading={isLoading}
+              isFetching={isFetching}
+              error={runsError}
+              dateLocale={dateLocale}
+              onSelect={handleSelectRun}
+              onRetry={() => void refetchRuns()}
+            />
+          </section>
+
+          <section
+            className={cn(
+              'min-h-0 flex-1 flex-col bg-background md:flex',
+              mobileDetailOpen ? 'flex' : 'hidden'
+            )}
+          >
+            <div className='flex items-center gap-2 border-b px-3 py-2 md:px-5 md:py-3'>
+              <Button
+                size='icon'
+                variant='ghost'
+                className='size-8 md:hidden'
+                aria-label={t('backToRuns')}
+                onClick={() => setMobileDetailOpen(false)}
+              >
+                <ChevronLeft className='size-4' aria-hidden />
+              </Button>
+              <h2 className='text-sm font-semibold'>{t('runDetails')}</h2>
+            </div>
+            <ScheduleRunDetailPanel
+              run={runDetail ?? selectedRun}
+              isLoading={!!selectedRunId && isDetailLoading && !selectedRun}
+              error={detailError}
+              dateLocale={dateLocale}
+              onRetry={() => void refetchDetail()}
+            />
+          </section>
+        </div>
+      </DialogContent>
     </Dialog>
   );
 }

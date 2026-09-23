@@ -658,6 +658,30 @@ def test_run_scenario_child_failure_can_continue_when_parent_chooses_continue(pa
     assert any(not step.get("ok", True) for step in run_step["sub_result"]["step_results"])
 
 
+@pytest.mark.parametrize("ui_policy", [{"on_error": "continue"}, {"ignore_error": True}])
+def test_saved_loop_skip_on_error_runs_next_step(ui_policy):
+    """Saving stamps error_policy="stop"; the editor's skip choice must still win."""
+    from services.scenario_dsl.step_contract import normalize_step
+    from temporal.workflows import _error_policy as temporal_error_policy
+
+    loop = normalize_step(
+        {"id": "s4", "type": "loop", "count": 3,
+         "steps": [{"type": "unknown_bad_step"}], **ui_policy}
+    )
+    assert loop["error_policy"] == "stop"
+    assert temporal_error_policy(loop, {}) == "continue"
+
+    scenario = {
+        "steps": [loop, {"type": "set_variable", "name": "AFTER", "value": "1"}],
+        "capture_steps": False,
+        "settle_timeout_ms": 0,
+    }
+    result = run_scenario_task(_make_device(), scenario)
+
+    assert [s["type"] for s in result["step_results"]] == ["loop", "set_variable"]
+    assert result["step_results"][0]["error_ignored"] is True
+
+
 # ── Seed data integrity ───────────────────────────────────────────────────────
 
 

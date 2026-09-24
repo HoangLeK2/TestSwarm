@@ -5011,7 +5011,7 @@
     "loadingDevices": "Loading device data",
     "loadErrorHint": "Device data could not be loaded. Check the connection and retry.",
     "refreshErrorTitle": "Could not refresh data",
-    "refreshErrorHint": "The list is temporarily hidden to avoid acting on stale data. Refresh after checking the connection.",
+    "refreshErrorHint": "Showing the last successful update. Status may have changed since then.",
     "technicalDetails": "Technical details",
     "retry": "Retry",
     "filters": {
@@ -5071,6 +5071,7 @@
     "streamConnecting": "Connecting screen...",
     "streamWaitingFirstFrame": "Loading live screen...",
     "streamUnresponsive": "No screen image yet — check the connection host and phone",
+    "streamReconnecting": "Reconnecting...",
     "streamOffline": "Offline",
     "badgeOffline": "Offline",
     "badgeUnresponsive": "No video",

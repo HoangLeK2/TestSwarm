@@ -225,35 +225,24 @@ function DashboardWebRtcPreview({
 }) {
   const t = useTranslations('devicesFarm');
   const videoRef = useRef<HTMLVideoElement>(null);
-  const retryTimerRef = useRef<number | undefined>(undefined);
   const [hasFrame, setHasFrame] = useState(false);
   const [restartKey, setRestartKey] = useState(0);
 
-  const clearRetryTimer = useCallback(() => {
-    if (retryTimerRef.current === undefined) return;
-    window.clearTimeout(retryTimerRef.current);
-    retryTimerRef.current = undefined;
+  const handleFrame = useCallback(() => {
+    setHasFrame(true);
   }, []);
 
-  const handleFrame = useCallback(() => {
-    clearRetryTimer();
-    setHasFrame(true);
-  }, [clearRetryTimer]);
-
+  // No tile-level retry: the hook's ladder already backs off with jitter under
+  // a page-wide cap. A second, flat 1.2s retry here doubled every failure and
+  // made 20 tiles hammer the session endpoint in lockstep.
   const handleError = useCallback(() => {
     setHasFrame(false);
-    if (!active || retryTimerRef.current !== undefined) return;
-    retryTimerRef.current = window.setTimeout(() => {
-      retryTimerRef.current = undefined;
-      setRestartKey((value) => value + 1);
-    }, 1200);
-  }, [active]);
+  }, []);
 
   const retryNow = useCallback(() => {
-    clearRetryTimer();
     setHasFrame(false);
     setRestartKey((value) => value + 1);
-  }, [clearRetryTimer]);
+  }, []);
 
   const webrtc = useWebRtcVideo(device.serial, videoRef, {
     enabled: active,
@@ -270,9 +259,7 @@ function DashboardWebRtcPreview({
   useEffect(() => {
     setHasFrame(false);
     setRestartKey(0);
-    clearRetryTimer();
-    return clearRetryTimer;
-  }, [clearRetryTimer, device.serial]);
+  }, [device.serial]);
 
   // A frozen <video> keeps its last decoded frame forever — hide it once the
   // server reports the media plane stopped moving.
@@ -298,8 +285,14 @@ function DashboardWebRtcPreview({
         aria-live='polite'
         aria-hidden={frameVisible}
       >
-        {!frameStale && (!webrtc.failed || webrtc.connecting) ? (
-          <PreviewLoadingSurface label={t('streamWaitingFirstFrame')} />
+        {!frameStale && !webrtc.gaveUp ? (
+          <PreviewLoadingSurface
+            label={
+              webrtc.failed && !webrtc.connecting
+                ? t('streamReconnecting')
+                : t('streamWaitingFirstFrame')
+            }
+          />
         ) : (
           <PreviewLoadingSurface
             label={t('streamUnresponsive')}

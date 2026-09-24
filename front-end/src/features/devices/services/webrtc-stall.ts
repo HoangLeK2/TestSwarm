@@ -154,6 +154,75 @@ export function resetRecoverySlotsForTest(): void {
   activeRecoveries = 0;
 }
 
+/**
+ * Cap on first attaches in flight across the whole page.
+ *
+ * The recovery cap above only covers rebuilds. A fleet grid that mounts 20
+ * tiles used to fire 20 session creates, 20 SDP answers and their retries in
+ * the same second — through Cloudflare that came back as 520s, and it starved
+ * the `/devices/live` poll sharing the origin. Tiles now queue: a slot is held
+ * until the first frame, a failure, or ATTACH_SLOT_HOLD_MS, whichever is first.
+ *
+ * FIFO, so tiles attach in the order they asked — which is mount order, which
+ * is top-to-bottom for the rows actually on screen (off-screen tiles never ask).
+ */
+const configuredMaxConcurrentAttaches = Number(
+  process.env.NEXT_PUBLIC_WEBRTC_MAX_CONCURRENT_ATTACHES ?? 4
+);
+export const MAX_CONCURRENT_ATTACHES = Number.isFinite(
+  configuredMaxConcurrentAttaches
+)
+  ? Math.max(1, Math.min(20, Math.round(configuredMaxConcurrentAttaches)))
+  : 4;
+/** Long enough for a healthy attach (adapter waits up to 4s for a frame). */
+export const ATTACH_SLOT_HOLD_MS = 5_000;
+
+let activeAttaches = 0;
+const attachWaiters: Array<() => void> = [];
+
+function grantAttachSlot(): () => void {
+  activeAttaches += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    activeAttaches = Math.max(0, activeAttaches - 1);
+    attachWaiters.shift()?.();
+  };
+}
+
+/**
+ * Resolve with a release function once a slot is free. Rejects on abort, and an
+ * aborted waiter gives up its place in the queue.
+ */
+export function waitForAttachSlot(signal?: AbortSignal): Promise<() => void> {
+  if (signal?.aborted) {
+    return Promise.reject(new DOMException('Aborted', 'AbortError'));
+  }
+  if (activeAttaches < MAX_CONCURRENT_ATTACHES && attachWaiters.length === 0) {
+    return Promise.resolve(grantAttachSlot());
+  }
+  return new Promise((resolve, reject) => {
+    const waiter = () => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve(grantAttachSlot());
+    };
+    const onAbort = () => {
+      const index = attachWaiters.indexOf(waiter);
+      if (index >= 0) attachWaiters.splice(index, 1);
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    attachWaiters.push(waiter);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/** Test hook: the module-level queue would otherwise leak between cases. */
+export function resetAttachSlotsForTest(): void {
+  activeAttaches = 0;
+  attachWaiters.length = 0;
+}
+
 /** Read one inbound-rtp video sample. Returns null when there is no video yet. */
 export async function readMediaSample(
   pc: RTCPeerConnection,

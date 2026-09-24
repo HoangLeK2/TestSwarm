@@ -5016,7 +5016,7 @@
     "loadingDevices": "Đang tải dữ liệu thiết bị",
     "loadErrorHint": "Không tải được dữ liệu thiết bị. Kiểm tra kết nối rồi thử lại.",
     "refreshErrorTitle": "Không thể cập nhật dữ liệu mới",
-    "refreshErrorHint": "Danh sách tạm ẩn để tránh thao tác trên dữ liệu cũ. Tải lại sau khi kiểm tra kết nối.",
+    "refreshErrorHint": "Đang hiển thị dữ liệu lần cập nhật gần nhất. Trạng thái có thể đã thay đổi.",
     "technicalDetails": "Chi tiết kỹ thuật",
     "retry": "Thử lại",
     "filters": {
@@ -5076,6 +5076,7 @@
     "streamConnecting": "Đang kết nối màn hình...",
     "streamWaitingFirstFrame": "Đang tải hình ảnh trực tiếp...",
     "streamUnresponsive": "Chưa nhận được hình ảnh — kiểm tra máy kết nối và điện thoại",
+    "streamReconnecting": "Đang kết nối lại...",
     "streamOffline": "Mất kết nối",
     "badgeOffline": "Mất kết nối",
     "badgeUnresponsive": "Không có video",

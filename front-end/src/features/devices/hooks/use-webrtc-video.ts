@@ -12,10 +12,12 @@ import {
   type WebRtcStreamController
 } from '../services/webrtc-stream';
 import {
+  ATTACH_SLOT_HOLD_MS,
   MAX_RECOVERY_ATTEMPTS,
   RECOVERY_RESET_AFTER_MS,
   acquireRecoverySlot,
   recoveryDelayMs,
+  waitForAttachSlot,
   type StallReason
 } from '../services/webrtc-stall';
 
@@ -72,6 +74,9 @@ export function useWebRtcVideo(
   const [connecting, setConnecting] = useState(false);
   const [failed, setFailed] = useState(false);
   const [stalled, setStalled] = useState(false);
+  // The ladder ran out. Distinct from `failed`, which is also true between
+  // rungs while a retry is still coming.
+  const [gaveUp, setGaveUp] = useState(false);
   // Bumped by the stall recovery ladder, on the rung above the keyframe request.
   // Part of streamKey so a bump rebuilds the session and the PeerConnection:
   // that replaces a connection which may itself be the broken part, and creating
@@ -135,6 +140,7 @@ export function useWebRtcVideo(
       recoveryAttemptRef.current = 0;
       keyframeUsedRef.current = false;
       setFailed(false);
+      setGaveUp(false);
     }
   }, []);
 
@@ -145,6 +151,7 @@ export function useWebRtcVideo(
       // Out of rungs. Surface it rather than retrying forever: at this point
       // the fault is upstream of the browser and only an operator can see it.
       setFailed(true);
+      setGaveUp(true);
       return;
     }
     recoveryTimerRef.current = window.setTimeout(() => {
@@ -206,6 +213,13 @@ export function useWebRtcVideo(
     [scheduleRecovery]
   );
 
+  // A manual restart gets a full ladder, not whatever the last run left over.
+  useEffect(() => {
+    recoveryAttemptRef.current = 0;
+    keyframeUsedRef.current = false;
+    setGaveUp(false);
+  }, [restartKey]);
+
   useEffect(
     () => () => {
       if (recoveryTimerRef.current !== null) {
@@ -257,27 +271,46 @@ export function useWebRtcVideo(
     }
 
     const abort = new AbortController();
+    // Queue behind the page-wide attach cap; the slot goes back on the first
+    // frame, on failure, or after ATTACH_SLOT_HOLD_MS so one slow phone cannot
+    // hold the rest of the grid hostage.
+    let releaseAttachSlot: (() => void) | null = null;
+    let attachHoldTimer: number | undefined;
+    const freeAttachSlot = () => {
+      if (attachHoldTimer !== undefined) {
+        window.clearTimeout(attachHoldTimer);
+        attachHoldTimer = undefined;
+      }
+      releaseAttachSlot?.();
+      releaseAttachSlot = null;
+    };
     setConnecting(true);
     setFailed(false);
-    startWebRtcStream({
-      serial,
-      viewerId,
-      video,
-      signal: abort.signal,
-      control,
-      profile,
-      maxFps,
-      maxWidth,
-      bitrate,
-      onFrame: () => {
-        setActive(true);
-        setConnecting(false);
-        onFrame?.();
-      },
-      onSize,
-      onStall: handleStall,
-      onProgress: handleProgress
-    })
+    waitForAttachSlot(abort.signal)
+      .then((release) => {
+        releaseAttachSlot = release;
+        attachHoldTimer = window.setTimeout(freeAttachSlot, ATTACH_SLOT_HOLD_MS);
+        return startWebRtcStream({
+          serial,
+          viewerId,
+          video,
+          signal: abort.signal,
+          control,
+          profile,
+          maxFps,
+          maxWidth,
+          bitrate,
+          onFrame: () => {
+            freeAttachSlot();
+            setActive(true);
+            setConnecting(false);
+            onFrame?.();
+          },
+          onSize,
+          onStall: handleStall,
+          onProgress: handleProgress
+        });
+      })
       .then((controller) => {
         releaseRecoverySlot();
         if (abort.signal.aborted) {
@@ -292,6 +325,7 @@ export function useWebRtcVideo(
         });
       })
       .catch((error) => {
+        freeAttachSlot();
         releaseRecoverySlot();
         if (abort.signal.aborted) return;
         setActive(false);
@@ -305,6 +339,7 @@ export function useWebRtcVideo(
 
     return () => {
       abort.abort();
+      freeAttachSlot();
       const controller = controllerRef.current;
       controllerRef.current = null;
       if (controller) {
@@ -334,7 +369,7 @@ export function useWebRtcVideo(
     viewerId
   ]);
 
-  return { active, connecting, failed, stalled };
+  return { active, connecting, failed, stalled, gaveUp };
 }
 
 /** Drop a cached controller immediately instead of on the grace timer. */

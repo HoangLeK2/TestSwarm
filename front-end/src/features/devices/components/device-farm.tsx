@@ -102,9 +102,16 @@ export function DeviceFarm() {
   });
 
   const hasLiveSnapshot = lastUpdatedAt !== null;
+  // A failed refresh keeps the last snapshot on screen under the warning
+  // banner. Emptying the grid unmounted every tile, closed every stream, and
+  // the next good poll re-attached all of them at once — the same burst that
+  // had starved this poll in the first place.
   const visibleDevices = useMemo(
-    () => (error ? [] : filterDeviceFarmActiveGridDevices(devices)),
-    [devices, error]
+    () =>
+      error && !hasLiveSnapshot
+        ? []
+        : filterDeviceFarmActiveGridDevices(devices),
+    [devices, error, hasLiveSnapshot]
   );
   const activeDeviceCount = visibleDevices.length;
   const readyDeviceCount = useMemo(

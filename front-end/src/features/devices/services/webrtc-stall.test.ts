@@ -3,12 +3,15 @@ import test from 'node:test';
 
 import {
   DEFAULT_STALL_THRESHOLDS,
+  MAX_CONCURRENT_ATTACHES,
   MAX_RECOVERY_ATTEMPTS,
   acquireRecoverySlot,
   classifyStall,
   recoveryDelayMs,
+  resetAttachSlotsForTest,
   resetRecoverySlotsForTest,
   startMediaProgressWatcher,
+  waitForAttachSlot,
   type MediaSample
 } from './webrtc-stall';
 
@@ -244,4 +247,39 @@ test('resume re-arms the watcher after a keyframe repair', async (t) => {
     'resume after stop stays stopped'
   );
   t.mock.timers.reset();
+});
+
+test('attach slots queue FIFO past the cap and hand over on release', async () => {
+  resetAttachSlotsForTest();
+  const held: Array<() => void> = [];
+  for (let i = 0; i < MAX_CONCURRENT_ATTACHES; i += 1) {
+    held.push(await waitForAttachSlot());
+  }
+  const order: string[] = [];
+  const first = waitForAttachSlot().then((release) => {
+    order.push('first');
+    return release;
+  });
+  const aborted = new AbortController();
+  const skipped = waitForAttachSlot(aborted.signal).then(
+    () => order.push('skipped'),
+    () => order.push('aborted')
+  );
+  const second = waitForAttachSlot().then((release) => {
+    order.push('second');
+    return release;
+  });
+  aborted.abort();
+  await skipped;
+  assert.deepEqual(order, ['aborted']);
+
+  held[0]();
+  held[0](); // double release must not free a second slot
+  const releaseFirst = await first;
+  assert.deepEqual(order, ['aborted', 'first']);
+
+  releaseFirst();
+  await second;
+  assert.deepEqual(order, ['aborted', 'first', 'second']);
+  resetAttachSlotsForTest();
 });

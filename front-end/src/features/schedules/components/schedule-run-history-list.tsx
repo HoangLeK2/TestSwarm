@@ -124,8 +124,6 @@ export function ScheduleRunHistoryList({
         >
           {visibleRuns.map((run) => {
             const selected = run.id === selectedRunId;
-            const completedDevices = run.devices_succeeded + run.devices_failed;
-
             return (
               <div key={run.id} role='listitem'>
                 <Button
@@ -160,7 +158,7 @@ export function ScheduleRunHistoryList({
                         <Smartphone className='size-3.5' aria-hidden />
                         {run.devices_dispatched > 0
                           ? t('runDeviceSummary', {
-                              completed: completedDevices,
+                              succeeded: run.devices_succeeded,
                               total: run.devices_dispatched
                             })
                           : t('noDevicesDispatched')}

@@ -20,9 +20,20 @@ class ScheduleDispatchResult:
     """Result returned by the dispatch activity."""
     run_id: str
     devices_dispatched: int = 0
+    devices_succeeded: int = 0
+    devices_failed: int = 0
     task_ids: list[str] = field(default_factory=list)
     workflow_ids: list[str] = field(default_factory=list)
     error: str | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            self.error is None
+            and self.devices_dispatched > 0
+            and self.devices_succeeded == 0
+            and self.devices_failed == 0
+        ):
+            self.devices_succeeded = self.devices_dispatched
 
 
 @dataclass
@@ -32,4 +43,6 @@ class ScheduleRunOutput:
     run_id: str
     status: str  # completed | failed | partial
     devices_dispatched: int = 0
+    devices_succeeded: int = 0
+    devices_failed: int = 0
     error: str | None = None

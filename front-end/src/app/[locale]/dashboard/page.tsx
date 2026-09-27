@@ -1,11 +1,5 @@
-import { ROUTES } from '@/config/routes';
-import { redirect } from '@/i18n/navigation';
+import { WorkspaceJourneyRedirect } from '@/features/workspace-journey/components/workspace-journey';
 
-export default async function Page({
-  params
-}: {
-  params: Promise<{ locale: string }>;
-}) {
-  const { locale } = await params;
-  redirect({ href: ROUTES.DEVICES.ROOT, locale });
+export default function Page() {
+  return <WorkspaceJourneyRedirect />;
 }

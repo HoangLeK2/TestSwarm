@@ -231,3 +231,32 @@ def test_login_switches_app_language_to_vietnamese_before_logging_in(
         "a fresh install comes up in English (US); without the language switch "
         "the post-login popup labels and 'Trang cá nhân' never match"
     )
+
+
+def test_login_detect_logged_in_markers_are_facebook_specific() -> None:
+    """A bare Home label can appear outside Facebook's authenticated feed."""
+    template = next(
+        (t for t in BUILTIN_TEMPLATES if t.get("name") == _LOGIN_TEMPLATE), None
+    )
+    assert template is not None, f"builtin template {_LOGIN_TEMPLATE!r} is gone"
+
+    login_step = next(
+        (
+            step
+            for step in _walk(template.get("steps") or [])
+            if step.get("type") == "login_if_needed"
+        ),
+        None,
+    )
+    assert login_step is not None, "login template no longer logs in"
+
+    any_text = (
+        login_step.get("profile", {})
+        .get("login_recipe", {})
+        .get("detect_logged_in", {})
+        .get("any_text", [])
+    )
+    assert "Home" not in any_text
+    assert {"Trang chủ", "Tìm kiếm", "Bạn đang nghĩ gì?", "What's on your mind"}.issubset(
+        set(any_text)
+    )

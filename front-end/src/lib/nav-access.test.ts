@@ -450,12 +450,13 @@ test('canUseAdminConsole covers workspace admins, not plain members', () => {
   );
 });
 
-test('login lands an admin on the console instead of the workspace', () => {
+test('login sends workspace users to the setup path and platform admins to the console', () => {
   const hook = readFileSync(
     new URL('../features/auth/hooks/use-login.ts', import.meta.url),
     'utf8'
   );
-  assert.match(hook, /canUseAdminConsole\(/);
+  assert.match(hook, /userRole === 'superadmin'/);
   assert.match(hook, /\?\s*ROUTES\.ADMIN\.ROOT/);
+  assert.match(hook, /:\s*ROUTES\.DASHBOARD\.ROOT/);
   assert.match(hook, /router\.push\(returnTo \|\| home\)/);
 });

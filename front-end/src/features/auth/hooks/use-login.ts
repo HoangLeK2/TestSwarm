@@ -5,11 +5,7 @@ import { tokenStorage } from '@/lib/token-storage';
 import { armAuthRefreshTimer } from '@/lib/farm-api';
 import { authApi } from '../services/api';
 import { ROUTES } from '@/config/routes';
-import {
-  canUseAdminConsole,
-  normalizeNavOrgRole,
-  normalizeNavUserRole
-} from '@/lib/nav-access';
+import { normalizeNavUserRole } from '@/lib/nav-access';
 import { consumeAuthReturnTo } from '@/features/content/lib/permalink';
 import { acceptPendingOrgInviteAfterAuth } from '@/features/organization/lib/accept-invite-after-auth';
 import { useAuthContext } from '../providers/auth-provider';
@@ -57,14 +53,11 @@ export function useLogin() {
         router.push(`${ROUTES.AUTH.CHANGE_PASSWORD}${suffix}`);
         return;
       }
-      // An admin's home is the console, not a workspace they happen to belong
-      // to — same rule the sidebar uses to show the console at all.
-      const home = canUseAdminConsole({
-        userRole: normalizeNavUserRole(user.role),
-        orgRole: normalizeNavOrgRole(user.orgRole)
-      })
-        ? ROUTES.ADMIN.ROOT
-        : ROUTES.DEVICES.ROOT;
+      // Workspace users start from the goal-based setup path. Platform
+      // superadmins retain the cross-workspace admin console as their home.
+      const userRole = normalizeNavUserRole(user.role);
+      const home =
+        userRole === 'superadmin' ? ROUTES.ADMIN.ROOT : ROUTES.DASHBOARD.ROOT;
       router.push(returnTo || home);
     }
   });

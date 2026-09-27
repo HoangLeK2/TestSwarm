@@ -751,6 +751,8 @@ class TestScheduleActivities:
             )
 
         assert result["devices_dispatched"] == 1
+        assert result["devices_succeeded"] == 1
+        assert result["devices_failed"] == 0
         assert dispatch.await_args.kwargs["device_ids"] == ["device-from-schedule"]
         assert dispatch.await_args.kwargs["device_group_ids"] is None
         campaign_devices.assert_not_awaited()
@@ -844,6 +846,8 @@ class TestScheduleActivities:
         dispatch_result = ScheduleDispatchResult(
             run_id="run-001",
             devices_dispatched=3,
+            devices_succeeded=2,
+            devices_failed=1,
             task_ids=["t1", "t2", "t3"],
         )
 
@@ -859,6 +863,13 @@ class TestScheduleActivities:
             )
 
         mock_finalize.assert_awaited_once()
+        assert mock_finalize.await_args.kwargs["dispatch_result"] == {
+            "devices_dispatched": 3,
+            "devices_succeeded": 2,
+            "devices_failed": 1,
+            "task_ids": ["t1", "t2", "t3"],
+            "workflow_ids": [],
+        }
         assert mock_finalize.await_args.kwargs["scheduled_for"] == datetime(
             2026, 9, 22, 3, 0, tzinfo=timezone.utc
         )
@@ -1023,6 +1034,8 @@ class TestSchedulerCampaignDispatch:
             )
 
         assert result["devices_dispatched"] == 1
+        assert result["devices_succeeded"] == 1
+        assert result["devices_failed"] == 0
         assert dispatch.await_args.kwargs["device_ids"] == ["device-from-schedule"]
         assert dispatch.await_args.kwargs["device_group_ids"] is None
         campaign_devices.assert_not_awaited()
@@ -1552,6 +1565,8 @@ class TestScheduleRunWorkflow:
             return ScheduleDispatchResult(
                 run_id=run_id,
                 devices_dispatched=2,
+                devices_succeeded=2,
+                devices_failed=0,
                 task_ids=["t1", "t2"],
             )
 
@@ -1590,6 +1605,8 @@ class TestScheduleRunWorkflow:
         assert result.status == "completed"
         assert result.run_id == "run-test-001"
         assert result.devices_dispatched == 2
+        assert result.devices_succeeded == 2
+        assert result.devices_failed == 0
         assert result.error is None
 
     @pytest.mark.asyncio

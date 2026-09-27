@@ -23,22 +23,22 @@ const DAILY_OPERATIONS_GROUP: NavGroupDef = {
   titleKey: 'nav_group_daily_operations',
   items: [
     {
-      titleKey: 'device_farm',
-      url: ROUTES.DEVICES.ROOT,
-      icon: 'laptop',
-      permission: { object: 'devices', action: 'read' }
+      titleKey: 'campaigns',
+      url: ROUTES.CAMPAIGNS.ROOT,
+      icon: 'play',
+      permission: { object: 'campaigns', action: 'read' }
+    },
+    {
+      titleKey: 'schedules',
+      url: ROUTES.SCHEDULES.ROOT,
+      icon: 'calendarTime',
+      permission: { object: 'schedules', action: 'read' }
     },
     {
       titleKey: 'device_control_record',
       url: ROUTES.DEVICES.CONTROL_RECORD,
       icon: 'laptop',
       permission: { object: 'devices', action: 'execute' }
-    },
-    {
-      titleKey: 'campaigns',
-      url: ROUTES.CAMPAIGNS.ROOT,
-      icon: 'play',
-      permission: { object: 'campaigns', action: 'read' }
     },
     {
       titleKey: 'content',
@@ -53,16 +53,22 @@ const PREPARATION_GROUP: NavGroupDef = {
   titleKey: 'nav_group_preparation',
   items: [
     {
-      titleKey: 'org_scenarios',
-      url: ROUTES.ORG_SCENARIOS.ROOT,
-      icon: 'flow',
-      permission: { object: 'scenarios', action: 'read' }
+      titleKey: 'device_farm',
+      url: ROUTES.DEVICES.ROOT,
+      icon: 'laptop',
+      permission: { object: 'devices', action: 'read' }
     },
     {
       titleKey: 'accounts',
       url: ROUTES.ACCOUNTS.ROOT,
       icon: 'user',
       permission: { object: 'accounts', action: 'read' }
+    },
+    {
+      titleKey: 'org_scenarios',
+      url: ROUTES.ORG_SCENARIOS.ROOT,
+      icon: 'flow',
+      permission: { object: 'scenarios', action: 'read' }
     },
     {
       titleKey: 'device_groups',
@@ -179,12 +185,6 @@ const WORKSPACE_MONITORING_GROUP: NavGroupDef = {
       permission: { object: 'devices', action: 'manage' }
     },
     {
-      titleKey: 'schedules',
-      url: ROUTES.SCHEDULES.ROOT,
-      icon: 'calendarTime',
-      permission: { object: 'schedules', action: 'read' }
-    },
-    {
       titleKey: 'notifications',
       url: ROUTES.NOTIFICATIONS.ROOT,
       icon: 'bell',
@@ -249,8 +249,8 @@ const INFRASTRUCTURE_GROUP: NavGroupDef = {
 };
 
 export const DASHBOARD_MAIN_NAV_GROUPS = [
-  DAILY_OPERATIONS_GROUP,
   PREPARATION_GROUP,
+  DAILY_OPERATIONS_GROUP,
   WORKSPACE_MONITORING_GROUP
 ] as const;
 

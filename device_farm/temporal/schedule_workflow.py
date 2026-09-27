@@ -62,6 +62,8 @@ def _normalize_dispatch_result(raw: ScheduleDispatchResult | dict) -> ScheduleDi
         return ScheduleDispatchResult(
             run_id=str(raw.get("run_id", "")),
             devices_dispatched=int(raw.get("devices_dispatched", 0) or 0),
+            devices_succeeded=int(raw.get("devices_succeeded", 0) or 0),
+            devices_failed=int(raw.get("devices_failed", 0) or 0),
             task_ids=list(raw.get("task_ids", []) or []),
             workflow_ids=list(raw.get("workflow_ids", []) or []),
             error=raw.get("error"),
@@ -143,5 +145,7 @@ class ScheduleRunWorkflow:
             run_id=run_id,
             status=status,
             devices_dispatched=dispatch_result.devices_dispatched,
+            devices_succeeded=dispatch_result.devices_succeeded,
+            devices_failed=dispatch_result.devices_failed,
             error=dispatch_result.error,
         )

@@ -1216,6 +1216,8 @@ async def _dispatch_campaign(
 
     return {
         "devices_dispatched": started_count,
+        "devices_succeeded": started_count,
+        "devices_failed": 0,
         "workflow_ids": workflow_ids,
         "execution_id": execution_ids[0] if execution_ids else None,
     }
@@ -1439,5 +1441,7 @@ async def _dispatch_fleet(
 
     return {
         "devices_dispatched": len(devices),
+        "devices_succeeded": len(task_ids),
+        "devices_failed": max(0, len(devices) - len(task_ids)),
         "task_ids": task_ids,
     }

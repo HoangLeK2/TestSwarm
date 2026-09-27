@@ -28,6 +28,47 @@ type FormData = {
   notes?: string;
 };
 
+function editableAccountValues(account: AccountOut): FormData {
+  return {
+    password: '',
+    display_name: account.display_name || account.observed_display_name || '',
+    tags: account.tags || '',
+    notes: account.notes || ''
+  };
+}
+
+function accountStateLabel(account: AccountOut, t: (key: string) => string) {
+  const normalized = (account.state || account.status || '').toLowerCase();
+  if (normalized === 'unassigned') return t('stateUnassigned');
+  if (normalized === 'assigned') return t('stateAssigned');
+  if (normalized === 'active') return t('stateActive');
+  if (normalized === 'suspended') return t('stateSuspended');
+  if (normalized === 'banned') return t('stateBanned');
+  if (normalized === 'retired') return t('stateRetired');
+  return account.state || account.status || '-';
+}
+
+function hasChanged(
+  key: keyof Pick<FormData, 'display_name' | 'tags' | 'notes'>,
+  account: AccountOut,
+  value: string | undefined
+) {
+  const next = value ?? '';
+  if (key === 'display_name' && !account.display_name) {
+    return next !== (account.observed_display_name || '');
+  }
+  return next !== (account[key] || '');
+}
+
+function SummaryItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className='min-w-0'>
+      <dt className='text-xs text-muted-foreground'>{label}</dt>
+      <dd className='truncate text-sm font-medium text-foreground'>{value}</dd>
+    </div>
+  );
+}
+
 export function EditAccountDialog({
   account,
   trigger
@@ -44,6 +85,7 @@ export function EditAccountDialog({
   });
   const [open, setOpen] = useState(false);
   const { mutate, isPending, error } = useUpdateAccount();
+  const initialValues = editableAccountValues(account);
   const {
     register,
     handleSubmit,
@@ -51,31 +93,27 @@ export function EditAccountDialog({
     formState: { errors }
   } = useForm<FormData>({
     resolver: zodResolver(schema),
-    defaultValues: {
-      display_name: account.display_name,
-      tags: account.tags,
-      notes: account.notes
-    }
+    defaultValues: initialValues
   });
 
   useEffect(() => {
     if (open) {
-      reset({
-        password: '',
-        display_name: account.display_name,
-        tags: account.tags,
-        notes: account.notes
-      });
+      reset(editableAccountValues(account));
     }
   }, [open, account, reset]);
 
   const onSubmit = (data: FormData) => {
     const payload: Record<string, any> = {};
     if (data.password) payload.password = data.password;
-    if (data.display_name !== undefined)
+    if (hasChanged('display_name', account, data.display_name)) {
       payload.display_name = data.display_name;
-    if (data.tags !== undefined) payload.tags = data.tags;
-    if (data.notes !== undefined) payload.notes = data.notes;
+    }
+    if (hasChanged('tags', account, data.tags)) payload.tags = data.tags;
+    if (hasChanged('notes', account, data.notes)) payload.notes = data.notes;
+    if (Object.keys(payload).length === 0) {
+      setOpen(false);
+      return;
+    }
     mutate(
       { accountId: account.id, data: payload },
       { onSuccess: () => setOpen(false) }
@@ -91,13 +129,27 @@ export function EditAccountDialog({
           </Button>
         )}
       </DialogTrigger>
-      <DialogContent className='z-[1000] max-w-md'>
+      <DialogContent className='z-[1000] max-w-lg'>
         <DialogHeader>
           <DialogTitle>
             {t('title')} — {account.username}
           </DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit(onSubmit)} className='space-y-4 pt-2'>
+          <dl className='grid gap-3 rounded-lg border bg-muted/30 p-3 sm:grid-cols-2'>
+            <SummaryItem label={t('usernameLabel')} value={account.username} />
+            <SummaryItem label={t('platformLabel')} value={account.platform} />
+            <SummaryItem
+              label={t('stateLabel')}
+              value={accountStateLabel(account, t)}
+            />
+            {account.observed_display_name ? (
+              <SummaryItem
+                label={t('observedDisplayNameLabel')}
+                value={account.observed_display_name}
+              />
+            ) : null}
+          </dl>
           <div className='grid grid-cols-2 gap-4'>
             <div className='space-y-1'>
               <Label>{t('passwordLabel')}</Label>
@@ -109,16 +161,26 @@ export function EditAccountDialog({
             </div>
             <div className='space-y-1'>
               <Label>{t('displayNameLabel')}</Label>
-              <Input {...register('display_name')} />
+              <Input
+                placeholder={t('displayNamePlaceholder')}
+                {...register('display_name')}
+              />
+              {!account.display_name && account.observed_display_name ? (
+                <p className='text-xs text-muted-foreground'>
+                  {t('observedDisplayNameHint', {
+                    name: account.observed_display_name
+                  })}
+                </p>
+              ) : null}
             </div>
           </div>
           <div className='space-y-1'>
             <Label>{t('tagsLabel')}</Label>
-            <Input {...register('tags')} />
+            <Input placeholder={t('tagsPlaceholder')} {...register('tags')} />
           </div>
           <div className='space-y-1'>
             <Label>{t('notesLabel')}</Label>
-            <Textarea {...register('notes')} />
+            <Textarea placeholder={t('notesPlaceholder')} {...register('notes')} />
           </div>
           {error && (
             <p className='text-xs text-destructive'>

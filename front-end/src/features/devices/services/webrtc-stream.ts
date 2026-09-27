@@ -374,6 +374,20 @@ export async function startWebRtcStream({
   video.addEventListener('playing', requestFirstVideoFrame);
   video.addEventListener('resize', markFrame);
 
+  // Joining a live RTSP feed lands mid-GOP. The adapter's attach IDR burst
+  // fires when the session is created — before this connection exists — so it
+  // never reaches us, and nothing decodes until the phone's next IDR, which a
+  // busy screen may not send for a long time. Production showed it: 48 of 51
+  // dashboard sessions never asked for a keyframe and were torn down within
+  // seconds with bytes flowing. Ask once, the moment media can flow.
+  const requestJoinKeyframe = () => {
+    if (pc.connectionState !== 'connected') return;
+    pc.removeEventListener('connectionstatechange', requestJoinKeyframe);
+    if (firstFrameSeen) return;
+    requestWebRtcKeyframe(session.id).catch(() => {});
+  };
+  pc.addEventListener('connectionstatechange', requestJoinKeyframe);
+
   pc.ontrack = (event) => {
     const stream = event.streams[0] ?? new MediaStream([event.track]);
     if (video.srcObject !== stream) {

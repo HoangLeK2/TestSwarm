@@ -224,6 +224,8 @@ class ScheduleActivities:
             return ScheduleDispatchResult(
                 run_id=run_id,
                 devices_dispatched=result.get("devices_dispatched", 0),
+                devices_succeeded=result.get("devices_succeeded", 0),
+                devices_failed=result.get("devices_failed", 0),
                 task_ids=result.get("task_ids", []),
                 workflow_ids=result.get("workflow_ids", []),
             )
@@ -348,6 +350,8 @@ class ScheduleActivities:
 
         return {
             "devices_dispatched": started_count,
+            "devices_succeeded": started_count,
+            "devices_failed": 0,
             "workflow_ids": workflow_ids,
             "execution_id": execution_ids[0] if execution_ids else None,
         }
@@ -477,6 +481,8 @@ class ScheduleActivities:
 
         return {
             "devices_dispatched": len(devices),
+            "devices_succeeded": len(task_ids),
+            "devices_failed": max(0, len(devices) - len(task_ids)),
             "task_ids": task_ids,
         }
 
@@ -507,6 +513,8 @@ class ScheduleActivities:
             normalized = ScheduleDispatchResult(
                 run_id=str(dispatch_result.get("run_id", run_id)),
                 devices_dispatched=int(dispatch_result.get("devices_dispatched", 0) or 0),
+                devices_succeeded=int(dispatch_result.get("devices_succeeded", 0) or 0),
+                devices_failed=int(dispatch_result.get("devices_failed", 0) or 0),
                 task_ids=list(dispatch_result.get("task_ids", []) or []),
                 workflow_ids=list(dispatch_result.get("workflow_ids", []) or []),
                 error=dispatch_result.get("error"),
@@ -524,6 +532,8 @@ class ScheduleActivities:
                 finished_at=finished_at,
                 dispatch_result={
                     "devices_dispatched": normalized.devices_dispatched,
+                    "devices_succeeded": normalized.devices_succeeded,
+                    "devices_failed": normalized.devices_failed,
                     "task_ids": normalized.task_ids,
                     "workflow_ids": normalized.workflow_ids,
                 },

@@ -293,13 +293,21 @@ export function ScheduleDetailPanel({
                 <Badge variant='secondary' className='shrink-0 text-[11px]'>
                   {runStatusLabel(run.status, t)}
                 </Badge>
-                <span className='truncate text-xs text-muted-foreground'>
-                  {run.started_at
-                    ? formatDistanceToNow(new Date(run.started_at), {
-                        addSuffix: true,
-                        locale: dateLocale
-                      })
-                    : '-'}
+                <span className='min-w-0 text-right text-xs text-muted-foreground'>
+                  <span className='block truncate'>
+                    {t('runDeviceSummary', {
+                      succeeded: run.devices_succeeded,
+                      total: run.devices_dispatched
+                    })}
+                  </span>
+                  <span className='block truncate'>
+                    {run.started_at
+                      ? formatDistanceToNow(new Date(run.started_at), {
+                          addSuffix: true,
+                          locale: dateLocale
+                        })
+                      : '-'}
+                  </span>
                 </span>
               </div>
             ))}

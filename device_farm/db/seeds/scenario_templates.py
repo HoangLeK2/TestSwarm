@@ -1075,7 +1075,7 @@ def _fb_crawl_current_target_feed_steps(
 
 
 _FB_DETECT_LOGGED_IN: Dict[str, Any] = {
-    "any_text": ["Trang chủ", "Home", "Tìm kiếm", "Bạn đang nghĩ gì?"],
+    "any_text": ["Trang chủ", "Tìm kiếm", "Bạn đang nghĩ gì?", "What's on your mind"],
 }
 
 _FB_LOGIN_PROFILE_NATIVE: Dict[str, Any] = {

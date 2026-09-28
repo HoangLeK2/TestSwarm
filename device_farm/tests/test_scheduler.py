@@ -144,6 +144,15 @@ class TestComputeNextRun:
         # Should be 8am VN time = 1am UTC next day
         assert result.hour == 1
 
+    def test_selected_weekdays_skip_unselected_days(self):
+        from services.scheduler import compute_next_run
+
+        # Monday's run has passed; Tuesday is not selected, so Wednesday is next.
+        base = datetime(2026, 3, 30, 8, 15, 0, tzinfo=timezone.utc)
+        result = compute_next_run("15 8 * * 1,3,6,0", "UTC", base)
+
+        assert result == datetime(2026, 4, 1, 8, 15, 0, tzinfo=timezone.utc)
+
     def test_invalid_cron_returns_none(self):
         from services.scheduler import compute_next_run
 
@@ -1372,6 +1381,18 @@ class TestScheduleCreateSchema:
         )
         assert data.name == "Test"
         assert data.random_delay_min == 0
+
+    def test_selected_weekdays_schedule(self):
+        from api.schemas.schedule import ScheduleCreate
+
+        data = ScheduleCreate(
+            name="Weekday schedule",
+            target_type="campaign",
+            target_id="camp-001",
+            cron_expression="15 8 * * 1,3,6,0",
+        )
+
+        assert data.cron_expression == "15 8 * * 1,3,6,0"
 
     def test_invalid_cron_raises(self):
         from api.schemas.schedule import ScheduleCreate

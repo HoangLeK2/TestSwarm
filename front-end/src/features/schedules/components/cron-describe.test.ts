@@ -43,3 +43,14 @@ test('every N minutes shows it restarts at minute 00 each hour', () => {
     'Every 45 minutes, restarting at minute 00 each hour (minutes 00, 45, …)'
   );
 });
+
+test('selected weekdays are described in calendar order', () => {
+  assert.equal(
+    describe('15 8 * * 1,3,6,0'),
+    'Every Mon, Wed, Sat, Sun at 08:15'
+  );
+  assert.equal(
+    describe('0 9 * * 1-5'),
+    'Every Mon, Tue, Wed, Thu, Fri at 09:00'
+  );
+});

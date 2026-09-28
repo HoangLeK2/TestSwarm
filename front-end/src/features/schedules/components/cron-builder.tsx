@@ -1,10 +1,18 @@
 'use client';
 
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
 import { useTranslations } from 'next-intl';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 import {
   Select,
   SelectContent,
@@ -13,11 +21,18 @@ import {
   SelectValue
 } from '@/components/ui/select';
 import { cronExpressionToHumanReadable } from './cron-describe';
+import {
+  CRON_WEEKDAYS,
+  formatCronWeekdays,
+  orderCronWeekdays,
+  parseCronWeekdays
+} from './cron-weekdays';
 
 type SimpleCronKind =
   | 'everyMinutes'
   | 'everyHours'
   | 'dailyAt'
+  | 'weeklyAt'
   | 'windowMinutes'
   | 'windowHours';
 
@@ -25,6 +40,12 @@ type ParsedCron =
   | { kind: 'everyMinutes'; intervalMinutes: number }
   | { kind: 'everyHours'; minute: number; intervalHours: number }
   | { kind: 'dailyAt'; hour: number; minute: number }
+  | {
+      kind: 'weeklyAt';
+      hour: number;
+      minute: number;
+      weekdays: number[];
+    }
   | {
       kind: 'windowMinutes';
       intervalMinutes: number;
@@ -47,6 +68,7 @@ type SimpleCronParams = {
   startHour: number;
   endHour: number;
   stepHours: number;
+  weekdays: number[];
 };
 
 export { cronExpressionToHumanReadable } from './cron-describe';
@@ -55,7 +77,27 @@ function parseCronExpression(cronExpression: string): ParsedCron | null {
   const parts = cronExpression.trim().split(/\s+/);
   if (parts.length !== 5) return null;
   const [minField, hourField, domField, monField, dowField] = parts;
-  if (domField !== '*' || monField !== '*' || dowField !== '*') return null;
+  if (domField !== '*' || monField !== '*') return null;
+
+  if (dowField !== '*') {
+    const weekdays = parseCronWeekdays(dowField);
+    const minute = Number(minField);
+    const hour = Number(hourField);
+    if (
+      !weekdays ||
+      !/^\d{1,2}$/.test(minField) ||
+      !/^\d{1,2}$/.test(hourField) ||
+      !Number.isInteger(minute) ||
+      minute < 0 ||
+      minute > 59 ||
+      !Number.isInteger(hour) ||
+      hour < 0 ||
+      hour > 23
+    ) {
+      return null;
+    }
+    return { kind: 'weeklyAt', hour, minute, weekdays };
+  }
 
   const everyMin = minField.match(/^\*\/(\d+)$/);
   if (everyMin && hourField === '*') {
@@ -132,6 +174,8 @@ function buildCronFromSimpleKind(
       return `${params.minute} */${params.intervalHours} * * *`;
     case 'dailyAt':
       return `${params.minute} ${params.hour} * * *`;
+    case 'weeklyAt':
+      return `${params.minute} ${params.hour} * * ${formatCronWeekdays(params.weekdays)}`;
     case 'windowMinutes':
       return `*/${params.intervalMinutes} ${params.startHour}-${params.endHour} * * *`;
     case 'windowHours':
@@ -156,6 +200,13 @@ function applyParsedCron(parsed: ParsedCron): Partial<SimpleCronParams> & {
       };
     case 'dailyAt':
       return { kind: parsed.kind, hour: parsed.hour, minute: parsed.minute };
+    case 'weeklyAt':
+      return {
+        kind: parsed.kind,
+        hour: parsed.hour,
+        minute: parsed.minute,
+        weekdays: parsed.weekdays
+      };
     case 'windowMinutes':
       return {
         kind: parsed.kind,
@@ -181,7 +232,8 @@ const DEFAULT_PARAMS: SimpleCronParams = {
   hour: 8,
   startHour: 8,
   endHour: 22,
-  stepHours: 2
+  stepHours: 2,
+  weekdays: [1, 2, 3, 4, 5]
 };
 
 // Each preset keeps its own values: editing "every N minutes" must not
@@ -193,6 +245,7 @@ const DEFAULT_PARAMS_BY_KIND: ParamsByKind = {
   everyMinutes: DEFAULT_PARAMS,
   everyHours: DEFAULT_PARAMS,
   dailyAt: DEFAULT_PARAMS,
+  weeklyAt: DEFAULT_PARAMS,
   windowMinutes: DEFAULT_PARAMS,
   windowHours: DEFAULT_PARAMS
 };
@@ -232,6 +285,8 @@ export function CronBuilder({
   const [paramsByKind, setParamsByKind] = useState<ParamsByKind>(
     initial.paramsByKind
   );
+  const weeklyHourId = useId();
+  const weeklyMinuteId = useId();
   const params = paramsByKind[kind];
   const lastExternalValueRef = useRef(value);
 
@@ -338,6 +393,7 @@ export function CronBuilder({
                   {t('presetEveryHours')}
                 </SelectItem>
                 <SelectItem value='dailyAt'>{t('presetDailyAt')}</SelectItem>
+                <SelectItem value='weeklyAt'>{t('presetWeeklyAt')}</SelectItem>
                 <SelectItem value='windowMinutes'>
                   {t('presetWindowMinutes')}
                 </SelectItem>
@@ -434,6 +490,78 @@ export function CronBuilder({
                     )
                   }
                 />
+              </div>
+            </div>
+          )}
+
+          {kind === 'weeklyAt' && (
+            <div className='space-y-3'>
+              <div className='space-y-1.5'>
+                <Label>{t('daysOfWeek')}</Label>
+                <div
+                  className='grid grid-cols-4 gap-2 sm:grid-cols-7'
+                  role='group'
+                  aria-label={t('daysOfWeek')}
+                >
+                  {CRON_WEEKDAYS.map((day) => {
+                    const selected = params.weekdays.includes(day.value);
+                    return (
+                      <Button
+                        key={day.value}
+                        type='button'
+                        size='sm'
+                        variant={selected ? 'default' : 'outline'}
+                        className='w-full px-2'
+                        aria-pressed={selected}
+                        onClick={() => {
+                          const next = selected
+                            ? params.weekdays.filter(
+                                (weekday) => weekday !== day.value
+                              )
+                            : [...params.weekdays, day.value];
+                          if (next.length === 0) return;
+                          updateParam('weekdays', orderCronWeekdays(next));
+                        }}
+                      >
+                        {t(day.labelKey)}
+                      </Button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className='grid grid-cols-2 gap-3'>
+                <div className='space-y-1'>
+                  <Label htmlFor={weeklyHourId}>{t('hour0to23')}</Label>
+                  <Input
+                    id={weeklyHourId}
+                    type='number'
+                    min={0}
+                    max={23}
+                    value={params.hour}
+                    onChange={(e) =>
+                      updateParam(
+                        'hour',
+                        Math.max(0, Math.min(23, Number(e.target.value) || 0))
+                      )
+                    }
+                  />
+                </div>
+                <div className='space-y-1'>
+                  <Label htmlFor={weeklyMinuteId}>{t('minute0to59')}</Label>
+                  <Input
+                    id={weeklyMinuteId}
+                    type='number'
+                    min={0}
+                    max={59}
+                    value={params.minute}
+                    onChange={(e) =>
+                      updateParam(
+                        'minute',
+                        Math.max(0, Math.min(59, Number(e.target.value) || 0))
+                      )
+                    }
+                  />
+                </div>
               </div>
             </div>
           )}

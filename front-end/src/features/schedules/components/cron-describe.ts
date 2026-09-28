@@ -1,3 +1,5 @@
+import { CRON_WEEKDAYS, parseCronWeekdays } from './cron-weekdays';
+
 type TFn = (key: string, values?: Record<string, any>) => string;
 
 function pad2(n: number) {
@@ -19,12 +21,41 @@ export function cronExpressionToHumanReadable(
   if (parts.length !== 5) return cronExpression;
 
   const [minField, hourField, domField, monField, dowField] = parts;
-  if (domField !== '*' || monField !== '*' || dowField !== '*') {
-    return cronExpression;
-  }
+  if (domField !== '*' || monField !== '*') return cronExpression;
 
   const tr = (key: string, fallback: string, values?: Record<string, any>) =>
     t ? t(key, values) : fallback;
+
+  if (dowField !== '*') {
+    const weekdays = parseCronWeekdays(dowField);
+    const minute = Number(minField);
+    const hour = Number(hourField);
+    if (
+      !weekdays ||
+      !/^\d{1,2}$/.test(minField) ||
+      !/^\d{1,2}$/.test(hourField) ||
+      !Number.isInteger(minute) ||
+      minute < 0 ||
+      minute > 59 ||
+      !Number.isInteger(hour) ||
+      hour < 0 ||
+      hour > 23
+    ) {
+      return cronExpression;
+    }
+
+    const labels = weekdays
+      .map((weekday) => {
+        const day = CRON_WEEKDAYS.find(({ value }) => value === weekday);
+        return day ? tr(day.labelKey, day.fallback) : String(weekday);
+      })
+      .join(', ');
+    return tr('weeklyAt', `Every ${labels} at ${pad2(hour)}:${pad2(minute)}`, {
+      days: labels,
+      hour: pad2(hour),
+      minute: pad2(minute)
+    });
+  }
 
   const everyMin = minField.match(/^\*\/(\d+)$/);
   if (everyMin && hourField === '*') {

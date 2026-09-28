@@ -39,3 +39,27 @@ test('a run stays inside its own hour row, even at minute 59', () => {
   }
   assert.equal(eventTop(8 * 60, hourHeight, boxHeight), rowTop);
 });
+
+test('a weekday schedule only appears on the selected days', () => {
+  const result = buildOccurrences([
+    {
+      id: 'weekly',
+      name: 'Weekly schedule',
+      cronExpression: '15 8 * * 1,3,6,0'
+    }
+  ]);
+
+  assert.equal(result.unsupportedCount, 0);
+  assert.deepEqual(
+    result.occurrences.map(({ dayIndex, minuteOfDay }) => ({
+      dayIndex,
+      minuteOfDay
+    })),
+    [
+      { dayIndex: 0, minuteOfDay: 8 * 60 + 15 },
+      { dayIndex: 2, minuteOfDay: 8 * 60 + 15 },
+      { dayIndex: 5, minuteOfDay: 8 * 60 + 15 },
+      { dayIndex: 6, minuteOfDay: 8 * 60 + 15 }
+    ]
+  );
+});

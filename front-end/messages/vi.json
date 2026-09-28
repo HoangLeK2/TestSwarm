@@ -5612,6 +5612,7 @@
       "minute0to59": "Phút (0-59)",
       "hour0to23": "Giờ (0-23)",
       "daysOfWeek": "Ngày chạy",
+      "runTime": "Giờ chạy",
       "weekdayMon": "T2",
       "weekdayTue": "T3",
       "weekdayWed": "T4",

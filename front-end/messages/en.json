@@ -6079,6 +6079,7 @@
       "minute0to59": "Minute (0-59)",
       "hour0to23": "Hour (0-23)",
       "daysOfWeek": "Run days",
+      "runTime": "Run time",
       "weekdayMon": "Mon",
       "weekdayTue": "Tue",
       "weekdayWed": "Wed",

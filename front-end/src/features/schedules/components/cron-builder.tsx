@@ -12,7 +12,7 @@ import { useTranslations } from 'next-intl';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import {
   Select,
   SelectContent,
@@ -285,15 +285,14 @@ export function CronBuilder({
   const [paramsByKind, setParamsByKind] = useState<ParamsByKind>(
     initial.paramsByKind
   );
-  const weeklyHourId = useId();
-  const weeklyMinuteId = useId();
+  const weeklyTimeId = useId();
   const params = paramsByKind[kind];
   const lastExternalValueRef = useRef(value);
 
-  const updateParam = useCallback(
-    <K extends keyof SimpleCronParams>(key: K, next: SimpleCronParams[K]) => {
+  const updateParams = useCallback(
+    (patch: Partial<SimpleCronParams>) => {
       setParamsByKind((current) => {
-        const merged = { ...current[kind], [key]: next };
+        const merged = { ...current[kind], ...patch };
         const cron = buildCronFromSimpleKind(kind, merged);
         lastExternalValueRef.current = cron;
         onChange(cron);
@@ -301,6 +300,13 @@ export function CronBuilder({
       });
     },
     [kind, onChange]
+  );
+
+  const updateParam = useCallback(
+    <K extends keyof SimpleCronParams>(key: K, next: SimpleCronParams[K]) => {
+      updateParams({ [key]: next } as Partial<SimpleCronParams>);
+    },
+    [updateParams]
   );
 
   const changeKind = useCallback(
@@ -495,73 +501,51 @@ export function CronBuilder({
           )}
 
           {kind === 'weeklyAt' && (
-            <div className='space-y-3'>
+            <div className='grid gap-3 sm:grid-cols-[minmax(0,1fr)_9rem] sm:items-end'>
               <div className='space-y-1.5'>
                 <Label>{t('daysOfWeek')}</Label>
-                <div
-                  className='grid grid-cols-4 gap-2 sm:grid-cols-7'
-                  role='group'
+                <ToggleGroup
+                  type='multiple'
+                  variant='outline'
+                  value={params.weekdays.map(String)}
+                  onValueChange={(values) => {
+                    if (values.length === 0) return;
+                    updateParam(
+                      'weekdays',
+                      orderCronWeekdays(values.map(Number))
+                    );
+                  }}
+                  className='grid w-full grid-cols-7 overflow-hidden'
                   aria-label={t('daysOfWeek')}
                 >
-                  {CRON_WEEKDAYS.map((day) => {
-                    const selected = params.weekdays.includes(day.value);
-                    return (
-                      <Button
-                        key={day.value}
-                        type='button'
-                        size='sm'
-                        variant={selected ? 'default' : 'outline'}
-                        className='w-full px-2'
-                        aria-pressed={selected}
-                        onClick={() => {
-                          const next = selected
-                            ? params.weekdays.filter(
-                                (weekday) => weekday !== day.value
-                              )
-                            : [...params.weekdays, day.value];
-                          if (next.length === 0) return;
-                          updateParam('weekdays', orderCronWeekdays(next));
-                        }}
-                      >
-                        {t(day.labelKey)}
-                      </Button>
-                    );
-                  })}
-                </div>
+                  {CRON_WEEKDAYS.map((day) => (
+                    <ToggleGroupItem
+                      key={day.value}
+                      value={String(day.value)}
+                      className='px-0 text-xs data-[state=on]:bg-primary/10 data-[state=on]:font-semibold data-[state=on]:text-primary sm:text-sm'
+                    >
+                      {t(day.labelKey)}
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
               </div>
-              <div className='grid grid-cols-2 gap-3'>
-                <div className='space-y-1'>
-                  <Label htmlFor={weeklyHourId}>{t('hour0to23')}</Label>
-                  <Input
-                    id={weeklyHourId}
-                    type='number'
-                    min={0}
-                    max={23}
-                    value={params.hour}
-                    onChange={(e) =>
-                      updateParam(
-                        'hour',
-                        Math.max(0, Math.min(23, Number(e.target.value) || 0))
-                      )
+              <div className='space-y-1.5'>
+                <Label htmlFor={weeklyTimeId}>{t('runTime')}</Label>
+                <Input
+                  id={weeklyTimeId}
+                  type='time'
+                  step={60}
+                  value={`${String(params.hour).padStart(2, '0')}:${String(params.minute).padStart(2, '0')}`}
+                  onChange={(event) => {
+                    const [hour, minute] = event.target.value
+                      .split(':')
+                      .map(Number);
+                    if (!Number.isInteger(hour) || !Number.isInteger(minute)) {
+                      return;
                     }
-                  />
-                </div>
-                <div className='space-y-1'>
-                  <Label htmlFor={weeklyMinuteId}>{t('minute0to59')}</Label>
-                  <Input
-                    id={weeklyMinuteId}
-                    type='number'
-                    min={0}
-                    max={59}
-                    value={params.minute}
-                    onChange={(e) =>
-                      updateParam(
-                        'minute',
-                        Math.max(0, Math.min(59, Number(e.target.value) || 0))
-                      )
-                    }
-                  />
-                </div>
+                    updateParams({ hour, minute });
+                  }}
+                />
               </div>
             </div>
           )}

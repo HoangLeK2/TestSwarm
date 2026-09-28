@@ -8,9 +8,18 @@ import {
   // @ts-expect-error Node --experimental-strip-types test files import TS sources by extension.
 } from './constants.ts';
 import {
-  createDefaultStep
+  createDefaultStep,
+  type FlowStep
   // @ts-expect-error Node --experimental-strip-types test files import TS sources by extension.
 } from '../scenario-steps/types.ts';
+import {
+  inheritStepDetailSession,
+  pendingStepForSession,
+  shiftSelectedPathForInsert,
+  shiftSelectedPathForMove,
+  shiftSelectedPathForRemove,
+  stepDetailSessionKey
+} from './step-detail-session.ts';
 
 const require = createRequire(import.meta.url);
 const enMessages = require('../../../../../messages/en.json');
@@ -394,11 +403,103 @@ test('flow editor flushes detail edits to the draft before page save', () => {
 
   assert.match(
     flowSource,
-    /pendingDetailRef\.current = s;[\s\S]*updateAt\(selectedIndex, s\);/
+    /pendingDetailRef\.current = \{ sessionKey, step \};[\s\S]*updateAt\(index, step\);/
   );
   assert.match(
     flowSource,
-    /pendingDetailRef\.current = step;[\s\S]*updatePath\(path, step\);/
+    /pendingDetailRef\.current = \{\s*sessionKey,\s*step\s*\};[\s\S]*updatePath\(path, step\);/
+  );
+});
+
+test('step detail sessions stay bound to the selected node path', () => {
+  const flowSource = readFileSync(
+    new URL('./flow-editor.tsx', import.meta.url),
+    'utf8'
+  );
+
+  assert.equal(
+    flowSource.match(/<StepDetailPanel\s+key=\{selectedSessionKey\}/g)?.length,
+    2
+  );
+  assert.match(
+    flowSource,
+    /handleDetailPanelChange\(selectedPath, selectedSessionKey, step\)/
+  );
+});
+
+test('a pending detail draft cannot flush into another node session', () => {
+  const firstStep: FlowStep = {
+    type: 'if_element',
+    title: 'FIRST_CHAIN',
+    then: [{ type: 'tap_selector', by: 'text', value: 'first child' }],
+    else: []
+  };
+  const pending = { sessionKey: 'path:steps:0', step: firstStep };
+
+  assert.equal(pendingStepForSession(pending, 'path:steps:1'), null);
+  assert.equal(pendingStepForSession(pending, 'path:steps:0'), firstStep);
+});
+
+test('id-less sibling nodes keep distinct detail sessions across edits', () => {
+  const firstStep: FlowStep = { type: 'if_element', then: [], else: [] };
+  const secondStep: FlowStep = { type: 'if_element', then: [], else: [] };
+  const firstSession = stepDetailSessionKey(firstStep);
+  const secondSession = stepDetailSessionKey(secondStep);
+
+  assert.notEqual(firstSession, secondSession);
+  const editedFirst = inheritStepDetailSession(firstStep, {
+    ...firstStep,
+    title: 'FIRST_CHAIN_EDITED'
+  });
+  assert.equal(stepDetailSessionKey(editedFirst), firstSession);
+  assert.notEqual(stepDetailSessionKey(editedFirst), secondSession);
+});
+
+test('selected node paths follow sibling insert, remove, and move operations', () => {
+  const selected = [{ listKey: 'steps', ci: 2 }];
+
+  assert.deepEqual(
+    shiftSelectedPathForInsert(selected, [{ listKey: 'steps', ci: 1 }], 1),
+    [{ listKey: 'steps', ci: 3 }]
+  );
+  assert.deepEqual(
+    shiftSelectedPathForRemove(selected, [{ listKey: 'steps', ci: 1 }]),
+    [{ listKey: 'steps', ci: 1 }]
+  );
+  assert.deepEqual(
+    shiftSelectedPathForMove(selected, [{ listKey: 'steps', ci: 1 }], 1),
+    [{ listKey: 'steps', ci: 1 }]
+  );
+  assert.deepEqual(
+    shiftSelectedPathForMove(selected, [{ listKey: 'steps', ci: 2 }], -1),
+    [{ listKey: 'steps', ci: 1 }]
+  );
+
+  const nestedSelected = [
+    { listKey: 'steps', ci: 2 },
+    { listKey: 'then', ci: 0 }
+  ];
+  assert.deepEqual(
+    shiftSelectedPathForInsert(
+      nestedSelected,
+      [{ listKey: 'steps', ci: 1 }],
+      1
+    ),
+    [
+      { listKey: 'steps', ci: 3 },
+      { listKey: 'then', ci: 0 }
+    ]
+  );
+  assert.deepEqual(
+    shiftSelectedPathForMove(nestedSelected, [{ listKey: 'steps', ci: 1 }], 1),
+    [
+      { listKey: 'steps', ci: 1 },
+      { listKey: 'then', ci: 0 }
+    ]
+  );
+  assert.equal(
+    shiftSelectedPathForRemove(nestedSelected, [{ listKey: 'steps', ci: 2 }]),
+    null
   );
 });
 

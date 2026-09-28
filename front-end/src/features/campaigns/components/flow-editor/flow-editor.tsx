@@ -45,6 +45,15 @@ import {
   StepDetailPanel,
   type SessionGateRuntimeContext
 } from './step-detail-panel';
+import {
+  inheritStepDetailSession,
+  pendingStepForSession,
+  shiftSelectedPathForInsert,
+  shiftSelectedPathForMove,
+  shiftSelectedPathForRemove,
+  stepDetailSessionKey,
+  type PendingStepDetail
+} from './step-detail-session';
 import { useMirrorStepActions } from './use-mirror-step-actions';
 import type { SelectorPickTarget } from './selector-pick';
 import {
@@ -178,28 +187,34 @@ export function FlowEditor({
 }: Props) {
   const tField = useTranslations('campaignsFeature.stepEditor.stepFields');
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
-  const pendingDetailRef = useRef<FlowStep | null>(null);
+  const pendingDetailRef = useRef<PendingStepDetail | null>(null);
   const stepsRef = useRef(steps);
   stepsRef.current = steps;
   const selectedStep = selectedIndex != null ? steps[selectedIndex] : null;
+  const selectedSessionKey = selectedStep
+    ? stepDetailSessionKey(selectedStep)
+    : null;
 
   const updateAt = useCallback(
     (index: number, newStep: FlowStep) => {
       const next = [...stepsRef.current];
-      next[index] = newStep;
+      const previous = next[index];
+      next[index] = previous
+        ? inheritStepDetailSession(previous, newStep)
+        : newStep;
       onChange(next);
     },
     [onChange]
   );
 
   const handleDetailPanelChange = useCallback(
-    (s: FlowStep) => {
-      pendingDetailRef.current = s;
-      if (selectedIndex != null) {
-        updateAt(selectedIndex, s);
-      }
+    (index: number, sessionKey: string, step: FlowStep) => {
+      const current = stepsRef.current[index];
+      if (!current || stepDetailSessionKey(current) !== sessionKey) return;
+      pendingDetailRef.current = { sessionKey, step };
+      updateAt(index, step);
     },
-    [selectedIndex, updateAt]
+    [updateAt]
   );
 
   useEffect(() => {
@@ -208,8 +223,27 @@ export function FlowEditor({
       return;
     }
     const step = stepsRef.current[selectedIndex];
-    if (step) pendingDetailRef.current = step;
+    if (step) {
+      pendingDetailRef.current = {
+        sessionKey: stepDetailSessionKey(step),
+        step
+      };
+    }
   }, [selectedIndex]);
+
+  const flushPendingDetail = useCallback(
+    (index: number, sessionKey: string) => {
+      const current = stepsRef.current[index];
+      if (!current || stepDetailSessionKey(current) !== sessionKey) return;
+      const pending = pendingStepForSession(
+        pendingDetailRef.current,
+        sessionKey
+      );
+      if (pending) updateAt(index, pending);
+      pendingDetailRef.current = null;
+    },
+    [updateAt]
+  );
   const availableVariables = useMemo(
     () =>
       Array.from(
@@ -382,6 +416,9 @@ export function FlowEditor({
       const next = [...stepsRef.current];
       next.splice(index, 0, newStep);
       onChange(next);
+      setSelectedIndex((current) =>
+        current != null && index <= current ? current + 1 : current
+      );
     },
     [onChange]
   );
@@ -392,6 +429,11 @@ export function FlowEditor({
       const next = [...stepsRef.current];
       next.splice(index, 0, ...newSteps);
       onChange(next);
+      setSelectedIndex((current) =>
+        current != null && index <= current
+          ? current + newSteps.length
+          : current
+      );
     },
     [onChange]
   );
@@ -399,7 +441,10 @@ export function FlowEditor({
   const removeAt = useCallback(
     (index: number) => {
       onChange(stepsRef.current.filter((_, i) => i !== index));
-      if (selectedIndex === index) setSelectedIndex(null);
+      setSelectedIndex((current) => {
+        if (current == null || index > current) return current;
+        return index === current ? null : current - 1;
+      });
       if (onSelectorPickTargetChange) {
         if (selectorPickTarget?.rootIndex === index) {
           onSelectorPickTargetChange(null);
@@ -414,7 +459,6 @@ export function FlowEditor({
     },
     [
       onChange,
-      selectedIndex,
       selectorPickTarget,
       onSelectorPickTargetChange,
       coordinatePickTarget,
@@ -423,17 +467,23 @@ export function FlowEditor({
   );
 
   const closeDetailForCrop = useCallback(() => {
-    if (pendingDetailRef.current != null && selectedIndex != null) {
-      updateAt(selectedIndex, pendingDetailRef.current);
+    if (selectedIndex != null && selectedSessionKey) {
+      flushPendingDetail(selectedIndex, selectedSessionKey);
     }
     pendingDetailRef.current = null;
     setSelectedIndex(null);
-  }, [selectedIndex, updateAt]);
+  }, [flushPendingDetail, selectedIndex, selectedSessionKey]);
 
   const mirrorActions = useMirrorStepActions(() => {
     const idx = selectedIndex;
     if (idx == null) return null;
-    const step = pendingDetailRef.current ?? stepsRef.current[idx];
+    const current = stepsRef.current[idx];
+    if (!current) return null;
+    const step =
+      pendingStepForSession(
+        pendingDetailRef.current,
+        stepDetailSessionKey(current)
+      ) ?? current;
     if (!step) return null;
     return { step, apply: (next) => updateAt(idx, next) };
   }, closeDetailForCrop);
@@ -523,8 +573,8 @@ export function FlowEditor({
         open={!compact && selectedIndex != null}
         onOpenChange={(open) => {
           if (!open) {
-            if (pendingDetailRef.current != null && selectedIndex != null) {
-              updateAt(selectedIndex, pendingDetailRef.current);
+            if (selectedIndex != null && selectedSessionKey) {
+              flushPendingDetail(selectedIndex, selectedSessionKey);
             }
             pendingDetailRef.current = null;
             setSelectedIndex(null);
@@ -535,14 +585,15 @@ export function FlowEditor({
           <DialogHeader className='sr-only'>
             <DialogTitle>{tField('editStepTitle')}</DialogTitle>
           </DialogHeader>
-          {selectedStep && selectedIndex != null && (
+          {selectedStep && selectedIndex != null && selectedSessionKey && (
             <StepDetailPanel
+              key={selectedSessionKey}
               step={selectedStep}
-              onChange={handleDetailPanelChange}
+              onChange={(step) =>
+                handleDetailPanelChange(selectedIndex, selectedSessionKey, step)
+              }
               onClose={() => {
-                if (pendingDetailRef.current != null && selectedIndex != null) {
-                  updateAt(selectedIndex, pendingDetailRef.current);
-                }
+                flushPendingDetail(selectedIndex, selectedSessionKey);
                 pendingDetailRef.current = null;
                 setSelectedIndex(null);
               }}
@@ -1076,10 +1127,13 @@ function VirtualizedFlowEditor({
   );
   const selectedPathRef = useRef<BracketChildRef[] | null>(selectedPath);
   selectedPathRef.current = selectedPath;
-  const pendingDetailRef = useRef<FlowStep | null>(null);
+  const pendingDetailRef = useRef<PendingStepDetail | null>(null);
   const rows = useMemo(() => projectVirtualFlowRows(steps), [steps]);
   const selectedStep = selectedPath
     ? resolveStepAtPath(steps, selectedPath)
+    : null;
+  const selectedSessionKey = selectedStep
+    ? stepDetailSessionKey(selectedStep)
     : null;
   const applyScenarioLintRepair = useCallback(
     (issue: StepVariableLineageIssue) => {
@@ -1119,15 +1173,28 @@ function VirtualizedFlowEditor({
 
   const updatePath = useCallback(
     (path: BracketChildRef[], step: FlowStep) => {
-      onChange(updateStepAtPath(stepsRef.current, path, step));
+      const previous = resolveStepAtPath(stepsRef.current, path);
+      onChange(
+        updateStepAtPath(
+          stepsRef.current,
+          path,
+          previous ? inheritStepDetailSession(previous, step) : step
+        )
+      );
     },
     [onChange]
   );
 
   const flushPendingDetail = useCallback(
     (path = selectedPathRef.current) => {
-      if (pendingDetailRef.current && path) {
-        updatePath(path, pendingDetailRef.current);
+      if (path) {
+        const current = resolveStepAtPath(stepsRef.current, path);
+        const sessionKey = current ? stepDetailSessionKey(current) : '';
+        const step = pendingStepForSession(
+          pendingDetailRef.current,
+          sessionKey
+        );
+        if (step) updatePath(path, step);
       }
       pendingDetailRef.current = null;
     },
@@ -1153,12 +1220,14 @@ function VirtualizedFlowEditor({
   );
 
   const handleDetailPanelChange = useCallback(
-    (step: FlowStep) => {
-      const path = selectedPathRef.current;
-      pendingDetailRef.current = step;
-      if (path) {
-        updatePath(path, step);
-      }
+    (path: BracketChildRef[], sessionKey: string, step: FlowStep) => {
+      const current = resolveStepAtPath(stepsRef.current, path);
+      if (!current || stepDetailSessionKey(current) !== sessionKey) return;
+      pendingDetailRef.current = {
+        sessionKey,
+        step
+      };
+      updatePath(path, step);
     },
     [updatePath]
   );
@@ -1166,42 +1235,47 @@ function VirtualizedFlowEditor({
   const mirrorActions = useMirrorStepActions(() => {
     const path = selectedPath;
     if (!path) return null;
-    const step = pendingDetailRef.current ?? resolveStepAtPath(steps, path);
-    if (!step) return null;
+    const current = resolveStepAtPath(steps, path);
+    if (!current) return null;
+    const step =
+      pendingStepForSession(
+        pendingDetailRef.current,
+        stepDetailSessionKey(current)
+      ) ?? current;
     return { step, apply: (next) => updatePath(path, next) };
   }, closeDetail);
 
   const removePath = useCallback(
     (path: BracketChildRef[]) => {
       onChange(removeStepAtPath(stepsRef.current, path));
-      setSelectedPath((current) =>
-        current && pathKey(current) === pathKey(path) ? null : current
-      );
+      setSelectedPath((current) => shiftSelectedPathForRemove(current, path));
     },
     [onChange]
   );
   const movePath = useCallback(
     (path: BracketChildRef[], delta: -1 | 1) => {
       onChange(moveStepAtPath(stepsRef.current, path, delta));
-      setSelectedPath((current) => {
-        if (!current || pathKey(current) !== pathKey(path)) return current;
-        const next = [...current];
-        const last = next[next.length - 1];
-        if (last) next[next.length - 1] = { ...last, ci: last.ci + delta };
-        return next;
-      });
+      setSelectedPath((current) =>
+        shiftSelectedPathForMove(current, path, delta)
+      );
     },
     [onChange]
   );
   const insertBeforePath = useCallback(
     (path: BracketChildRef[], step: FlowStep) => {
       onChange(insertStepAtPath(stepsRef.current, path, step));
+      setSelectedPath((current) =>
+        shiftSelectedPathForInsert(current, path, 1)
+      );
     },
     [onChange]
   );
   const insertManyBeforePath = useCallback(
     (path: BracketChildRef[], newSteps: FlowStep[]) => {
       onChange(insertStepsAtPath(stepsRef.current, path, newSteps));
+      setSelectedPath((current) =>
+        shiftSelectedPathForInsert(current, path, newSteps.length)
+      );
     },
     [onChange]
   );
@@ -1212,16 +1286,19 @@ function VirtualizedFlowEditor({
       const last = path[path.length - 1];
       if (!last) return;
       const after = [...path.slice(0, -1), { ...last, ci: last.ci + 1 }];
-      onChange(insertStepAtPath(stepsRef.current, after, step));
+      insertBeforePath(after, step);
     },
-    [onChange]
+    [insertBeforePath]
   );
 
   const detailPanel =
-    selectedStep && selectedPath ? (
+    selectedStep && selectedPath && selectedSessionKey ? (
       <StepDetailPanel
+        key={selectedSessionKey}
         step={selectedStep}
-        onChange={handleDetailPanelChange}
+        onChange={(step) =>
+          handleDetailPanelChange(selectedPath, selectedSessionKey, step)
+        }
         onClose={closeDetail}
         availableVariables={availableVariables}
         variablePreviewValues={variablePreviewValues}
@@ -1234,7 +1311,6 @@ function VirtualizedFlowEditor({
           const path = selectedPath;
           if (!path) return;
           insertBeforePath(path, newStep);
-          selectDetailPath(shiftPathTail(path, 1));
         }}
         onSelectVariableLineagePathKey={(targetPathKey) => {
           const path = variableLineageByPathKey.get(targetPathKey)?.path;

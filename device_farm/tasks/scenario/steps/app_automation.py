@@ -376,6 +376,10 @@ def _wait_for_post_submit_action(
     deadline = time.monotonic() + float(action.timeout_s)
     while True:
         xml, snapshot = _current_snapshot(sc)
+        if action.skip_when_text_any and _snapshot_has_any_text(
+            snapshot, action.skip_when_text_any
+        ):
+            return None
         if not action.when_text_any or _snapshot_has_any_text(snapshot, action.when_text_any):
             return xml, snapshot
         if _cancelled(sc) or time.monotonic() >= deadline:
@@ -394,6 +398,7 @@ def _execute_post_submit_actions(
         trace: Dict[str, Any] = {
             "index": index,
             "when_text_any": action.when_text_any,
+            "skip_when_text_any": action.skip_when_text_any,
             "matched": False,
             "executed": False,
         }

@@ -1232,12 +1232,45 @@ _FB_LOGIN_PROFILE_NATIVE: Dict[str, Any] = {
         "post_submit_actions": [
             {
                 "when_text_any": [
+                    "Bạn đã nhập sai mật khẩu. Để đăng nhập, bạn sẽ cần nhập mã.",
+                    "You entered an incorrect password. To log in, you'll need to enter a code.",
+                ],
+                "tap_text_any": ["Thử cách khác", "Try another way"],
+                "skip_when_text_any": [
+                    "Kiểm tra thông báo trên thiết bị khác",
+                    "Đang chờ phê duyệt",
+                    "Check notifications on another device",
+                    "Waiting for approval",
+                ],
+                "timeout_s": 8,
+                "poll_s": 0.5,
+                "wait_after_s": 1,
+            },
+            {
+                "when_text_any": [
+                    "Chọn cách xác nhận tài khoản",
+                    "Choose a way to confirm your account",
+                ],
+                "tap_text_any": ["Mật khẩu", "Password"],
+                "skip_when_text_any": [
+                    "Kiểm tra thông báo trên thiết bị khác",
+                    "Đang chờ phê duyệt",
+                    "Check notifications on another device",
+                    "Waiting for approval",
+                ],
+                "timeout_s": 6,
+                "poll_s": 0.5,
+                "wait_after_s": 0.5,
+            },
+            {
+                "when_text_any": [
                     "Kiểm tra thông báo trên thiết bị khác",
                     "Đang chờ phê duyệt",
                     "Check notifications on another device",
                     "Waiting for approval",
                 ],
                 "tap_text_any": ["Thử cách khác", "Try another way"],
+                "skip_when_text_any": ["Mật khẩu,", "Password,"],
                 "timeout_s": 8,
                 "poll_s": 0.5,
                 "wait_after_s": 1,
@@ -1248,6 +1281,7 @@ _FB_LOGIN_PROFILE_NATIVE: Dict[str, Any] = {
                     "Choose a way to confirm",
                 ],
                 "tap_text_any": ["Ứng dụng xác thực", "Authentication app"],
+                "skip_when_text_any": ["Mật khẩu,", "Password,"],
                 "timeout_s": 6,
                 "poll_s": 0.5,
                 "wait_after_s": 0.5,
@@ -1258,6 +1292,7 @@ _FB_LOGIN_PROFILE_NATIVE: Dict[str, Any] = {
                     "Choose a way to confirm",
                 ],
                 "tap_text_any": ["Tiếp tục", "Continue", "Next"],
+                "skip_when_text_any": ["Mật khẩu,", "Password,"],
                 "timeout_s": 4,
                 "poll_s": 0.5,
                 "wait_after_s": 2,
@@ -1269,8 +1304,15 @@ _FB_LOGIN_PROFILE_NATIVE: Dict[str, Any] = {
                 "value_from": "account.totp_code",
                 "required": False,
             },
+            "password_retry": {
+                "locator": "password_field",
+                "value_from": "account.password",
+                "required": False,
+            },
         },
-        "post_submit": {"tap_text_any": ["Tiếp tục", "Continue", "Next"]},
+        "post_submit": {
+            "tap_text_any": ["Tiếp tục", "Continue", "Next", "Đăng nhập", "Log in"]
+        },
         "manual_challenges": [
             {
                 "name": "visual_code",

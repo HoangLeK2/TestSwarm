@@ -189,6 +189,7 @@ class LoginSubmit(StrictProfileModel):
 
 class LoginPostSubmitAction(LoginSubmit):
     when_text_any: list[str] = Field(default_factory=list)
+    skip_when_text_any: list[str] = Field(default_factory=list)
     timeout_s: float = Field(default=0.0, ge=0.0, le=30.0)
     poll_s: float = Field(default=0.5, gt=0, le=5.0)
     wait_after_s: float = Field(default=0.5, ge=0.0, le=10.0)

@@ -230,6 +230,25 @@ def _looks_like_hierarchy_xml(body: str) -> bool:
     )
 
 
+def _extract_hierarchy_xml(body: str) -> str:
+    """Return hierarchy XML from raw XML or an atx JSON-RPC response body."""
+    raw = (body or "").strip()
+    if raw.startswith("{"):
+        try:
+            payload = loads(raw)
+        except Exception:
+            return ""
+        if not isinstance(payload, dict):
+            return ""
+        result = payload.get("result")
+        if isinstance(result, str) and _looks_like_hierarchy_xml(result):
+            return result.strip()
+        return ""
+    if _looks_like_hierarchy_xml(raw):
+        return raw
+    return ""
+
+
 def _dump_hierarchy_path_from_options(
     *,
     compressed: bool = False,
@@ -3015,11 +3034,18 @@ class RelayAgent:
             timeout=timeout,
         )
         ok = 200 <= status < 400
+        response_body = resp_body.decode("utf-8", errors="replace")
+        response_content_type = resp_headers.get("Content-Type", "")
+        if ok and method.upper() == "GET" and path.startswith("/dump/hierarchy"):
+            hierarchy_xml = _extract_hierarchy_xml(response_body)
+            if hierarchy_xml:
+                response_body = hierarchy_xml
+                response_content_type = "application/xml"
         return {
             "ok": ok,
             "status": status,
-            "body": resp_body.decode("utf-8", errors="replace"),
-            "content_type": resp_headers.get("Content-Type", ""),
+            "body": response_body,
+            "content_type": response_content_type,
         }
 
     def _do_u2_http(

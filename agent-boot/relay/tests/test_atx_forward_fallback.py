@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 
 from relay import agent as agent_mod
@@ -29,6 +30,30 @@ class _FakePool:
 
     def drop_host(self, host: str, port: int) -> None:
         self.dropped.append((host, port))
+
+
+class _HierarchyJsonPool:
+    def request(
+        self,
+        host: str,
+        port: int,
+        method: str,
+        path: str,
+        body: bytes | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float = 10.0,
+    ) -> tuple[int, dict[str, str], bytes]:
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": '<hierarchy rotation="0"><node text="Home" /></hierarchy>',
+        }
+        encoded = json.dumps(payload).replace("<", "\\u003c").replace(">", "\\u003e")
+        return (
+            200,
+            {"Content-Type": "application/json; charset=UTF-8"},
+            encoded.encode("utf-8"),
+        )
 
 
 def _agent(*, lan_probe_interval_s: float = 0.0) -> RelayAgent:
@@ -123,6 +148,28 @@ def test_u2_http_uses_adb_forward_first_for_remote_adb_usb_serial(monkeypatch):
     }
     assert pool.calls == [("host.docker.internal", 43210, "GET", "/ping", None, 2.0)]
     assert forwards == [(("forward", "tcp:0", "tcp:7912"), "usb-serial", 10)]
+
+
+def test_u2_http_request_unwraps_json_rpc_hierarchy(monkeypatch):
+    agent = _agent()
+    monkeypatch.setattr("relay.http_pool.default_pool", lambda: _HierarchyJsonPool())
+
+    result = agent._u2_http_request(
+        "host.docker.internal",
+        43210,
+        "GET",
+        "/dump/hierarchy?compressed=1",
+        "",
+        "application/json",
+        3.0,
+    )
+
+    assert result == {
+        "ok": True,
+        "status": 200,
+        "body": '<hierarchy rotation="0"><node text="Home" /></hierarchy>',
+        "content_type": "application/xml",
+    }
 
 
 def test_u2_http_forward_first_preserves_body_headers_and_timeout(monkeypatch):

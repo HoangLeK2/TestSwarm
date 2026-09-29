@@ -1489,6 +1489,12 @@ def _fb_session_guard_steps(
             "steps": [{"type": "dismiss_popup", "retries": 3}],
         },
     ]
+    # The same cleanup runs in both outcomes of the session guard. Durable
+    # execution state is keyed by step id, so the recovery branch needs its
+    # own ids instead of reusing the ids from the already-signed-in branch.
+    post_login_confirm_cleanup = deepcopy(post_confirm_cleanup)
+    for cleanup_step in post_login_confirm_cleanup:
+        cleanup_step["id"] = f"{cleanup_step['id']}_after_login"
     preflight_cleanup = [
         {
             "id": f"{prefix}_preflight_popups",
@@ -1663,6 +1669,30 @@ def _fb_session_guard_steps(
                     ],
                     "else": [],
                 },
+                # Some English builds skip the profile wording and expose a
+                # short "Log in" entry button on the onboarding screen. It is
+                # a Bloks content-desc; the form fields do not exist until it
+                # is tapped.
+                {
+                    "type": "if_element",
+                    "by": "content-desc",
+                    "value": "Log in",
+                    "timeout": 0.5,
+                    "then": [
+                        {
+                            "type": "tap_selector",
+                            "by": "content-desc",
+                            "value": "Log in",
+                            "timeout": 3,
+                        },
+                        {
+                            "type": "wait_stable",
+                            "timeout": 3,
+                            "stable_duration": 0.3,
+                        },
+                    ],
+                    "else": [],
+                },
                 # Tapping the entry button is what makes Facebook enumerate
                 # installed apps, and vivo answers that with a system dialog
                 # ("Facebook" wants to read the list of installed apps) sitting
@@ -1671,6 +1701,11 @@ def _fb_session_guard_steps(
                 # template used to clear popups. It carries a countdown, so
                 # wait_stable never settles and login_if_needed would hunt for
                 # the username field underneath it.
+                {
+                    "id": f"{prefix}_system_dialog_delay",
+                    "type": "wait",
+                    "seconds": 0.8,
+                },
                 {
                     "id": f"{prefix}_dismiss_system_dialog",
                     "type": "dismiss_popup",
@@ -1704,7 +1739,7 @@ def _fb_session_guard_steps(
                     "timeout": 20,
                     "poll_interval": 0.5,
                 },
-                *post_confirm_cleanup,
+                *post_login_confirm_cleanup,
             ],
         },
     ]

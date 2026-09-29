@@ -6,6 +6,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { Pencil } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { toast } from 'sonner';
 import { useUpdateAccount } from '../hooks/use-accounts';
 import type { AccountOut } from '../services/api';
 import { Button } from '@/components/ui/button';
@@ -116,7 +117,15 @@ export function EditAccountDialog({
     }
     mutate(
       { accountId: account.id, data: payload },
-      { onSuccess: () => setOpen(false) }
+      {
+        onSuccess: () => {
+          toast.success(t('updateSuccess'));
+          setOpen(false);
+        },
+        onError: (mutationError) => {
+          toast.error(formatFarmApiError(mutationError, t('updateFailed')));
+        }
+      }
     );
   };
 
@@ -180,7 +189,10 @@ export function EditAccountDialog({
           </div>
           <div className='space-y-1'>
             <Label>{t('notesLabel')}</Label>
-            <Textarea placeholder={t('notesPlaceholder')} {...register('notes')} />
+            <Textarea
+              placeholder={t('notesPlaceholder')}
+              {...register('notes')}
+            />
           </div>
           {error && (
             <p className='text-xs text-destructive'>

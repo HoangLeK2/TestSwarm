@@ -151,7 +151,8 @@ export const devicesApi = {
           page_size: pageSize,
           q: q || undefined,
           state: state || undefined,
-          sort
+          sort,
+          connected_only: !state && !q
         },
         timeout: DEVICE_POLL_TIMEOUT_MS
       })

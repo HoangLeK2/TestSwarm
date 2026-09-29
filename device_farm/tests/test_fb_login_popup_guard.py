@@ -91,6 +91,16 @@ def test_login_step_is_followed_by_a_popup_dismissal_before_the_confirm_gate(
     )
 
 
+def test_login_template_step_ids_are_unique(
+    login_steps: list[dict[str, Any]],
+) -> None:
+    ids = [str(step["id"]) for step in login_steps if step.get("id")]
+    assert len(ids) == len(set(ids)), (
+        "duplicate step ids share durable execution state and make the "
+        "production scenario body fail validation"
+    )
+
+
 def test_login_restarts_facebook_after_totp_before_confirming_session(
     login_steps: list[dict[str, Any]],
 ) -> None:
@@ -425,6 +435,38 @@ def test_login_uses_existing_account_path_before_filling_fields(
         and step.get("value") == "I already have a profile"
         for step in before_login
     ), "English Facebook existing-account path must be opened before locating username"
+
+
+def test_login_opens_short_english_login_entry_before_filling_fields(
+    login_steps: list[dict[str, Any]],
+) -> None:
+    """Some Facebook builds label the onboarding entry button only ``Log in``."""
+    types = [step.get("type") for step in login_steps]
+    login_at = types.index("login_if_needed")
+    before_login = login_steps[:login_at]
+
+    assert any(
+        step.get("type") == "tap_selector"
+        and step.get("by") == "content-desc"
+        and step.get("value") == "Log in"
+        for step in before_login
+    ), "English Facebook 'Log in' onboarding entry must be opened before locating username"
+
+
+def test_login_briefly_waits_for_delayed_system_popup_before_filling_fields(
+    login_steps: list[dict[str, Any]],
+) -> None:
+    login_at = [step.get("type") for step in login_steps].index("login_if_needed")
+    before_login = login_steps[:login_at]
+    dismiss_at = max(
+        index
+        for index, step in enumerate(before_login)
+        if step.get("id") == "facebook_dismiss_system_dialog"
+    )
+
+    delay = before_login[dismiss_at - 1]
+    assert delay.get("type") == "wait"
+    assert 0.3 <= float(delay.get("seconds") or 0) <= 1.0
 
 
 def test_login_switches_app_language_to_vietnamese_before_logging_in(

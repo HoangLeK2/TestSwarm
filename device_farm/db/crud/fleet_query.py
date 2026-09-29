@@ -308,6 +308,7 @@ async def query_fleet_devices(
     cursor: str | None = None,
     sort: str = DEFAULT_SORT,
     offset: int | None = None,
+    visible_device_ids: set[str] | None = None,
 ) -> FleetQueryPage:
     if limit < 1 or limit > MAX_LIMIT:
         raise FleetQueryValidationError(
@@ -327,6 +328,8 @@ async def query_fleet_devices(
         relay_serials = await _relay_serials_for_host(db, filters.org_id, filters.relay_host)
 
     scope = _build_scope(filters, relay_serials)
+    if visible_device_ids is not None:
+        scope.append(Device.id.in_(visible_device_ids) if visible_device_ids else false())
     if filters.owner_type:
         scope.append(_owner_type_filter_clause(filters.owner_type))
 

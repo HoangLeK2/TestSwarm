@@ -10,7 +10,6 @@ import {
   recoveryDelayMs,
   resetAttachSlotsForTest,
   resetRecoverySlotsForTest,
-  scheduleFirstFrameKeyframeRetries,
   startMediaProgressWatcher,
   waitForAttachSlot,
   type MediaSample
@@ -33,18 +32,10 @@ test('a decoded frame clears any suspicion', () => {
   assert.equal(classifyStall(anchor, latest), null);
 });
 
-test('an idle screen is not a stall inside the no-media budget', () => {
-  // The adapter forces an IDR after 5s of scrcpy silence, so a still phone
-  // still produces bytes well before noMediaMs.
+test('an idle screen stays healthy with flat counters indefinitely', () => {
   const anchor = sample({ at: 0 });
-  const latest = sample({ at: 9_000 });
+  const latest = sample({ at: 10 * 60_000 });
   assert.equal(classifyStall(anchor, latest), null);
-});
-
-test('flat bytes past the no-media budget report no_media', () => {
-  const anchor = sample({ at: 0 });
-  const latest = sample({ at: DEFAULT_STALL_THRESHOLDS.noMediaMs });
-  assert.equal(classifyStall(anchor, latest), 'no_media');
 });
 
 test('bytes arriving with no decoded frame reports decoder_stalled', () => {
@@ -62,18 +53,18 @@ test('decoder_stalled needs the full window, not one flat frame', () => {
   assert.equal(classifyStall(anchor, latest), null);
 });
 
-test('before the first frame the budget is firstFrameMs, not noMediaMs', () => {
+test('a missing first frame uses the first-frame budget', () => {
   const anchor = sample({ at: 0, framesDecoded: 0, bytesReceived: 0 });
   const inside = sample({
-    at: DEFAULT_STALL_THRESHOLDS.noMediaMs,
+    at: DEFAULT_STALL_THRESHOLDS.firstFrameMs - 1,
     framesDecoded: 0,
-    bytesReceived: 0
+    bytesReceived: 5_000
   });
   assert.equal(classifyStall(anchor, inside), null);
   const outside = sample({
     at: DEFAULT_STALL_THRESHOLDS.firstFrameMs,
     framesDecoded: 0,
-    bytesReceived: 0
+    bytesReceived: 10_000
   });
   assert.equal(classifyStall(anchor, outside), 'no_media');
 });
@@ -134,13 +125,13 @@ test('a slot release is idempotent', () => {
   resetRecoverySlotsForTest();
 });
 
-test('a stall is only reported after two consecutive flat samples', async (t) => {
+test('a missing first frame is only reported after two samples', async (t) => {
   t.mock.timers.enable({ apis: ['setInterval'] });
   let clock = 0;
   const reasons: string[] = [];
   const watcher = startMediaProgressWatcher({
-    // Frozen counters from the very first sample.
-    sample: async () => sample({ at: clock }),
+    sample: async () =>
+      sample({ at: clock, bytesReceived: 0, framesDecoded: 0 }),
     onStall: (reason) => reasons.push(reason),
     isVisible: () => true
   });
@@ -154,7 +145,7 @@ test('a stall is only reported after two consecutive flat samples', async (t) =>
   };
 
   await tick(0); // arms the anchor
-  await tick(DEFAULT_STALL_THRESHOLDS.noMediaMs);
+  await tick(DEFAULT_STALL_THRESHOLDS.firstFrameMs);
   assert.deepEqual(reasons, [], 'one flat sample is scheduling noise');
   await tick(1_000);
   assert.deepEqual(reasons, ['no_media']);
@@ -193,11 +184,11 @@ test('a hidden tab re-arms instead of reporting the hidden period', async (t) =>
   t.mock.timers.reset();
 });
 
-test('resume re-arms the watcher after a keyframe repair', async (t) => {
+test('resume re-arms the watcher after an in-place repair', async (t) => {
   t.mock.timers.enable({ apis: ['setInterval'] });
   let clock = 0;
   // Bytes keep arriving, nothing decodes: the decoder_stalled signature the
-  // keyframe rung exists for.
+  // recovery path exists for.
   let bytes = 1_000;
   let frames = 10;
   const reasons: string[] = [];
@@ -225,7 +216,7 @@ test('resume re-arms the watcher after a keyframe repair', async (t) => {
   await tick(10_000);
   assert.deepEqual(reasons, ['decoder_stalled']);
 
-  // The keyframe landed: frames move again and the re-armed watcher stays quiet.
+  // The repair landed: frames move again and the re-armed watcher stays quiet.
   watcher.resume();
   frames += 1;
   await tick(1_000); // re-arms the anchor at the new clock
@@ -313,27 +304,4 @@ test('interactive attach jumps ahead of queued previews', async () => {
   releasePreview();
   held.forEach((release) => release());
   resetAttachSlotsForTest();
-});
-
-test('first-frame keyframe retries are bounded and stop after a frame', (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  let hasFrame = false;
-  let requests = 0;
-  const stop = scheduleFirstFrameKeyframeRetries({
-    hasFrame: () => hasFrame,
-    isConnected: () => true,
-    requestKeyframe: async () => {
-      requests += 1;
-    },
-    delaysMs: [100, 200, 300]
-  });
-
-  t.mock.timers.tick(100);
-  assert.equal(requests, 1);
-  hasFrame = true;
-  t.mock.timers.tick(500);
-  assert.equal(requests, 1);
-  stop();
-  stop();
-  t.mock.timers.reset();
 });

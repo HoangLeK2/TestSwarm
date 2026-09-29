@@ -561,6 +561,43 @@ func TestSessionCoolsDownSafeProfileHandshakeFailures(t *testing.T) {
 	}
 }
 
+func TestSessionADBUnavailableDoesNotDegradeCodecAndBacksOff(t *testing.T) {
+	session := NewSession(StartRequest{Serial: "SERIAL", CodecLevel: 1}, nil, nil, nil)
+	err := fmt.Errorf("adb shell mkdir failed: adb: device 'SERIAL' not found")
+	for i := 0; i < codecFailuresPerLevel; i++ {
+		if !session.shouldCoolDownAfterFailure(err) {
+			t.Fatal("missing ADB device must be treated as a temporary connection failure")
+		}
+		if got := session.reconnectSleep(150*time.Millisecond, err); got != safeProfileHandshakeBackoffMin {
+			t.Fatalf("sleep=%s, want %s", got, safeProfileHandshakeBackoffMin)
+		}
+		if got := session.reconnectBackoffCap(err); got != safeProfileHandshakeBackoffMax {
+			t.Fatalf("cap=%s, want %s", got, safeProfileHandshakeBackoffMax)
+		}
+		if !session.shouldDegradeCodecAfterFailure(err) {
+			continue
+		}
+		session.degradeCodecLevel()
+	}
+	if got := session.currentCodecLevel(); got != 1 {
+		t.Fatalf("codec level=%d after ADB outage, want 1", got)
+	}
+	if !session.shouldDegradeCodecAfterFailure(fmt.Errorf("scrcpy encoder rejected option")) {
+		t.Fatal("encoder failures must still advance the codec fallback ladder")
+	}
+	if session.shouldCoolDownAfterFailure(fmt.Errorf("scrcpy encoder rejected option")) {
+		t.Fatal("encoder failures must retain the normal retry cadence")
+	}
+	for _, adbError := range []error{
+		fmt.Errorf("adb: device 'SERIAL' offline"),
+		fmt.Errorf("adb: device 'SERIAL' not found"),
+	} {
+		if !session.shouldCoolDownAfterFailure(adbError) || session.shouldDegradeCodecAfterFailure(adbError) {
+			t.Fatalf("ADB outage was treated as encoder failure: %v", adbError)
+		}
+	}
+}
+
 func TestSessionAcquireLaunchSlotLimitsColdStarts(t *testing.T) {
 	session := NewSession(StartRequest{Serial: "SERIAL"}, nil, nil, nil)
 	session.launchLimiter = make(chan struct{}, 1)

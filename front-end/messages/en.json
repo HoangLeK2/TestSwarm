@@ -1009,7 +1009,9 @@
       "actionHelpLogin": "Run login: uses this workspace's login scenario on a linked phone.",
       "actionHelpLink": "Link phone: only connects this account to a device before runs.",
       "actionHelpMore": "More menu: view history, change state, or delete; risky actions ask for confirmation.",
-      "statusFilterLabel": "Filter accounts by status"
+      "statusFilterLabel": "Filter accounts by status",
+      "deleteSuccess": "Account deleted",
+      "deleteFailed": "Failed to delete account"
     },
     "stateDialog": {
       "trigger": "Change state",
@@ -1098,6 +1100,7 @@
       "notesPlaceholder": "Internal notes",
       "updating": "Updating...",
       "submit": "Save",
+      "updateSuccess": "Account updated",
       "updateFailed": "Failed to update account"
     },
     "devicesDialog": {
@@ -2842,6 +2845,35 @@
           "variableName": "Variable name"
         }
       },
+      "postFlow": {
+        "findPost": "1. Find the right post",
+        "likePost": "2. Like the post",
+        "commentPost": "3. Comment on the post",
+        "findPostMissing": "No identifying detail yet — add distinctive post text here",
+        "findPostOutcome": "Continue only when exactly one post matches",
+        "afterVerifiedPost": "Only like the post verified in step 1",
+        "noVerifiedPost": "Not linked to a verified post",
+        "likePostOutcome": "Runs after finding the post; cannot be tested alone",
+        "commentPreview": "Text: {text}",
+        "commentMissing": "No comment text to send yet",
+        "commentPostOutcome": "Runs after finding the post; this action publishes a comment",
+        "findPostHelp": "Step 1: provide identifying details for the post. If there is not exactly one match, the flow stops before liking or commenting.",
+        "searchHelp": "Only fill this in when searching for a post. If the post is already open, add identifying text below.",
+        "identityLabel": "Distinctive text on the post",
+        "identityHelp": "Enter a few words unique to the intended post, such as its headline or a sentence. This is verification evidence, not a variable name.",
+        "searchPlaceholder": "Post search terms (if needed)",
+        "identityPlaceholder": "For example: September hiring announcement",
+        "requiredKeywordsPlaceholder": "Required words on the post (optional)",
+        "savedTargetHelp": "Verification results are passed automatically to the next two steps. Keep the variable name unless you need advanced setup.",
+        "likePostHelp": "Step 2: like only the post verified in step 1. Preview the complete flow from step 1; testing this step alone lacks the verification result.",
+        "commentPostHelp": "Step 3: comment on the post verified in step 1. Enter the actual text or a variable with a value, then preview the complete flow from step 1.",
+        "verifiedTargetHelp": "Uses the post verified in step 1; no ID or variable name is needed here.",
+        "commentPlaceholder": "Enter the comment that will be posted",
+        "commentValueMissing": "The comment variable has no value; preview will have nothing to send.",
+        "commentVariableMissing": "{name} has no value yet. Fill it in under Scenario variables or enter the comment directly.",
+        "commentWillSend": "Will post: {text}",
+        "technicalOptions": "Technical settings (variables and timing)"
+      },
       "variableLineage": {
         "sectionTitle": "Variable lineage",
         "badgeWarning": "{count} warning",
@@ -3564,6 +3596,7 @@
         "messages": {
           "commentSheetNotOpen": "Could not read comments because the comment panel is not open.",
           "extraDataFailed": "Could not collect the extra data for this step.",
+          "verifiedTargetMissing": "This step has not received a verified target. Run the whole flow from “Verify target”; this action cannot run by itself.",
           "scrollToFoundWithTarget": "Found “{target}” after {count, plural, one {# swipe} other {# swipes}}.",
           "scrollToFoundTargetOnly": "Found “{target}”.",
           "scrollToFound": "Found the element after {count, plural, one {# swipe} other {# swipes}}.",

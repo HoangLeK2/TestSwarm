@@ -2,7 +2,6 @@ import { farmApi } from '@/lib/farm-api';
 import {
   DEFAULT_STALL_THRESHOLDS,
   readMediaSample,
-  scheduleFirstFrameKeyframeRetries,
   startMediaProgressWatcher,
   type MediaProgressWatcherHandle,
   type MediaSample,
@@ -93,15 +92,6 @@ export type WebRtcStreamController = {
    * to need a page refresh.
    */
   setStallHandler: (handler: ((reason: StallReason) => void) | null) => void;
-  /**
-   * Re-arm the watchdog after a repair that kept this connection.
-   *
-   * The watchdog stops itself when it reports a stall, so the keyframe rung of
-   * the ladder — which does not replace the connection — has to say when to
-   * start watching again, otherwise a keyframe that did not help would go
-   * unnoticed and the ladder would never escalate.
-   */
-  resumeWatcher: () => void;
   close: () => Promise<void>;
 };
 
@@ -137,18 +127,6 @@ async function keepWebRtcSessionAlive(
   await postJson(`/media/webrtc/sessions/${sessionId}/heartbeat`, {
     ttl_seconds: WEBRTC_SESSION_TTL_SECONDS
   });
-}
-
-/**
- * Ask the device for one IDR without disturbing this connection.
- *
- * Rate-limited on the adapter side (Publisher.RequestKeyframeGated), so calling
- * it too often is harmless but also useless. Throws on any failure — including
- * the timeout an adapter built before this endpoint existed will produce — and
- * the caller escalates to a session rebuild.
- */
-export async function requestWebRtcKeyframe(sessionId: string): Promise<void> {
-  await postJson(`/media/webrtc/sessions/${sessionId}/keyframe`, {});
 }
 
 /**
@@ -342,10 +320,8 @@ export async function startWebRtcStream({
 
   let firstFrameSeen = false;
   let frameCallbackHandle: number | null = null;
-  let stopJoinKeyframeRetries = () => {};
   const markFrame = () => {
     firstFrameSeen = true;
-    stopJoinKeyframeRetries();
     onFrame?.();
     if (video.videoWidth && video.videoHeight) {
       onSize?.(video.videoWidth, video.videoHeight);
@@ -376,25 +352,6 @@ export async function startWebRtcStream({
   video.addEventListener('canplay', requestFirstVideoFrame);
   video.addEventListener('playing', requestFirstVideoFrame);
   video.addEventListener('resize', markFrame);
-
-  // Joining a live RTSP feed lands mid-GOP. The adapter's attach IDR burst
-  // fires when the session is created — before this connection exists — so it
-  // never reaches us, and nothing decodes until the phone's next IDR, which a
-  // busy screen may not send for a long time. Production showed it: 48 of 51
-  // dashboard sessions never asked for a keyframe and were torn down within
-  // seconds with bytes flowing. Ask once, the moment media can flow.
-  const requestJoinKeyframe = () => {
-    if (pc.connectionState !== 'connected') return;
-    pc.removeEventListener('connectionstatechange', requestJoinKeyframe);
-    if (firstFrameSeen) return;
-    requestWebRtcKeyframe(session.id).catch(() => {});
-    stopJoinKeyframeRetries = scheduleFirstFrameKeyframeRetries({
-      hasFrame: () => firstFrameSeen,
-      isConnected: () => pc.connectionState === 'connected',
-      requestKeyframe: () => requestWebRtcKeyframe(session.id)
-    });
-  };
-  pc.addEventListener('connectionstatechange', requestJoinKeyframe);
 
   pc.ontrack = (event) => {
     const stream = event.streams[0] ?? new MediaStream([event.track]);
@@ -433,8 +390,6 @@ export async function startWebRtcStream({
   } catch (error) {
     watcher?.stop();
     watcher = null;
-    stopJoinKeyframeRetries();
-    pc.removeEventListener('connectionstatechange', requestJoinKeyframe);
     cancelFrameCallback();
     video.removeEventListener('loadeddata', markFrame);
     video.removeEventListener('canplay', requestFirstVideoFrame);
@@ -449,8 +404,6 @@ export async function startWebRtcStream({
   const close = async () => {
     watcher?.stop();
     watcher = null;
-    stopJoinKeyframeRetries();
-    pc.removeEventListener('connectionstatechange', requestJoinKeyframe);
     stallHandler = null;
     cancelFrameCallback();
     video.removeEventListener('loadeddata', markFrame);
@@ -470,7 +423,6 @@ export async function startWebRtcStream({
     sessionId: session.id,
     peerConnection: pc,
     setStallHandler,
-    resumeWatcher: () => watcher?.resume(),
     close
   };
 }

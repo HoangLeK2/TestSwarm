@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/dialog';
 import { FlowEditor } from '@/features/campaigns/components/flow-editor/flow-editor';
 import { canPersistScenario } from '@/features/campaigns/components/flow-editor/nested-step-edit';
+import { useStepVariableSync } from '@/features/campaigns/hooks/use-step-variable-sync';
 import { VariableEditor } from '@/components/variable-editor';
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
@@ -53,6 +54,12 @@ export function EditTemplateDialog({
   const [childStepEditorOpen, setChildStepEditorOpen] = useState(false);
   const [steps, setSteps] = useState<FlowStep[]>([]);
   const [variables, setVariables] = useState<Record<string, any>>({});
+  const stepVariableSync = useStepVariableSync();
+  const handleStepsChange = (nextSteps: FlowStep[]) => {
+    const synced = stepVariableSync.sync(steps, nextSteps, variables);
+    setSteps(nextSteps);
+    setVariables(synced.variables);
+  };
   const { mutate, isPending, error } = useUpdateScenarioTemplate();
   const {
     register,
@@ -81,8 +88,9 @@ export function EditTemplateDialog({
       });
       setSteps(template.steps?.length ? [...template.steps] : []);
       setVariables(template.variables ?? {});
+      stepVariableSync.reset();
     }
-  }, [open, template, reset]);
+  }, [open, template, reset, stepVariableSync]);
 
   const onSubmit = (data: FormData) => {
     if (!canPersistScenario(childStepEditorOpen)) {
@@ -160,7 +168,7 @@ export function EditTemplateDialog({
             <FlowEditor
               nestedInDialog
               steps={steps}
-              onChange={setSteps}
+              onChange={handleStepsChange}
               onChildStepEditorOpenChange={setChildStepEditorOpen}
               maxHeight='350px'
             />

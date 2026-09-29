@@ -34,6 +34,7 @@ import { analyzeStepConfiguration } from '../../lib/step-configuration-status';
 import type { StepVariableLineage } from '../../lib/step-variable-lineage';
 import { scenarioLintIssueSeverity } from '../../lib/scenario-lint-preflight';
 import { resolveRunScenarioDisplayRef } from './run-scenario-card-label';
+import { contentInteractionPresentation } from './content-interaction-presentation';
 import type { RunScenarioCampaignOption } from '../scenario-steps/run-scenario-options';
 
 /** Build an <img> src from a stored image value (base64, object-storage URL, or local /captures/ path). */
@@ -130,8 +131,16 @@ export function StepCard({
     'campaignsFeature.stepEditor.variableLineage'
   );
   const { getStepTypeName, getStepDisplay } = useCampaignFlowI18n();
+  const tPostFlow = useTranslations('campaignsFeature.stepEditor.postFlow');
+  const postFlow = contentInteractionPresentation(step, variablePreviewValues);
   const colorCls = STEP_COLORS[step.type] ?? 'border-l-gray-400';
-  const typeName = formatStepLabelForCard(getStepTypeName(step.type));
+  const typeName = postFlow.isPost
+    ? tPostFlow('findPost')
+    : postFlow.isLike
+      ? tPostFlow('likePost')
+      : postFlow.isComment
+        ? tPostFlow('commentPost')
+        : formatStepLabelForCard(getStepTypeName(step.type));
   const { target: rawTarget, selectorBadge } = getStepDisplay(step);
   const target = resolveVariablePreviewText(rawTarget, variablePreviewValues);
   const category = getStepCategory(step.type);
@@ -154,8 +163,20 @@ export function StepCard({
     step.type === 'run_scenario' && !title && !runScenarioRef
       ? tFlow('runScenario.cardPickHint')
       : '';
+  const postFlowSummary = postFlow.isPost
+    ? postFlow.identity || tPostFlow('findPostMissing')
+    : postFlow.isLike
+      ? step.require_verified_target
+        ? tPostFlow('afterVerifiedPost')
+        : tPostFlow('noVerifiedPost')
+      : postFlow.isComment
+        ? postFlow.commentReady
+          ? tPostFlow('commentPreview', { text: postFlow.commentPreview })
+          : tPostFlow('commentMissing')
+        : '';
   const secondRowMain =
     title ||
+    postFlowSummary ||
     (step.type === 'run_scenario' ? runScenarioRef : target) ||
     runScenarioEmptyHint;
   const configurationStatus = analyzeStepConfiguration(step);
@@ -309,9 +330,19 @@ export function StepCard({
                     ? 'text-muted-foreground'
                     : 'text-foreground/85'
               )}
-              title={title || target || runScenarioEmptyHint}
+              title={secondRowMain}
             >
               {secondRowMain}
+            </p>
+          )}
+
+          {(postFlow.isPost || postFlow.isLike || postFlow.isComment) && (
+            <p className='mt-0.5 truncate text-[10px] text-muted-foreground'>
+              {postFlow.isPost
+                ? tPostFlow('findPostOutcome')
+                : postFlow.isLike
+                  ? tPostFlow('likePostOutcome')
+                  : tPostFlow('commentPostOutcome')}
             </p>
           )}
 

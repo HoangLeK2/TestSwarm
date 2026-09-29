@@ -177,6 +177,26 @@ def test_dismisses_google_saved_password_popup_from_real_google_hierarchy() -> N
     assert device.clicked == [("content-desc", "Cancel")]
 
 
+def test_dismisses_google_account_chooser_from_real_vietnamese_hierarchy() -> None:
+    device = _XmlDevice(
+        """<hierarchy>
+          <node class="android.widget.FrameLayout" package="com.google.android.gms">
+            <node text="Dùng tài khoản của bạn cho Facebook" />
+            <node content-desc="Đóng"
+                  class="android.widget.ImageView"
+                  clickable="true" />
+            <node text="Tiếp tục"
+                  class="android.widget.Button"
+                  clickable="true" />
+          </node>
+        </hierarchy>""",
+        {("content-desc", "Đóng")},
+    )
+
+    assert _auto_dismiss_popup(device) is True
+    assert device.clicked == [("content-desc", "Đóng")]
+
+
 def test_dismisses_facebook_stop_profile_setup_dialog_from_real_screen() -> None:
     device = _XmlDevice(
         """<hierarchy>

@@ -106,6 +106,7 @@ import {
   detectSingleVariableRename,
   replaceScenarioVariableReferences
 } from '@/lib/scenario-variable-references';
+import { useStepVariableSync } from '@/features/campaigns/hooks/use-step-variable-sync';
 import { useRouter } from '@/i18n/navigation';
 import {
   syncSavedScenarioCaches,
@@ -142,6 +143,7 @@ import {
 } from '@/features/campaigns/components/flow-editor/coordinate-pick';
 import { FlowEditor } from '@/features/campaigns/components/flow-editor/flow-editor';
 import type { StepRunResult } from '@/features/campaigns/components/flow-editor/step-run-result';
+import { humanizeStepRunMessage } from '@/features/campaigns/components/flow-editor/step-run-message';
 import { humanizeSessionGateMessage } from '@/features/campaigns/lib/session-gate-message';
 import { canPersistScenario } from '@/features/campaigns/components/flow-editor/nested-step-edit';
 import { deriveNestedInlineRunStates } from '@/features/campaigns/components/flow-editor/inline-run-key';
@@ -261,6 +263,7 @@ export function ControlRecordView({
   );
   const isMobile = useIsMobile();
   const tGate = useTranslations('executionMessages');
+  const tRunResult = useTranslations('campaignsFeature.stepEditor.runResult');
   const tCapabilityPreflight = useTranslations(
     'campaignsFeature.capabilityPreflight'
   );
@@ -533,6 +536,7 @@ export function ControlRecordView({
   const [flowCanvasKey, setFlowCanvasKey] = useState(0);
   const [flowSelectedFgId, setFlowSelectedFgId] = useState<string | null>(null);
   const [flowDetailStep, setFlowDetailStep] = useState<FlowStep | null>(null);
+  const stepVariableSync = useStepVariableSync();
 
   const showTemplatePicker = steps.items.length === 0;
   const templatesQuery = useScenarioTemplates(undefined, {
@@ -775,14 +779,21 @@ export function ControlRecordView({
         setStepRunResults({});
         setStepRunStates({});
       }
-      steps.setItems(
-        newSteps.map((s: FlowStep, i: number) => ({
-          ...s,
-          _id: (s as { _id?: string })._id || `step-${Date.now()}-${i}`
-        })) as typeof steps.items
+      const nextItems = newSteps.map((s: FlowStep, i: number) => ({
+        ...s,
+        _id: (s as { _id?: string })._id || `step-${Date.now()}-${i}`
+      })) as typeof steps.items;
+      const synced = stepVariableSync.sync(
+        stepsItemsRef.current as FlowStep[],
+        nextItems,
+        scenarioVariablesRef.current
       );
+      scenarioVariablesRef.current = synced.variables;
+      setScenarioVariables(synced.variables);
+      stepsItemsRef.current = nextItems;
+      steps.setItems(nextItems);
     },
-    [steps]
+    [stepVariableSync, steps]
   );
 
   const handlePlayerPlayingChange = useCallback((playing: boolean) => {
@@ -1927,8 +1938,9 @@ export function ControlRecordView({
       const next = flattenVarDefs(save.editingContext.variables);
       scenarioVariablesRef.current = next;
       setScenarioVariables(next);
+      stepVariableSync.reset();
     }
-  }, [save.editingContext]);
+  }, [save.editingContext, stepVariableSync]);
 
   useEffect(() => {
     if (save.editingContext?.variables) return;
@@ -1939,8 +1951,14 @@ export function ControlRecordView({
       const next = flattenVarDefs(save.orgScenarioContext.variables);
       scenarioVariablesRef.current = next;
       setScenarioVariables(next);
+      stepVariableSync.reset();
     }
-  }, [activeCampaignId, save.editingContext, save.orgScenarioContext]);
+  }, [
+    activeCampaignId,
+    save.editingContext,
+    save.orgScenarioContext,
+    stepVariableSync
+  ]);
 
   useEffect(() => {
     flowSelectedFgIdRef.current = flowSelectedFgId;
@@ -2187,6 +2205,14 @@ export function ControlRecordView({
     (fgId: string, latest: FlowStep) => {
       const current = stepsItemsRef.current as FlowStep[];
       const patched = patchStepByFlowgramId(current, fgId, latest);
+      const synced = stepVariableSync.sync(
+        current,
+        patched,
+        scenarioVariablesRef.current
+      );
+      scenarioVariablesRef.current = synced.variables;
+      setScenarioVariables(synced.variables);
+      stepsItemsRef.current = patched as typeof steps.items;
       const ctx = flowCtxRef.current;
       if (!ctx) {
         flowStepsRef.current = patched as typeof steps.items;
@@ -2205,7 +2231,7 @@ export function ControlRecordView({
         return current as typeof steps.items;
       }
     },
-    [steps]
+    [stepVariableSync, steps]
   );
 
   const handleFlowDetailChange = useCallback(
@@ -2350,14 +2376,16 @@ export function ControlRecordView({
               // this toast cannot act on those.
               const rawMessage = event.message as string | undefined;
               const stepMessage =
-                humanizeSessionGateMessage(rawMessage, tGate) ?? rawMessage;
+                humanizeSessionGateMessage(rawMessage, tGate) ??
+                humanizeStepRunMessage(rawMessage, tRunResult) ??
+                rawMessage;
               // Keep what the step produced so the card can show it — a green
               // tick alone never told the author what was actually read.
               setStepRunResults((s) => ({
                 ...s,
                 [runKey]: {
                   ok: !!event.ok,
-                  message: stepMessage,
+                  message: rawMessage,
                   savedAs: event.saved_as as string | undefined,
                   textPreview: event.text_preview as string | undefined,
                   textLength: event.text_length as number | undefined,
@@ -2419,7 +2447,8 @@ export function ControlRecordView({
       ensureScenarioCapabilityPreflight,
       t,
       tScenarioLintPreflight,
-      tGate
+      tGate,
+      tRunResult
     ]
   );
 
@@ -3730,8 +3759,17 @@ export function ControlRecordView({
                           }}
                           onStepsChange={(newSteps) => {
                             if (flowDetailSyncingRef.current) return;
-                            flowStepsRef.current = newSteps as any;
-                            steps.setItems(newSteps as any);
+                            const nextItems = newSteps as typeof steps.items;
+                            const synced = stepVariableSync.sync(
+                              stepsItemsRef.current as FlowStep[],
+                              nextItems,
+                              scenarioVariablesRef.current
+                            );
+                            scenarioVariablesRef.current = synced.variables;
+                            setScenarioVariables(synced.variables);
+                            stepsItemsRef.current = nextItems;
+                            flowStepsRef.current = nextItems;
+                            steps.setItems(nextItems);
                             const selectedFgId = flowSelectedFgIdRef.current;
                             if (selectedFgId) {
                               const selected = findStepByFlowgramId(

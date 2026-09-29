@@ -231,10 +231,14 @@ test('flow editor keeps runtime and lint technical details out of the primary co
     new URL('./step-run-result.tsx', import.meta.url),
     'utf8'
   );
+  const messageSource = readFileSync(
+    new URL('./step-run-message.ts', import.meta.url),
+    'utf8'
+  );
 
   assert.match(resultSource, /humanizeStepRunMessage/);
-  assert.match(resultSource, /messages\.commentSheetNotOpen/);
-  assert.match(resultSource, /messages\.scrollToFoundWithTarget/);
+  assert.match(messageSource, /messages\.commentSheetNotOpen/);
+  assert.match(messageSource, /messages\.scrollToFoundWithTarget/);
   assert.match(resultSource, /title=\{result\.message\}/);
   assert.match(resultSource, /showTechnical/);
   assert.match(resultSource, /showTechnical \? t\('hideTechnical'\)/);
@@ -832,6 +836,7 @@ for (const [locale, messages] of [
     for (const key of [
       'commentSheetNotOpen',
       'extraDataFailed',
+      'verifiedTargetMissing',
       'scrollToFoundWithTarget',
       'scrollToFoundTargetOnly',
       'scrollToFound',

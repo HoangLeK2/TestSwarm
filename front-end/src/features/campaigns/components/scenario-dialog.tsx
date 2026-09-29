@@ -72,6 +72,7 @@ import {
 import type { FixedLayoutPluginContext } from '@flowgram.ai/fixed-layout-editor';
 import { StepDetailPanel } from './flow-editor/step-detail-panel';
 import { ImageTemplateScenarioProvider } from './flow-editor/image-template-scenario';
+import { humanizeStepRunMessage } from './flow-editor/step-run-message';
 import type { FlowStep } from './scenario-steps/types';
 import {
   findStepByFlowgramId,
@@ -113,6 +114,7 @@ import {
   normalizeSelectorStepFields
 } from '@/features/devices/lib/scenario-selector-step';
 import { useConfirm } from '@/providers/modal-provider';
+import { useStepVariableSync } from '../hooks/use-step-variable-sync';
 
 const DynamicFlowgramCanvas = dynamic(
   () =>
@@ -532,6 +534,7 @@ export function ScenarioDialog({
     useState<ScenarioRequirements>({});
   const variablesRef = useRef<Record<string, any>>({});
   const initialVariablesRef = useRef<Record<string, any>>({});
+  const stepVariableSync = useStepVariableSync();
   const [accountGroupId, setAccountGroupId] = useState<string>('');
   const [rawJson, setRawJson] = useState('');
   const tScenarioForm = useTranslations('components.scenariosForm');
@@ -542,6 +545,7 @@ export function ScenarioDialog({
   const tCapabilityPreflight = useTranslations(
     'campaignsFeature.capabilityPreflight'
   );
+  const tRunResult = useTranslations('campaignsFeature.stepEditor.runResult');
   const variablePreviewValues = useMemo(
     () => flattenVarDefs(variables),
     [variables]
@@ -727,10 +731,18 @@ export function ScenarioDialog({
 
   const replaceStepsAndGraph = useCallback(
     (next: Step[]) => {
+      const syncedVariables = stepVariableSync.sync(
+        stepsRef.current,
+        next,
+        variablesRef.current
+      );
+      variablesRef.current = syncedVariables.variables;
+      setVariables(syncedVariables.variables);
+      stepsRef.current = next;
       setSteps(next);
       scheduleGraphSync(next);
     },
-    [scheduleGraphSync]
+    [scheduleGraphSync, stepVariableSync]
   );
 
   const handleVariablesChange = useCallback(
@@ -766,11 +778,19 @@ export function ScenarioDialog({
       // calling setState from inside a setState updater.
       setSteps((prev) => {
         const next = append(prev);
+        const syncedVariables = stepVariableSync.sync(
+          prev,
+          next,
+          variablesRef.current
+        );
+        variablesRef.current = syncedVariables.variables;
+        setVariables(syncedVariables.variables);
+        stepsRef.current = next;
         scheduleGraphSync(next);
         return next;
       });
     },
-    [scheduleGraphSync]
+    [scheduleGraphSync, stepVariableSync]
   );
 
   const applyPreviewStepRunEvent = useCallback(
@@ -796,7 +816,12 @@ export function ScenarioDialog({
           [runKey]: ev.ok ? 'ok' : 'error',
           ...deriveNestedInlineRunStates(runKey, ev)
         }));
-        if (!ev.ok) toast.error(String(ev.message ?? 'Step lỗi'));
+        if (!ev.ok) {
+          toast.error(
+            humanizeStepRunMessage(ev.message, tRunResult) ??
+              String(ev.message ?? 'Step lỗi')
+          );
+        }
         return;
       }
       if (ev.event === 'done') {
@@ -806,18 +831,23 @@ export function ScenarioDialog({
           return { ...s, [runKey]: ok ? 'ok' : 'error' };
         });
         if (ev.success === false) {
+          const failedMessage = ev.failed_message ?? ev.message;
           toast.error(
-            String(ev.failed_message ?? ev.message ?? 'Kịch bản lỗi')
+            humanizeStepRunMessage(failedMessage, tRunResult) ??
+              String(failedMessage ?? 'Kịch bản lỗi')
           );
         }
         return;
       }
       if (ev.event === 'error') {
         setStates((s) => ({ ...s, [runKey]: 'error' }));
-        toast.error(String(ev.error ?? 'Lỗi chạy thử'));
+        toast.error(
+          humanizeStepRunMessage(ev.error, tRunResult) ??
+            String(ev.error ?? 'Lỗi chạy thử')
+        );
       }
     },
-    []
+    [tRunResult]
   );
 
   const clearPreviewRunStateAfterDelay = useCallback(
@@ -1440,6 +1470,7 @@ export function ScenarioDialog({
     setScenarioRequirements(currentRequirements);
     variablesRef.current = currentVariables;
     initialVariablesRef.current = currentVariables;
+    stepVariableSync.reset();
     // Load graph model if available and valid, else derive from steps.
     // Validate that each node has required `id` and `order` fields before trusting
     // the stored data (guards against old records saved before the graph refactor).
@@ -2487,7 +2518,7 @@ export function ScenarioDialog({
                     onChange={(newSteps) => {
                       // Text edits in nested step overlay no longer bubble per-keystroke;
                       // only sync steps — graph is rebuilt on save.
-                      setSteps(newSteps as Step[]);
+                      replaceStepsAndGraph(newSteps as Step[]);
                     }}
                     maxHeight='min(380px, 42vh)'
                     compact

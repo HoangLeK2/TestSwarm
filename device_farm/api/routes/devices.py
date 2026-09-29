@@ -402,6 +402,7 @@ async def list_devices(
     relay_serial: str | None = Query(default=None),
     page: int | None = Query(default=None, ge=1),
     page_size: int | None = Query(default=None, ge=1, le=200),
+    connected_only: bool = Query(default=False),
 ):
     cursor = _direct_query_default(cursor)
     limit = _direct_query_default(limit)
@@ -418,6 +419,7 @@ async def list_devices(
     relay_serial = _direct_query_default(relay_serial)
     page = _direct_query_default(page)
     page_size = _direct_query_default(page_size)
+    connected_only = _direct_query_default(connected_only)
     page_number = page
 
     org_id = getattr(user, "org_id", None)
@@ -470,6 +472,16 @@ async def list_devices(
         if not org_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Organization context required")
         try:
+            visible_device_ids = None
+            if connected_only:
+                registered = await repo.list_devices(
+                    db, org_id=org_id, user_id=data_owner_user_id(user)
+                )
+                visible_device_ids = {
+                    str(device.id)
+                    for device in registered
+                    if _transport_online_for(device, ctrl, relay_manager)
+                }
             fleet_page = await query_fleet_devices(
                 db,
                 filters=FleetQueryFilters(
@@ -489,6 +501,7 @@ async def list_devices(
                 cursor=cursor,
                 sort=sort or "-paired_at",
                 offset=(page_number - 1) * (page_size or limit or 50) if page_number is not None else None,
+                visible_device_ids=visible_device_ids,
             )
         except FleetQueryValidationError as exc:
             raise HTTPException(
@@ -592,6 +605,11 @@ async def list_devices(
     devices = await repo.list_devices(
         db, org_id=org_id, user_id=data_owner_user_id(user)
     )
+    if connected_only:
+        devices = [
+            device for device in devices
+            if _transport_online_for(device, ctrl, relay_manager)
+        ]
     manager: DeviceManager | None = getattr(request.app.state, "manager", None)
 
     def _resolve_relay_id(device) -> str | None:

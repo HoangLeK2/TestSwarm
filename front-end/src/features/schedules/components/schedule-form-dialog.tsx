@@ -39,6 +39,7 @@ import {
 import { VariableEditor } from '@/components/variable-editor';
 import { FlowEditor } from '@/features/campaigns/components/flow-editor/flow-editor';
 import { canPersistScenario } from '@/features/campaigns/components/flow-editor/nested-step-edit';
+import { useStepVariableSync } from '@/features/campaigns/hooks/use-step-variable-sync';
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
 import { validateScenarioStepsForApi } from '@/features/campaigns/utils/validate-scenario-steps-for-api';
 import { Button } from '@/components/ui/button';
@@ -324,6 +325,16 @@ export function ScheduleFormDialog({
   const [inlineVariables, setInlineVariables] = useState<Record<string, any>>(
     {}
   );
+  const stepVariableSync = useStepVariableSync();
+  const handleInlineStepsChange = (nextSteps: FlowStep[]) => {
+    const synced = stepVariableSync.sync(
+      inlineSteps,
+      nextSteps,
+      inlineVariables
+    );
+    setInlineSteps(nextSteps);
+    setInlineVariables(synced.variables);
+  };
 
   const { data: campaigns } = useCampaigns();
   const { data: templates } = useScenarioTemplates();
@@ -457,6 +468,7 @@ export function ScheduleFormDialog({
       setIsEnabled(true);
       setInlineSteps([]);
       setInlineVariables({});
+      stepVariableSync.reset();
       return;
     }
 
@@ -483,7 +495,8 @@ export function ScheduleFormDialog({
       Array.isArray(s.inline_steps) ? (s.inline_steps as any as FlowStep[]) : []
     );
     setInlineVariables(s.inline_variables ?? {});
-  }, [open, mode, schedule]);
+    stepVariableSync.reset();
+  }, [open, mode, schedule, stepVariableSync]);
 
   const onSubmit = async () => {
     if (!canPersistScenario(childStepEditorOpen)) {
@@ -808,7 +821,7 @@ export function ScheduleFormDialog({
                     </Label>
                     <FlowEditor
                       steps={inlineSteps}
-                      onChange={setInlineSteps}
+                      onChange={handleInlineStepsChange}
                       compact
                       maxHeight='min(320px,40vh)'
                       onChildStepEditorOpenChange={setChildStepEditorOpen}

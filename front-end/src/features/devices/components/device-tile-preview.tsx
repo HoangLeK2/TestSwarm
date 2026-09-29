@@ -216,12 +216,10 @@ function PreviewLoadingSurface({
 
 function DashboardWebRtcPreview({
   device,
-  active,
-  frameStale
+  active
 }: {
   device: Device;
   active: boolean;
-  frameStale: boolean;
 }) {
   const t = useTranslations('devicesFarm');
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -261,9 +259,10 @@ function DashboardWebRtcPreview({
     setRestartKey(0);
   }, [device.serial]);
 
-  // A frozen <video> keeps its last decoded frame forever — hide it once the
-  // server reports the media plane stopped moving.
-  const frameVisible = hasFrame && !frameStale;
+  // The backend health poll describes the adapter, not this WebRTC receiver.
+  // It may still say stale while this viewer is decoding fresh frames. Let the
+  // receiver's own stall watchdog decide when the painted frame is no longer live.
+  const frameVisible = hasFrame && !webrtc.stalled && !webrtc.failed;
 
   return (
     <>
@@ -285,7 +284,7 @@ function DashboardWebRtcPreview({
         aria-live='polite'
         aria-hidden={frameVisible}
       >
-        {!frameStale && !webrtc.gaveUp ? (
+        {!webrtc.gaveUp ? (
           <PreviewLoadingSurface
             label={
               webrtc.failed && !webrtc.connecting
@@ -764,7 +763,6 @@ function DeviceTilePreviewInner({
                   <DashboardWebRtcPreview
                     device={device}
                     active={shouldUseWebRtcPreview}
-                    frameStale={frameStale}
                   />
                 )}
                 {showPreviewImg && (

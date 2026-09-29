@@ -1011,7 +1011,9 @@
       "actionHelpLogin": "Chạy đăng nhập: dùng kịch bản của workspace trên điện thoại đã gắn.",
       "actionHelpLink": "Gắn điện thoại: chỉ liên kết tài khoản với thiết bị trước khi chạy.",
       "actionHelpMore": "Menu khác: xem lịch sử, đổi trạng thái hoặc xóa; thao tác rủi ro có bước xác nhận.",
-      "statusFilterLabel": "Lọc tài khoản theo trạng thái"
+      "statusFilterLabel": "Lọc tài khoản theo trạng thái",
+      "deleteSuccess": "Đã xóa tài khoản",
+      "deleteFailed": "Xóa tài khoản thất bại"
     },
     "stateDialog": {
       "trigger": "Đổi trạng thái",
@@ -1100,6 +1102,7 @@
       "notesPlaceholder": "Ghi chú nội bộ",
       "updating": "Đang cập nhật...",
       "submit": "Lưu",
+      "updateSuccess": "Đã cập nhật tài khoản",
       "updateFailed": "Cập nhật tài khoản thất bại"
     },
     "devicesDialog": {
@@ -2845,6 +2848,35 @@
           "variableName": "Tên biến"
         }
       },
+      "postFlow": {
+        "findPost": "1. Tìm đúng bài viết",
+        "likePost": "2. Thích bài viết",
+        "commentPost": "3. Bình luận bài viết",
+        "findPostMissing": "Chưa có dấu hiệu nhận biết bài viết — hãy nhập nội dung đặc trưng ở bước này",
+        "findPostOutcome": "Chỉ tiếp tục khi tìm được đúng một bài viết",
+        "afterVerifiedPost": "Chỉ thích bài đã được xác minh ở bước 1",
+        "noVerifiedPost": "Chưa gắn với bài viết đã xác minh",
+        "likePostOutcome": "Chạy sau bước tìm bài; không thể kiểm tra riêng bước này",
+        "commentPreview": "Nội dung: {text}",
+        "commentMissing": "Chưa có nội dung bình luận để gửi",
+        "commentPostOutcome": "Chạy sau bước tìm bài; thao tác này sẽ đăng bình luận",
+        "findPostHelp": "Bước 1: cung cấp dấu hiệu để nhận biết bài viết. Nếu không tìm được đúng một bài, luồng dừng trước khi thích hoặc bình luận.",
+        "searchHelp": "Chỉ điền khi cần tìm bài từ thanh tìm kiếm. Nếu bài đã mở, hãy nhập dấu hiệu nhận biết bên dưới.",
+        "identityLabel": "Đoạn chữ đặc trưng trên bài viết",
+        "identityHelp": "Nhập vài từ chỉ xuất hiện ở bài cần thao tác, ví dụ tiêu đề hoặc một câu trong nội dung. Đây là dấu hiệu xác minh, không phải tên biến.",
+        "searchPlaceholder": "Từ khóa để tìm bài (nếu cần)",
+        "identityPlaceholder": "Ví dụ: thông báo tuyển dụng tháng 9",
+        "requiredKeywordsPlaceholder": "Từ khóa bắt buộc trên bài (nếu cần)",
+        "savedTargetHelp": "Kết quả xác minh được chuyển tự động cho hai bước sau. Giữ nguyên tên biến nếu không dùng tính năng nâng cao.",
+        "likePostHelp": "Bước 2: thích đúng bài viết đã được bước 1 xác minh. Hãy chạy thử toàn bộ luồng từ bước 1; chạy riêng bước này sẽ thiếu kết quả xác minh.",
+        "commentPostHelp": "Bước 3: bình luận trên bài đã được bước 1 xác minh. Nhập nội dung thật hoặc dùng một biến đã có giá trị, sau đó chạy thử toàn bộ luồng từ bước 1.",
+        "verifiedTargetHelp": "Lấy bài viết đã xác minh từ bước 1; không cần nhập ID hay tên biến ở đây.",
+        "commentPlaceholder": "Nhập nội dung sẽ đăng dưới bài viết",
+        "commentValueMissing": "Biến bình luận chưa có giá trị; bản xem thử sẽ không có nội dung để gửi.",
+        "commentVariableMissing": "Chưa có giá trị cho {name}. Điền biến này ở mục Biến kịch bản hoặc nhập bình luận trực tiếp.",
+        "commentWillSend": "Nội dung sẽ đăng: {text}",
+        "technicalOptions": "Thiết lập kỹ thuật (biến và thời gian chờ)"
+      },
       "variableLineage": {
         "sectionTitle": "Luồng biến",
         "badgeWarning": "{count} cảnh báo",
@@ -3567,6 +3599,7 @@
         "messages": {
           "commentSheetNotOpen": "Không đọc được bình luận vì khung bình luận chưa mở.",
           "extraDataFailed": "Không lấy được dữ liệu bổ sung cho bước này.",
+          "verifiedTargetMissing": "Bước này chưa nhận được mục tiêu đã xác minh. Hãy chạy cả luồng từ bước “Xác minh mục tiêu”; bước hành động này không thể chạy riêng.",
           "scrollToFoundWithTarget": "Đã tìm thấy “{target}” sau {count} lần cuộn.",
           "scrollToFoundTargetOnly": "Đã tìm thấy “{target}”.",
           "scrollToFound": "Đã tìm thấy phần tử sau {count} lần cuộn.",

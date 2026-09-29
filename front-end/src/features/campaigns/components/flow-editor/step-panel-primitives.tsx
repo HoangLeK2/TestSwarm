@@ -24,6 +24,7 @@ import { formatStepLabelForCard } from './constants';
 import { useCampaignFlowI18n } from './flow-i18n';
 import { StepIcon } from './step-icon';
 import { resolveRunScenarioDisplayRef } from './run-scenario-card-label';
+import { contentInteractionPresentation } from './content-interaction-presentation';
 import {
   resolveVariablePreviewText,
   type VariablePreviewValues
@@ -260,7 +261,15 @@ export function StepPanelHeader({
 }) {
   const { getStepTypeName, getStepSummary } = useCampaignFlowI18n();
   const tSetup = useTranslations('campaignsFeature.stepEditor.setupFlow');
-  const typeName = formatStepLabelForCard(getStepTypeName(step.type));
+  const tPostFlow = useTranslations('campaignsFeature.stepEditor.postFlow');
+  const postFlow = contentInteractionPresentation(step, variablePreviewValues);
+  const typeName = postFlow.isPost
+    ? tPostFlow('findPost')
+    : postFlow.isLike
+      ? tPostFlow('likePost')
+      : postFlow.isComment
+        ? tPostFlow('commentPost')
+        : formatStepLabelForCard(getStepTypeName(step.type));
   const userTitle = String((step as { title?: string }).title ?? '').trim();
   const runScenarioId =
     step.type === 'run_scenario'
@@ -276,10 +285,15 @@ export function StepPanelHeader({
           orgScenarios
         })
       : getStepSummary(step);
-  const summary = resolveVariablePreviewText(
-    rawSummary,
-    variablePreviewValues
-  ).trim();
+  const summary = postFlow.isPost
+    ? postFlow.identity || tPostFlow('findPostMissing')
+    : postFlow.isLike
+      ? tPostFlow('afterVerifiedPost')
+      : postFlow.isComment
+        ? postFlow.commentReady
+          ? tPostFlow('commentPreview', { text: postFlow.commentPreview })
+          : tPostFlow('commentMissing')
+        : resolveVariablePreviewText(rawSummary, variablePreviewValues).trim();
 
   const subtitle = userTitle
     ? summary

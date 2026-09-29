@@ -88,6 +88,7 @@ import {
 import { TapImageFields } from './tap-image-fields';
 import { VerifyScreenFields } from './verify-screen-fields';
 import type { VariablePreviewValues } from './variable-preview';
+import { contentInteractionPresentation } from './content-interaction-presentation';
 import {
   evaluateNodeCapabilityStatus,
   nodeCapabilityBadgeLabel,
@@ -1048,6 +1049,7 @@ export function StepDetailPanel({
   const tSel = useTranslations('campaignsFeature.stepEditor.selector');
   const tIfVar = useTranslations('campaignsFeature.stepEditor.ifVariable');
   const tTarget = useTranslations('campaignsFeature.stepEditor.selectTarget');
+  const tPostFlow = useTranslations('campaignsFeature.stepEditor.postFlow');
   const tOcr = useTranslations('campaignsFeature.stepEditor.ocr');
   const tCap = useTranslations('campaignsFeature.stepEditor.nodeCapability');
   const tSetup = useTranslations('campaignsFeature.stepEditor.setupFlow');
@@ -1275,6 +1277,7 @@ export function StepDetailPanel({
   ].includes(step.type);
   const missingCommentText =
     showContentCommentText && !String(step.comment_text ?? '').trim();
+  const postFlow = contentInteractionPresentation(step, variablePreviewValues);
   const socialSetupState =
     socialPlatformCapabilityUnknown ||
     !currentSocialActionSupported ||
@@ -2354,14 +2357,14 @@ export function StepDetailPanel({
 
               {step.type === 'social_select_target' && (
                 <>
-                  <StepPanelHint>
-                    {tTarget('hint', {
-                      kind:
-                        step.target_type === 'post'
-                          ? tTarget('kindPost')
-                          : tTarget('kindPerson')
-                    })}
-                  </StepPanelHint>
+                  {postFlow.isPost && (
+                    <StepPanelHint>{tPostFlow('findPostHelp')}</StepPanelHint>
+                  )}
+                  {!postFlow.isPost && (
+                    <StepPanelHint>
+                      {tTarget('hint', { kind: tTarget('kindPerson') })}
+                    </StepPanelHint>
+                  )}
                   <F label={tTarget('targetTypeLabel')}>
                     <select
                       className='h-8 w-full rounded-md border border-input bg-background px-2 text-xs'
@@ -2386,8 +2389,8 @@ export function StepDetailPanel({
                       className='h-8 text-xs'
                       value={step.search ?? ''}
                       placeholder={
-                        step.target_type === 'post'
-                          ? '${POST_SEARCH}'
+                        postFlow.isPost
+                          ? tPostFlow('searchPlaceholder')
                           : '${PEOPLE_SEARCH}'
                       }
                       onValueChange={(value) =>
@@ -2395,10 +2398,15 @@ export function StepDetailPanel({
                       }
                     />
                   </F>
+                  {postFlow.isPost && (
+                    <p className='text-[11px] text-muted-foreground'>
+                      {tPostFlow('searchHelp')}
+                    </p>
+                  )}
                   <F
                     label={
-                      step.target_type === 'post'
-                        ? tField('matchPostText')
+                      postFlow.isPost
+                        ? tPostFlow('identityLabel')
                         : tField('matchDisplayName')
                     }
                   >
@@ -2412,8 +2420,8 @@ export function StepDetailPanel({
                           : (step.display_name ?? '')
                       }
                       placeholder={
-                        step.target_type === 'post'
-                          ? '${POST_ROW_TEXT}'
+                        postFlow.isPost
+                          ? tPostFlow('identityPlaceholder')
                           : '${PEOPLE_ROW_TEXT}'
                       }
                       onValueChange={(value) =>
@@ -2425,13 +2433,22 @@ export function StepDetailPanel({
                       }
                     />
                   </F>
+                  {postFlow.isPost && (
+                    <p className='text-[11px] text-muted-foreground'>
+                      {tPostFlow('identityHelp')}
+                    </p>
+                  )}
                   <F label={tField('requiredKeywords')}>
                     <VariableTextInput
                       availableVariables={availableVariables}
                       t={t}
                       className='h-8 text-xs'
                       value={keywordInputValue(step.required_keywords)}
-                      placeholder='Hoang Le, OpenAI'
+                      placeholder={
+                        postFlow.isPost
+                          ? tPostFlow('requiredKeywordsPlaceholder')
+                          : 'Hoang Le, OpenAI'
+                      }
                       onValueChange={(value) =>
                         update({
                           required_keywords: keywordListFromInput(value)
@@ -2523,6 +2540,11 @@ export function StepDetailPanel({
                       />
                     </F>
                   </div>
+                  {postFlow.isPost && (
+                    <p className='text-[11px] text-muted-foreground'>
+                      {tPostFlow('savedTargetHelp')}
+                    </p>
+                  )}
                   <label className='flex items-center gap-2 text-xs text-muted-foreground'>
                     <input
                       type='checkbox'
@@ -2925,6 +2947,13 @@ export function StepDetailPanel({
 
               {isSocialActionStep && (
                 <>
+                  {(postFlow.isLike || postFlow.isComment) && (
+                    <StepPanelHint>
+                      {postFlow.isLike
+                        ? tPostFlow('likePostHelp')
+                        : tPostFlow('commentPostHelp')}
+                    </StepPanelHint>
+                  )}
                   <StepPanelSection
                     title={tField('capabilitySetup')}
                     badge={
@@ -2962,9 +2991,16 @@ export function StepDetailPanel({
                             ? tField('verified')
                             : tField('currentScreen'),
                           detail:
-                            step.require_verified_target ??
-                            tField('currentScreenTarget'),
-                          mono: Boolean(step.require_verified_target),
+                            postFlow.isLike || postFlow.isComment
+                              ? step.require_verified_target
+                                ? tPostFlow('verifiedTargetHelp')
+                                : tPostFlow('noVerifiedPost')
+                              : (step.require_verified_target ??
+                                tField('currentScreenTarget')),
+                          mono:
+                            !postFlow.isLike &&
+                            !postFlow.isComment &&
+                            Boolean(step.require_verified_target),
                           tone: 'outline' as const
                         },
                         {
@@ -2972,8 +3008,8 @@ export function StepDetailPanel({
                           label: tField('action'),
                           value: socialActionLabel,
                           detail: showContentCommentText
-                            ? missingCommentText
-                              ? tField('commentTextRequired')
+                            ? !postFlow.commentReady
+                              ? tPostFlow('commentValueMissing')
                               : tField('commentTextReady')
                             : tField('providerActionResolved'),
                           mono: false,
@@ -3065,7 +3101,7 @@ export function StepDetailPanel({
                               'border-amber-500 focus-visible:ring-amber-500'
                           )}
                           value={step.comment_text ?? ''}
-                          placeholder='${COMMENT_TEXT}'
+                          placeholder={tPostFlow('commentPlaceholder')}
                           onValueChange={(value) =>
                             update({ comment_text: value || undefined })
                           }
@@ -3075,212 +3111,232 @@ export function StepDetailPanel({
                             {tField('commentTextRequired')}
                           </p>
                         )}
+                        {postFlow.commentVariable && !postFlow.commentReady && (
+                          <p className='mt-1 text-[11px] text-amber-700 dark:text-amber-200'>
+                            {tPostFlow('commentVariableMissing', {
+                              name: postFlow.commentVariable
+                            })}
+                          </p>
+                        )}
+                        {postFlow.commentReady && (
+                          <p className='mt-1 text-[11px] text-muted-foreground'>
+                            {tPostFlow('commentWillSend', {
+                              text: postFlow.commentPreview
+                            })}
+                          </p>
+                        )}
                       </F>
                     )}
                   </StepPanelSection>
 
-                  <StepPanelSection
-                    title={tField('advancedBehavior')}
-                    badge={
-                      <Badge
-                        variant='outline'
-                        className='h-5 rounded-md px-1.5 text-[10px]'
-                      >
-                        {tField('advanced')}
-                      </Badge>
-                    }
-                    className='bg-muted/10'
-                  >
-                    <div className='grid grid-cols-3 gap-2'>
-                      <F label={tField('findButtonSeconds')}>
-                        <Input
-                          type='number'
-                          min={0.1}
-                          max={60}
-                          step={0.1}
-                          className='h-8 text-xs'
-                          value={step.timeout ?? 6}
-                          onChange={(e) =>
-                            update({
-                              timeout: Math.max(
-                                0.1,
-                                Number(e.target.value) || 6
-                              )
-                            })
-                          }
-                        />
-                      </F>
-                      <F label={tField('pollSeconds')}>
-                        <Input
-                          type='number'
-                          min={0.05}
-                          max={10}
-                          step={0.05}
-                          className='h-8 text-xs'
-                          value={step.poll ?? 0.4}
-                          onChange={(e) =>
-                            update({
-                              poll: Math.max(
-                                0.05,
-                                Number(e.target.value) || 0.4
-                              )
-                            })
-                          }
-                        />
-                      </F>
-                      <F label={tField('verifySeconds')}>
-                        <Input
-                          type='number'
-                          min={0.1}
-                          max={60}
-                          step={0.1}
-                          className='h-8 text-xs'
-                          value={step.verify_timeout ?? 5}
-                          onChange={(e) =>
-                            update({
-                              verify_timeout: Math.max(
-                                0.1,
-                                Number(e.target.value) || 5
-                              )
-                            })
-                          }
-                        />
-                      </F>
-                    </div>
-                    <F label={tField('settleSeconds')}>
-                      <Input
-                        type='number'
-                        min={0}
-                        max={10}
-                        step={0.05}
-                        className='h-8 w-28 text-xs'
-                        value={step.settle_seconds ?? 0.35}
-                        onChange={(e) =>
-                          update({
-                            settle_seconds: Math.max(
-                              0,
-                              Math.min(10, Number(e.target.value) || 0)
-                            )
-                          })
-                        }
-                      />
-                    </F>
-                    <F label={tField('saveResultToVar')}>
-                      <Input
-                        className='h-8 font-mono text-xs'
-                        value={step.save_as ?? ''}
-                        placeholder='SOCIAL_ACTION_RESULT'
-                        onChange={(e) =>
-                          update({ save_as: e.target.value || undefined })
-                        }
-                      />
-                    </F>
-                    <F label={tField('requireVerifiedTarget')}>
-                      <Input
-                        className='h-8 font-mono text-xs'
-                        value={step.require_verified_target ?? ''}
-                        placeholder='_people_target'
-                        onChange={(e) =>
-                          update({
-                            require_verified_target: e.target.value || undefined
-                          })
-                        }
-                      />
-                    </F>
-                    {(step.type === 'content_interaction' ||
-                      step.type === 'connection_request') && (
-                      <div className='grid gap-2 sm:grid-cols-2'>
-                        <F label={tField('candidateEntityId')}>
-                          <VariableTextInput
-                            availableVariables={availableVariables}
-                            t={t}
-                            className='h-8 font-mono text-xs'
-                            value={step.candidate_entity_id ?? ''}
-                            placeholder='${CANDIDATE_ENTITY_ID}'
-                            onValueChange={(value) =>
+                  <details className='rounded-lg border border-border/60 bg-muted/10'>
+                    <summary className='cursor-pointer px-3 py-2 text-xs font-medium text-foreground marker:text-muted-foreground'>
+                      {tPostFlow('technicalOptions')}
+                    </summary>
+                    <StepPanelSection
+                      title={tField('advancedBehavior')}
+                      badge={
+                        <Badge
+                          variant='outline'
+                          className='h-5 rounded-md px-1.5 text-[10px]'
+                        >
+                          {tField('advanced')}
+                        </Badge>
+                      }
+                      className='border-0 bg-transparent shadow-none'
+                    >
+                      <div className='grid grid-cols-3 gap-2'>
+                        <F label={tField('findButtonSeconds')}>
+                          <Input
+                            type='number'
+                            min={0.1}
+                            max={60}
+                            step={0.1}
+                            className='h-8 text-xs'
+                            value={step.timeout ?? 6}
+                            onChange={(e) =>
                               update({
-                                candidate_entity_id: value || undefined
+                                timeout: Math.max(
+                                  0.1,
+                                  Number(e.target.value) || 6
+                                )
                               })
                             }
                           />
                         </F>
-                        <F label={tField('requireCandidateStatus')}>
+                        <F label={tField('pollSeconds')}>
                           <Input
-                            className='h-8 font-mono text-xs'
-                            value={step.require_candidate_status ?? ''}
-                            placeholder='ready_to_connect'
+                            type='number'
+                            min={0.05}
+                            max={10}
+                            step={0.05}
+                            className='h-8 text-xs'
+                            value={step.poll ?? 0.4}
                             onChange={(e) =>
                               update({
-                                require_candidate_status:
-                                  e.target.value || undefined
+                                poll: Math.max(
+                                  0.05,
+                                  Number(e.target.value) || 0.4
+                                )
+                              })
+                            }
+                          />
+                        </F>
+                        <F label={tField('verifySeconds')}>
+                          <Input
+                            type='number'
+                            min={0.1}
+                            max={60}
+                            step={0.1}
+                            className='h-8 text-xs'
+                            value={step.verify_timeout ?? 5}
+                            onChange={(e) =>
+                              update({
+                                verify_timeout: Math.max(
+                                  0.1,
+                                  Number(e.target.value) || 5
+                                )
                               })
                             }
                           />
                         </F>
                       </div>
-                    )}
-                    {step.type === 'connection_request' && (
-                      <F label={tField('candidateLeaseToken')}>
-                        <VariableTextInput
-                          availableVariables={availableVariables}
-                          t={t}
-                          className='h-8 font-mono text-xs'
-                          value={step.candidate_lease_token ?? ''}
-                          placeholder='${CANDIDATE_LEASE_TOKEN}'
-                          onValueChange={(value) =>
+                      <F label={tField('settleSeconds')}>
+                        <Input
+                          type='number'
+                          min={0}
+                          max={10}
+                          step={0.05}
+                          className='h-8 w-28 text-xs'
+                          value={step.settle_seconds ?? 0.35}
+                          onChange={(e) =>
                             update({
-                              candidate_lease_token: value || undefined
+                              settle_seconds: Math.max(
+                                0,
+                                Math.min(10, Number(e.target.value) || 0)
+                              )
                             })
                           }
                         />
                       </F>
-                    )}
-                    {step.type === 'content_interaction' && (
-                      <F label={tField('accountActionId')}>
-                        <VariableTextInput
-                          availableVariables={availableVariables}
-                          t={t}
+                      <F label={tField('saveResultToVar')}>
+                        <Input
                           className='h-8 font-mono text-xs'
-                          value={step.account_action_id ?? ''}
-                          placeholder='${TARGET_ACTION_ID}'
-                          onValueChange={(value) =>
-                            update({ account_action_id: value || undefined })
+                          value={step.save_as ?? ''}
+                          placeholder='SOCIAL_ACTION_RESULT'
+                          onChange={(e) =>
+                            update({ save_as: e.target.value || undefined })
                           }
                         />
                       </F>
-                    )}
-                    <StepPanelToggle
-                      label={tField('requireCompletion')}
-                      checked={step.require_completion ?? false}
-                      onCheckedChange={(checked) =>
-                        update({ require_completion: checked })
-                      }
-                    />
-                    {step.require_completion && (
-                      <>
-                        <JsonTextarea
-                          label={tField('completionStepsJson')}
-                          value={step.completion_steps}
-                          onCommit={(next) =>
+                      <F label={tField('requireVerifiedTarget')}>
+                        <Input
+                          className='h-8 font-mono text-xs'
+                          value={step.require_verified_target ?? ''}
+                          placeholder='_people_target'
+                          onChange={(e) =>
                             update({
-                              completion_steps: Array.isArray(next)
-                                ? next
-                                : undefined
+                              require_verified_target:
+                                e.target.value || undefined
                             })
                           }
-                          placeholder='[]'
                         />
-                        <JsonTextarea
-                          label={tField('completionVerifyJson')}
-                          value={step.completion_verify}
-                          onCommit={(next) =>
-                            update({ completion_verify: next })
-                          }
-                          placeholder='{"element_exists":{"by":"text","value":"Done"}}'
-                        />
-                      </>
-                    )}
-                  </StepPanelSection>
+                      </F>
+                      {(step.type === 'content_interaction' ||
+                        step.type === 'connection_request') && (
+                        <div className='grid gap-2 sm:grid-cols-2'>
+                          <F label={tField('candidateEntityId')}>
+                            <VariableTextInput
+                              availableVariables={availableVariables}
+                              t={t}
+                              className='h-8 font-mono text-xs'
+                              value={step.candidate_entity_id ?? ''}
+                              placeholder='${CANDIDATE_ENTITY_ID}'
+                              onValueChange={(value) =>
+                                update({
+                                  candidate_entity_id: value || undefined
+                                })
+                              }
+                            />
+                          </F>
+                          <F label={tField('requireCandidateStatus')}>
+                            <Input
+                              className='h-8 font-mono text-xs'
+                              value={step.require_candidate_status ?? ''}
+                              placeholder='ready_to_connect'
+                              onChange={(e) =>
+                                update({
+                                  require_candidate_status:
+                                    e.target.value || undefined
+                                })
+                              }
+                            />
+                          </F>
+                        </div>
+                      )}
+                      {step.type === 'connection_request' && (
+                        <F label={tField('candidateLeaseToken')}>
+                          <VariableTextInput
+                            availableVariables={availableVariables}
+                            t={t}
+                            className='h-8 font-mono text-xs'
+                            value={step.candidate_lease_token ?? ''}
+                            placeholder='${CANDIDATE_LEASE_TOKEN}'
+                            onValueChange={(value) =>
+                              update({
+                                candidate_lease_token: value || undefined
+                              })
+                            }
+                          />
+                        </F>
+                      )}
+                      {step.type === 'content_interaction' && (
+                        <F label={tField('accountActionId')}>
+                          <VariableTextInput
+                            availableVariables={availableVariables}
+                            t={t}
+                            className='h-8 font-mono text-xs'
+                            value={step.account_action_id ?? ''}
+                            placeholder='${TARGET_ACTION_ID}'
+                            onValueChange={(value) =>
+                              update({ account_action_id: value || undefined })
+                            }
+                          />
+                        </F>
+                      )}
+                      <StepPanelToggle
+                        label={tField('requireCompletion')}
+                        checked={step.require_completion ?? false}
+                        onCheckedChange={(checked) =>
+                          update({ require_completion: checked })
+                        }
+                      />
+                      {step.require_completion && (
+                        <>
+                          <JsonTextarea
+                            label={tField('completionStepsJson')}
+                            value={step.completion_steps}
+                            onCommit={(next) =>
+                              update({
+                                completion_steps: Array.isArray(next)
+                                  ? next
+                                  : undefined
+                              })
+                            }
+                            placeholder='[]'
+                          />
+                          <JsonTextarea
+                            label={tField('completionVerifyJson')}
+                            value={step.completion_verify}
+                            onCommit={(next) =>
+                              update({ completion_verify: next })
+                            }
+                            placeholder='{"element_exists":{"by":"text","value":"Done"}}'
+                          />
+                        </>
+                      )}
+                    </StepPanelSection>
+                  </details>
                 </>
               )}
 

@@ -7,7 +7,6 @@ import {
   type RefObject
 } from 'react';
 import {
-  requestWebRtcKeyframe,
   startWebRtcStream,
   type WebRtcStreamController
 } from '../services/webrtc-stream';
@@ -78,23 +77,14 @@ export function useWebRtcVideo(
   // The ladder ran out. Distinct from `failed`, which is also true between
   // rungs while a retry is still coming.
   const [gaveUp, setGaveUp] = useState(false);
-  // Bumped by the stall recovery ladder, on the rung above the keyframe request.
-  // Part of streamKey so a bump rebuilds the session and the PeerConnection:
-  // that replaces a connection which may itself be the broken part, and creating
-  // a session also makes the adapter burst IDRs at the phone (controlplane
-  // startSession). It does not restart scrcpy — Manager.Start reuses a session
-  // whose profile already matches.
+  // Part of streamKey so a bump rebuilds the session and PeerConnection without
+  // restarting scrcpy; Manager.Start reuses a matching device stream.
   const [recoveryEpoch, setRecoveryEpoch] = useState(0);
   const recoveryAttemptRef = useRef(0);
   const recoveryTimerRef = useRef<number | null>(null);
   const recoveryInFlightRef = useRef(false);
   const recoverySlotRef = useRef<(() => void) | null>(null);
   const healthySinceRef = useRef(0);
-  // One keyframe per ladder cycle. It is the cheap rung — no black flash, no new
-  // session — but a stall it does not fix is a stall a second one will not fix
-  // either, and repeating it would stop the ladder ever reaching the rung that
-  // does work.
-  const keyframeUsedRef = useRef(false);
   const streamKey = useMemo(
     () =>
       [
@@ -143,7 +133,6 @@ export function useWebRtcVideo(
     // few seconds retry at zero backoff forever.
     if (now - healthySinceRef.current >= RECOVERY_RESET_AFTER_MS) {
       recoveryAttemptRef.current = 0;
-      keyframeUsedRef.current = false;
       setFailed(false);
       setGaveUp(false);
     }
@@ -185,34 +174,6 @@ export function useWebRtcVideo(
       if (recoveryInFlightRef.current) return;
       setStalled(true);
       healthySinceRef.current = 0;
-      const controller = controllerRef.current;
-      // `decoder_stalled` means bytes are arriving and nothing decodes: the
-      // reference chain is broken and a single IDR repairs it, keeping the
-      // connection and costing ~100ms against ~1s and a black flash for a
-      // rebuild. The other reasons mean no media at all, where a keyframe has
-      // nothing to travel over.
-      if (
-        reason === 'decoder_stalled' &&
-        !keyframeUsedRef.current &&
-        controller
-      ) {
-        keyframeUsedRef.current = true;
-        requestWebRtcKeyframe(controller.sessionId)
-          .then(() => {
-            // Re-arm rather than declaring victory. If the keyframe did not
-            // arrive the watcher reports the same stall a few seconds later and
-            // this branch is already spent, so the next report rebuilds. The
-            // attempt counter stays untouched, so a keyframe that works costs
-            // the ladder nothing.
-            controller.resumeWatcher();
-          })
-          .catch(() => {
-            // Includes the timeout from an adapter built before this endpoint
-            // existed. Not an error, just a rung that is not there.
-            scheduleRecovery(reason);
-          });
-        return;
-      }
       scheduleRecovery(reason);
     },
     [scheduleRecovery]
@@ -221,7 +182,6 @@ export function useWebRtcVideo(
   // A manual restart gets a full ladder, not whatever the last run left over.
   useEffect(() => {
     recoveryAttemptRef.current = 0;
-    keyframeUsedRef.current = false;
     setGaveUp(false);
   }, [restartKey]);
 

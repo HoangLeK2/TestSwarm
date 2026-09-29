@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from 'next-intl';
 import { useSearchParams } from 'next/navigation';
 import { enUS, vi } from 'date-fns/locale';
 import { Filter, Search, Users } from 'lucide-react';
+import { toast } from 'sonner';
 import {
   ACCOUNTS_PAGE_LIMIT,
   useAccounts,
@@ -30,6 +31,7 @@ import {
 import { cn } from '@/lib/utils';
 import { normalizeAccountState } from '../../lib/account-fsm';
 import { AccountLoginDialog } from '../account-login-dialog';
+import { formatFarmApiError } from '@/lib/format-farm-api-error';
 
 const STATUS_FILTERS: Array<AccountStateKey | 'all'> = [
   'all',
@@ -161,7 +163,12 @@ export function AccountList() {
           zIndex: 10_000
         });
         if (!ok) return;
-        deleteMutation.mutate(account.id);
+        deleteMutation.mutate(account.id, {
+          onSuccess: () => toast.success(t('deleteSuccess')),
+          onError: (mutationError) => {
+            toast.error(formatFarmApiError(mutationError, t('deleteFailed')));
+          }
+        });
       })();
     });
   }, [t, tCommon, statusLabel, dateLocale, confirm, deleteMutation, perms]);

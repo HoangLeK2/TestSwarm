@@ -494,10 +494,12 @@ func (s *Session) run() {
 					"error", err,
 					"scrcpy_output", strings.Join(output, " | "))
 			}
-			s.invalidateServerCache()
+			if !isADBUnavailable(err) {
+				s.invalidateServerCache()
+			}
 			if encoderAbortedNatively(output) {
 				s.skipToLastCodecLevel()
-			} else {
+			} else if s.shouldDegradeCodecAfterFailure(err) {
 				s.degradeCodecLevel()
 			}
 		} else if err == nil {
@@ -637,10 +639,29 @@ func (s *Session) reconnectBackoffCap(err error) time.Duration {
 }
 
 func (s *Session) shouldCoolDownAfterFailure(err error) bool {
-	if err == nil || s.currentCodecLevel() < MaxCodecLevel {
+	if err == nil {
+		return false
+	}
+	if isADBUnavailable(err) {
+		return true
+	}
+	if s.currentCodecLevel() < MaxCodecLevel {
 		return false
 	}
 	return strings.Contains(err.Error(), scrcpyHandshakeNotReadyFragment)
+}
+
+func isADBUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "adb: device") &&
+		(strings.Contains(message, "not found") || strings.Contains(message, "offline"))
+}
+
+func (s *Session) shouldDegradeCodecAfterFailure(err error) bool {
+	return !isADBUnavailable(err)
 }
 
 func (s *Session) adoptLaunchProfile(launched *LaunchedServer) {

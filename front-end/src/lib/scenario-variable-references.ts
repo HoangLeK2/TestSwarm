@@ -81,6 +81,58 @@ export function collectScenarioVariableReferences(value: unknown): string[] {
   return Array.from(references).sort((a, b) => a.localeCompare(b));
 }
 
+export type ScenarioVariableReferenceSync = {
+  variables: Record<string, unknown>;
+  managedNames: Set<string>;
+};
+
+/**
+ * Keep declared variables aligned with `${VAR}` tokens in the step tree.
+ * Only variables created here are removed; existing user values stay owned by
+ * the user even when a node temporarily references the same name.
+ */
+export function syncScenarioVariablesWithStepReferences(
+  previousSteps: unknown,
+  nextSteps: unknown,
+  variables: Record<string, unknown>,
+  managedNames: ReadonlySet<string>,
+  producedNames: ReadonlySet<string> = new Set()
+): ScenarioVariableReferenceSync {
+  const previousReferences = new Set(
+    collectScenarioVariableReferences(previousSteps)
+  );
+  const nextReferences = new Set(collectScenarioVariableReferences(nextSteps));
+  const nextVariables = { ...variables };
+  const nextManagedNames = new Set(managedNames);
+
+  nextReferences.forEach((name) => {
+    if (
+      !previousReferences.has(name) &&
+      !producedNames.has(name) &&
+      !(name in nextVariables)
+    ) {
+      nextVariables[name] = '';
+      nextManagedNames.add(name);
+    }
+  });
+
+  managedNames.forEach((name) => {
+    if (producedNames.has(name)) {
+      delete nextVariables[name];
+      nextManagedNames.delete(name);
+    }
+  });
+
+  managedNames.forEach((name) => {
+    if (!nextReferences.has(name)) {
+      delete nextVariables[name];
+      nextManagedNames.delete(name);
+    }
+  });
+
+  return { variables: nextVariables, managedNames: nextManagedNames };
+}
+
 function normalizeTagsValue(tags: string): string {
   return tags
     .split(',')

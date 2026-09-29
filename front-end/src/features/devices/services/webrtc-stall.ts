@@ -12,20 +12,10 @@
  * says ICE and DTLS are up, nothing more. Progress is measured from the
  * inbound-rtp counters and from those alone.
  *
- * Why the picture cannot come back on its own today: the deployed transport is
- * RTSP push (media-adapter -> go2rtc :8554). RTSP has no back-channel for a
- * receiver to report picture loss, so a browser PLI dies at go2rtc and never
- * reaches the phone — see rtspSink in
- * agent-boot/media-adapter/internal/adapters/outbound/rtspserver/remote_sink.go.
- * The only thing on the far side that asks scrcpy for an IDR on a viewer's
- * behalf is the attach burst in controlplane/client.go startSession.
- *
- * A stall report therefore has two possible answers, and the caller picks by
- * reason. `decoder_stalled` means bytes are arriving and nothing decodes — a
- * broken reference chain, which POST .../keyframe repairs in about 100ms with
- * the connection intact (then `resume()` re-arms this watcher to see whether it
- * worked). Anything else means no media at all, where a keyframe has nothing to
- * travel over, and only a fresh session helps.
+ * scrcpy does not have to emit a frame while the Android screen is unchanged.
+ * Flat RTP counters after at least one decoded frame are therefore healthy and
+ * must not trigger recovery. A real stall is either a failed connection, a
+ * missing first frame, or bytes continuing to arrive while decoding stops.
  */
 
 export type StallReason = 'connection_failed' | 'no_media' | 'decoder_stalled';
@@ -40,20 +30,9 @@ export type MediaSample = {
 
 export type StallThresholds = {
   /**
-   * Bytes flat for this long with a viewer attached = the media plane stopped.
-   *
-   * Derived, not guessed. A static screen is NOT a silent stream here: the
-   * adapter puts a 5s read deadline on the scrcpy video socket and asks the
-   * device for an IDR every time it expires (scrcpy/session.go
-   * connectAndRead), so a healthy stream cannot be byte-flat much beyond 5s
-   * however still the phone is. 10s is twice that, which leaves room for a
-   * slow encoder reset without turning an idle device into a false positive.
-   */
-  noMediaMs: number;
-  /**
    * Bytes arriving but no frame decoded for this long = the reference chain is
-   * broken (lost P-frame, no IDR coming). Shorter than noMediaMs because this
-   * state is never legitimate.
+   * broken. This is distinct from a still screen because RTP bytes keep
+   * increasing.
    */
   decoderStallMs: number;
   /** Budget for the very first decoded frame after the answer is applied. */
@@ -61,7 +40,6 @@ export type StallThresholds = {
 };
 
 export const DEFAULT_STALL_THRESHOLDS: StallThresholds = {
-  noMediaMs: 10_000,
   decoderStallMs: 3_000,
   firstFrameMs: 12_000
 };
@@ -83,12 +61,13 @@ export function classifyStall(
   }
   if (latest.framesDecoded > anchor.framesDecoded) return null;
   const ageMs = latest.at - anchor.at;
+  if (anchor.framesDecoded === 0) {
+    return ageMs >= thresholds.firstFrameMs ? 'no_media' : null;
+  }
   if (latest.bytesReceived > anchor.bytesReceived) {
     return ageMs >= thresholds.decoderStallMs ? 'decoder_stalled' : null;
   }
-  const budget =
-    anchor.framesDecoded === 0 ? thresholds.firstFrameMs : thresholds.noMediaMs;
-  return ageMs >= budget ? 'no_media' : null;
+  return null;
 }
 
 /**
@@ -244,38 +223,6 @@ export function resetAttachSlotsForTest(): void {
   activeAttaches = 0;
   interactiveAttachWaiters.length = 0;
   previewAttachWaiters.length = 0;
-}
-
-/**
- * Retry IDR requests while a newly-connected viewer is still waiting for its
- * first decoded frame. The publisher applies its own per-device rate gate, so
- * these retries stay bounded and cannot turn a slow join into an encoder loop.
- */
-export const FIRST_FRAME_KEYFRAME_RETRY_DELAYS_MS = [3_200, 6_500] as const;
-
-export function scheduleFirstFrameKeyframeRetries({
-  hasFrame,
-  isConnected,
-  requestKeyframe,
-  delaysMs = FIRST_FRAME_KEYFRAME_RETRY_DELAYS_MS
-}: {
-  hasFrame: () => boolean;
-  isConnected: () => boolean;
-  requestKeyframe: () => Promise<void>;
-  delaysMs?: readonly number[];
-}): () => void {
-  let stopped = false;
-  const timers = delaysMs.map((delayMs) =>
-    setTimeout(() => {
-      if (stopped || hasFrame() || !isConnected()) return;
-      void requestKeyframe().catch(() => {});
-    }, delayMs)
-  );
-  return () => {
-    if (stopped) return;
-    stopped = true;
-    timers.forEach((timer) => clearTimeout(timer));
-  };
 }
 
 /** Read one inbound-rtp video sample. Returns null when there is no video yet. */

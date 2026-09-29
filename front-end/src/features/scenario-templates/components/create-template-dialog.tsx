@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/dialog';
 import { FlowEditor } from '@/features/campaigns/components/flow-editor/flow-editor';
 import { canPersistScenario } from '@/features/campaigns/components/flow-editor/nested-step-edit';
+import { useStepVariableSync } from '@/features/campaigns/hooks/use-step-variable-sync';
 import { VariableEditor } from '@/components/variable-editor';
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
@@ -47,6 +48,12 @@ export function CreateTemplateDialog() {
   const [childStepEditorOpen, setChildStepEditorOpen] = useState(false);
   const [steps, setSteps] = useState<FlowStep[]>([]);
   const [variables, setVariables] = useState<Record<string, any>>({});
+  const stepVariableSync = useStepVariableSync();
+  const handleStepsChange = (nextSteps: FlowStep[]) => {
+    const synced = stepVariableSync.sync(steps, nextSteps, variables);
+    setSteps(nextSteps);
+    setVariables(synced.variables);
+  };
   const { mutate, mutateAsync, isPending, error } = useCreateScenarioTemplate();
   const router = useRouter();
   const locale = useLocale();
@@ -80,6 +87,7 @@ export function CreateTemplateDialog() {
           reset();
           setSteps([]);
           setVariables({});
+          stepVariableSync.reset();
           setOpen(false);
         }
       }
@@ -111,6 +119,7 @@ export function CreateTemplateDialog() {
       reset();
       setSteps([]);
       setVariables({});
+      stepVariableSync.reset();
       setOpen(false);
       router.push(
         `/${locale}/dashboard/device-farm/control?templateId=${encodeURIComponent(created.id)}`
@@ -184,7 +193,7 @@ export function CreateTemplateDialog() {
             <FlowEditor
               nestedInDialog
               steps={steps}
-              onChange={setSteps}
+              onChange={handleStepsChange}
               onChildStepEditorOpenChange={setChildStepEditorOpen}
               maxHeight='300px'
             />

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -11,6 +12,8 @@ from db.seeds.scenario_templates import (
     _FB_LOGIN_PROFILE_NATIVE,
 )
 import tasks.scenario.steps.app_automation as app_automation_steps
+from tasks.scenario.context import ScenarioContext
+from tasks.scenario.executor import ScenarioExecutor
 from tasks.scenario.steps.app_automation import (
     handle_assert_app_state,
     handle_fill_form,
@@ -70,6 +73,34 @@ _XML_WITH_FACEBOOK_AUTH_CODE_DIRECT = """
   <node text="Đi đến ứng dụng xác thực" class="android.widget.TextView" bounds="[56,405][1204,527]" />
   <node text="" content-desc="Mã" class="android.widget.EditText" bounds="[112,1560][1022,1632]" />
   <node text="Tiếp tục" class="android.widget.Button" bounds="[531,1933][730,2007]" />
+</hierarchy>
+"""
+
+_XML_FACEBOOK_CAPTCHA_VI = """
+<hierarchy>
+  <node text="Hãy nhập các ký tự mà bạn nhìn thấy" class="android.widget.TextView" bounds="[50,180][1010,260]" />
+  <node text="" class="android.widget.EditText" bounds="[90,720][990,840]" />
+  <node text="Tiếp tục" class="android.widget.Button" bounds="[90,900][990,1020]" />
+</hierarchy>
+"""
+
+_XML_FACEBOOK_CAPTCHA_KEYBOARD_PANNED = """
+<hierarchy>
+  <node text="" class="android.widget.EditText" bounds="[90,420][990,540]" />
+  <node text="Tiếp tục" class="android.widget.Button" bounds="[90,600][990,720]" />
+  <node text="123" package="com.google.android.inputmethod.latin" class="android.widget.Button" bounds="[0,1400][360,1600]" />
+</hierarchy>
+"""
+
+_XML_FACEBOOK_LOADING = """
+<hierarchy>
+  <node text="Đang xử lý" class="android.widget.TextView" bounds="[50,180][1010,260]" />
+</hierarchy>
+"""
+
+_XML_FACEBOOK_HOME = """
+<hierarchy>
+  <node text="Home" class="android.widget.TextView" bounds="[50,180][1010,260]" />
 </hierarchy>
 """
 
@@ -272,6 +303,31 @@ class FakeDevice:
 
     def tap(self, x: int, y: int) -> None:
         self.taps.append((x, y))
+        current = self._xmls[self._xml_idx]
+        if (
+            "Hãy nhập các ký tự mà bạn nhìn thấy" in current
+            and y >= 900
+            and self._xml_idx < len(self._xmls) - 1
+        ):
+            self._xml_idx += 1
+
+
+class DelayedCaptchaDevice(FakeDevice):
+    def __init__(self) -> None:
+        super().__init__([
+            _XML_FACEBOOK_LOGIN_EN,
+            _XML_FACEBOOK_LOADING,
+            _XML_FACEBOOK_CAPTCHA_VI,
+            _XML_WITH_FACEBOOK_AUTH_CODE_DIRECT,
+        ])
+        self._loading_dumps = 0
+
+    def hierarchy_xml(self, force_refresh: bool = False) -> str:
+        if self._xml_idx == 1 and force_refresh:
+            self._loading_dumps += 1
+            if self._loading_dumps >= 2:
+                self._xml_idx = 2
+        return super().hierarchy_xml(force_refresh=force_refresh)
 
 
 def _sc(xml: str = _XML):
@@ -475,6 +531,403 @@ def test_builtin_facebook_login_inputs_totp_when_facebook_skips_method_picker():
     assert result["post_submit_action_trace"] == []
     assert result["post_submit_locator_trace"]["auth_code"]["matched"] is True
     assert any("Continue" in clicked or "Tiếp tục" in clicked for clicked in sc.device.u2.clicked)
+
+
+def test_builtin_facebook_login_waits_for_manual_captcha_then_continues_to_totp():
+    prompts: list[dict] = []
+    sc = _sc([
+        _XML_FACEBOOK_LOGIN_EN,
+        _XML_FACEBOOK_CAPTCHA_VI,
+        _XML_WITH_FACEBOOK_AUTH_CODE_DIRECT,
+    ])
+    sc.scenario = {
+        "app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
+        "_manual_input_handler": lambda request: prompts.append(request) or "314015",
+    }
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.01}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is True
+    assert prompts == [
+        {
+            "kind": "captcha",
+            "challenge_id": "visual_code",
+            "prompt": "Hãy nhập các ký tự mà bạn nhìn thấy",
+            "package": "com.facebook.katana",
+        }
+    ]
+    assert sc.device.u2.sent == ["account-user", "account-pw", "314015", "123456"]
+    assert result["manual_input_trace"] == {
+        "challenge_id": "visual_code",
+        "kind": "captcha",
+        "prompt": "Hãy nhập các ký tự mà bạn nhìn thấy",
+        "package": "com.facebook.katana",
+        "submitted": True,
+    }
+    assert any("Tiếp tục" in clicked for clicked in sc.device.u2.clicked)
+
+
+def test_manual_challenge_runtime_is_profile_driven_not_facebook_package():
+    profile = deepcopy(_FB_LOGIN_PROFILE_NATIVE)
+    profile["package"] = "com.example.portal"
+    prompts: list[dict] = []
+    sc = _sc([
+        _XML_FACEBOOK_LOGIN_EN,
+        _XML_FACEBOOK_CAPTCHA_VI,
+        _XML_WITH_FACEBOOK_AUTH_CODE_DIRECT,
+    ])
+    sc.scenario = {
+        "app_automation_profile": profile,
+        "_manual_input_handler": lambda request: prompts.append(request) or "314015",
+    }
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.01}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is True
+    assert prompts[0]["challenge_id"] == "visual_code"
+    assert prompts[0]["package"] == "com.example.portal"
+    assert sc.device.u2.sent == ["account-user", "account-pw", "314015", "123456"]
+
+
+def test_builtin_facebook_login_waits_for_delayed_captcha():
+    prompts: list[dict] = []
+    sc = _sc()
+    sc.device = DelayedCaptchaDevice()
+    sc.scenario = {
+        "app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
+        "_manual_input_handler": lambda request: prompts.append(request) or "314015",
+    }
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.2, "poll": 0.1}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is True
+    assert len(prompts) == 1
+    assert sc.device.u2.sent == ["account-user", "account-pw", "314015", "123456"]
+
+
+def test_builtin_facebook_login_allows_replacement_captcha():
+    values = iter(("wrong-code", "314015"))
+    prompts: list[dict] = []
+    sc = _sc([
+        _XML_FACEBOOK_LOGIN_EN,
+        _XML_FACEBOOK_CAPTCHA_VI,
+        _XML_FACEBOOK_CAPTCHA_VI,
+        _XML_WITH_FACEBOOK_AUTH_CODE_DIRECT,
+    ])
+    sc.scenario = {
+        "app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
+        "_manual_input_handler": lambda request: prompts.append(request) or next(values),
+    }
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.1}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is True
+    assert len(prompts) == 2
+    assert sc.device.u2.sent == [
+        "account-user",
+        "account-pw",
+        "wrong-code",
+        "314015",
+        "123456",
+    ]
+    assert len(result["manual_input_traces"]) == 2
+
+
+def test_builtin_facebook_login_handles_captcha_after_totp_submit():
+    prompts: list[dict] = []
+    sc = _sc([
+        _XML_FACEBOOK_LOGIN_EN,
+        _XML_WITH_FACEBOOK_AUTH_CODE_DIRECT,
+        _XML_FACEBOOK_CAPTCHA_VI,
+        _XML_FACEBOOK_HOME,
+    ])
+    sc.scenario = {
+        "app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
+        "_manual_input_handler": lambda request: prompts.append(request) or "314015",
+    }
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.1}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is True
+    assert len(prompts) == 1
+    assert sc.device.u2.sent == ["account-user", "account-pw", "123456", "314015"]
+
+
+def test_builtin_facebook_login_does_not_type_captcha_after_cancel():
+    cancel_event = threading.Event()
+    sc = _sc([_XML_FACEBOOK_LOGIN_EN, _XML_FACEBOOK_CAPTCHA_VI])
+    sc.cancel_event = cancel_event
+    sc.scenario = {
+        "app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
+        "_manual_input_handler": lambda _request: cancel_event.set() or "314015",
+    }
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.1}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is False
+    assert "cancelled" in result["message"]
+    assert sc.device.u2.sent == ["account-user", "account-pw"]
+
+
+def test_builtin_facebook_login_does_not_type_captcha_when_cancelled_during_refresh():
+    cancel_event = threading.Event()
+    sc = _sc([_XML_FACEBOOK_LOGIN_EN, _XML_FACEBOOK_CAPTCHA_VI])
+    sc.cancel_event = cancel_event
+    cancel_on_next_refresh = False
+    hierarchy_xml = sc.device.hierarchy_xml
+
+    def input_handler(_request):
+        nonlocal cancel_on_next_refresh
+        cancel_on_next_refresh = True
+        return "314015"
+
+    def hierarchy_with_cancel(force_refresh: bool = False):
+        nonlocal cancel_on_next_refresh
+        if force_refresh and cancel_on_next_refresh:
+            cancel_on_next_refresh = False
+            cancel_event.set()
+        return hierarchy_xml(force_refresh=force_refresh)
+
+    sc.device.hierarchy_xml = hierarchy_with_cancel
+    sc.scenario = {
+        "app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
+        "_manual_input_handler": input_handler,
+    }
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.1}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is False
+    assert "cancelled" in result["message"]
+    assert sc.device.u2.sent == ["account-user", "account-pw"]
+    assert not sc.device.taps
+
+
+def test_builtin_facebook_captcha_submits_when_keyboard_pans_prompt_offscreen():
+    sc = _sc([
+        _XML_FACEBOOK_LOGIN_EN,
+        _XML_FACEBOOK_CAPTCHA_VI,
+        _XML_FACEBOOK_CAPTCHA_KEYBOARD_PANNED,
+        _XML_WITH_FACEBOOK_AUTH_CODE_DIRECT,
+    ])
+    send_keys = sc.device.u2.send_keys
+    tap = sc.device.tap
+
+    def send_keys_with_keyboard_pan(text: str) -> None:
+        send_keys(text)
+        if text == "314015" and sc.device._xml_idx == 1:
+            sc.device._xml_idx = 2
+
+    def tap_with_keyboard_pan(x: int, y: int) -> None:
+        if sc.device._xml_idx == 2 and y >= 600:
+            sc.device.taps.append((x, y))
+            sc.device._xml_idx = 3
+            return
+        tap(x, y)
+
+    sc.device.u2.send_keys = send_keys_with_keyboard_pan
+    sc.device.tap = tap_with_keyboard_pan
+    sc.scenario = {
+        "app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
+        "_manual_input_handler": lambda _request: "314015",
+    }
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.1}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is True
+    assert sc.device.u2.sent == ["account-user", "account-pw", "314015", "123456"]
+
+
+def test_builtin_facebook_login_refuses_stale_captcha_bounds_after_manual_wait():
+    sc = _sc([
+        _XML_FACEBOOK_LOGIN_EN,
+        _XML_FACEBOOK_CAPTCHA_VI,
+        _XML_FACEBOOK_HOME,
+    ])
+
+    def move_screen_before_returning(_request):
+        sc.device._xml_idx = 2
+        return "314015"
+
+    sc.scenario = {
+        "app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
+        "_manual_input_handler": move_screen_before_returning,
+    }
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.1}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is False
+    assert "screen changed while awaiting input" in result["message"]
+    assert sc.device.u2.sent == ["account-user", "account-pw"]
+    assert not sc.device.taps
+
+
+def test_builtin_facebook_captcha_submit_label_requires_exact_control_text():
+    ambiguous_submit = _XML_FACEBOOK_CAPTCHA_VI.replace(
+        'text="Tiếp tục"', 'text="Tiếp tục với Hoa"'
+    )
+    sc = _sc([_XML_FACEBOOK_LOGIN_EN, ambiguous_submit])
+    sc.scenario = {
+        "app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
+        "_manual_input_handler": lambda _request: "314015",
+    }
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.1}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is False
+    assert "submit control could not be identified safely" in result["message"]
+    assert not any("Tiếp tục với Hoa" in clicked for clicked in sc.device.u2.clicked)
+
+
+def test_builtin_facebook_captcha_accepts_unique_content_description_button():
+    content_desc_submit = _XML_FACEBOOK_CAPTCHA_VI.replace(
+        'text="Tiếp tục"', 'text="" content-desc="Tiếp tục"'
+    )
+    sc = _sc([
+        _XML_FACEBOOK_LOGIN_EN,
+        content_desc_submit,
+        _XML_WITH_FACEBOOK_AUTH_CODE_DIRECT,
+    ])
+    sc.scenario = {
+        "app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
+        "_manual_input_handler": lambda _request: "314015",
+    }
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.1}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is True
+    assert sc.device.u2.sent == ["account-user", "account-pw", "314015", "123456"]
+
+
+def test_builtin_facebook_captcha_refuses_duplicate_submit_controls():
+    duplicate_submit = _XML_FACEBOOK_CAPTCHA_VI.replace(
+        "</hierarchy>",
+        '<node text="Tiếp tục" class="android.widget.Button" '
+        'bounds="[90,1040][990,1160]" /></hierarchy>',
+    )
+    prompts: list[dict] = []
+    sc = _sc([_XML_FACEBOOK_LOGIN_EN, duplicate_submit])
+    sc.scenario = {
+        "app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
+        "_manual_input_handler": lambda request: prompts.append(request) or "314015",
+    }
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.1}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is False
+    assert "ambiguous candidates" in result["message"]
+    assert prompts == []
+    assert sc.device.u2.sent == ["account-user", "account-pw"]
+
+
+def test_builtin_facebook_login_nested_branch_keeps_manual_input_handler():
+    prompts: list[dict] = []
+    device = FakeDevice([
+        _XML_FACEBOOK_LOGIN_EN,
+        _XML_FACEBOOK_CAPTCHA_VI,
+        _XML_WITH_FACEBOOK_AUTH_CODE_DIRECT,
+    ])
+    scenario = {
+        "steps": [
+            {
+                "type": "if_variable",
+                "name": "NEEDS_LOGIN",
+                "equals": "yes",
+                "then": [
+                    {
+                        "type": "login_if_needed",
+                        "profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
+                        "implicit_wait": {"timeout": 0.1, "poll": 0.1},
+                    }
+                ],
+                "else": [],
+            }
+        ],
+        "variables": {
+            "NEEDS_LOGIN": "yes",
+            "__ACCOUNT_USERNAME__": "account-user",
+            "__ACCOUNT_PASSWORD__": "account-pw",
+            "__ACCOUNT_TOTP_CODE__": "123456",
+        },
+        "_manual_input_handler": lambda request: prompts.append(request) or "314015",
+    }
+
+    result = ScenarioExecutor(ScenarioContext.from_args(device, scenario)).run()
+
+    assert result["success"] is True
+    assert len(prompts) == 1
+    assert device.u2.sent == ["account-user", "account-pw", "314015", "123456"]
 
 
 def test_fill_form_inputs_values_and_submits():

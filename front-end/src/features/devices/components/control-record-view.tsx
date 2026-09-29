@@ -4065,6 +4065,11 @@ export function ControlRecordView({
         onOpenChange={setRequirementsDialogOpen}
         requirements={save.requirements}
         onChange={save.setRequirements}
+        sessionLoginHref={
+          selectedPrimaryAccount
+            ? ROUTES.ACCOUNTS.LOGIN(selectedPrimaryAccount.id)
+            : ROUTES.ACCOUNTS.ROOT
+        }
       />
 
       <ControlRecordRecoveryDialog

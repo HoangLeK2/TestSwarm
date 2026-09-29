@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  addManualLoginChallenge,
   addLocator,
   addPopupWatcher,
   appAutomationProfile,
@@ -13,9 +14,43 @@ import {
   patchLoginField,
   patchPostSubmitLoginField,
   patchLoginRecipe,
-  patchLoginTarget
+  patchLoginTarget,
+  patchManualLoginChallenge,
+  removeManualLoginChallenge
   // @ts-expect-error Node --experimental-strip-types test files import TS sources by extension.
 } from './app-automation-profile-model.ts';
+
+test('profile model manages reusable manual login challenges', () => {
+  let step: any = {
+    type: 'login_if_needed',
+    profile: { package: 'com.example.app', semantic_locators: {} }
+  };
+
+  step = addManualLoginChallenge(step);
+  step = patchManualLoginChallenge(step, 0, {
+    name: 'visual_code',
+    kind: 'captcha',
+    detect_locator: 'challenge_prompt',
+    input_locator: 'challenge_field',
+    submit_locator: 'challenge_submit'
+  });
+
+  assert.deepEqual(step.profile.login_recipe.manual_challenges, [
+    {
+      name: 'visual_code',
+      kind: 'captcha',
+      prompt: '',
+      detect_locator: 'challenge_prompt',
+      input_locator: 'challenge_field',
+      submit_locator: 'challenge_submit',
+      max_attempts: 3,
+      wait_after_s: 0.5
+    }
+  ]);
+
+  step = removeManualLoginChallenge(step, 0);
+  assert.deepEqual(step.profile.login_recipe.manual_challenges, []);
+});
 
 test('csv helpers trim empty items', () => {
   assert.deepEqual(csvToList(' Home, Profile, ,'), ['Home', 'Profile']);

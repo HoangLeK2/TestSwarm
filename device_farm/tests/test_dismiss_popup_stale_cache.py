@@ -71,6 +71,24 @@ class _FakeDevice:
         self._cached = None
 
 
+class _XmlDevice(_FakeDevice):
+    def __init__(self, xml: str, selectors: set[tuple[str, str]]) -> None:
+        super().__init__([])
+        self.xml = xml
+        self.selectors = selectors
+        self.clicked: list[tuple[str, str]] = []
+        self.u2 = self
+
+    def hierarchy_xml(self, force_refresh: bool = False) -> str:
+        return self.xml
+
+    def find_element(self, by, value, timeout=0):
+        return (by, value) if (by, value) in self.selectors else None
+
+    def element_click(self, eid):
+        self.clicked.append(eid)
+
+
 def test_popup_that_renders_after_the_last_dump_is_still_seen() -> None:
     """The cache is warm and holds a popup-free screen; the popup is up now."""
     device = _FakeDevice([])
@@ -118,3 +136,37 @@ def test_dismiss_popup_step_reports_every_popup_it_closed() -> None:
     handle_dismiss_popup(sc, {"type": "dismiss_popup", "retries": 3}, 0, result)
 
     assert result.get("dismissed_count") == 3, result
+
+
+def test_dismisses_google_saved_password_popup_by_semantic_close_label() -> None:
+    device = _XmlDevice(
+        """<hierarchy>
+          <node text="Sign in to Facebook with your saved password" />
+          <node text="×" class="android.widget.Button" clickable="true" />
+          <node text="Continue" class="android.widget.Button" clickable="true" />
+        </hierarchy>""",
+        {("text", "×")},
+    )
+
+    assert _auto_dismiss_popup(device) is True
+    assert device.clicked == [("text", "×")]
+
+
+def test_does_not_click_unscoped_or_ambiguous_close_glyph() -> None:
+    unscoped = _XmlDevice(
+        '<hierarchy><node text="×" clickable="true" /></hierarchy>',
+        {("text", "×")},
+    )
+    ambiguous = _XmlDevice(
+        """<hierarchy>
+          <node text="Sign in to Facebook with your saved password" />
+          <node text="×" clickable="true" />
+          <node content-desc="Close" clickable="true" />
+        </hierarchy>""",
+        {("text", "×"), ("content-desc", "Close")},
+    )
+
+    assert _auto_dismiss_popup(unscoped) is False
+    assert _auto_dismiss_popup(ambiguous) is False
+    assert unscoped.clicked == []
+    assert ambiguous.clicked == []

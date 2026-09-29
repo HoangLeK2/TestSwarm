@@ -1142,6 +1142,85 @@ _FB_LOGIN_PROFILE_NATIVE: Dict[str, Any] = {
                 },
             ]
         },
+        "manual_captcha_prompt": {
+            "candidates": [
+                {
+                    "by": "text",
+                    "value": "Hãy nhập các ký tự mà bạn nhìn thấy",
+                },
+                {
+                    "by": "description",
+                    "value": "Hãy nhập các ký tự mà bạn nhìn thấy",
+                },
+                {"by": "text", "value": "Enter the characters you see"},
+                {
+                    "by": "description",
+                    "value": "Enter the characters you see",
+                },
+                {
+                    "by": "text",
+                    "value": "Enter the characters you can see",
+                },
+                {
+                    "by": "description",
+                    "value": "Enter the characters you can see",
+                },
+            ]
+        },
+        "manual_captcha_field": {
+            "candidates": [
+                {
+                    "class_name": "android.widget.EditText",
+                    "region": "form",
+                    "allow_coordinate_fallback": True,
+                }
+            ],
+            "min_score": 0.55,
+        },
+        "manual_captcha_submit": {
+            "candidates": [
+                {
+                    "by": "text",
+                    "value": "Tiếp tục",
+                    "class_name": "android.widget.Button",
+                },
+                {
+                    "by": "description",
+                    "value": "Tiếp tục",
+                    "class_name": "android.widget.Button",
+                },
+                {
+                    "by": "text",
+                    "value": "Continue",
+                    "class_name": "android.widget.Button",
+                },
+                {
+                    "by": "description",
+                    "value": "Continue",
+                    "class_name": "android.widget.Button",
+                },
+                {
+                    "by": "text",
+                    "value": "Next",
+                    "class_name": "android.widget.Button",
+                },
+                {
+                    "by": "description",
+                    "value": "Next",
+                    "class_name": "android.widget.Button",
+                },
+                {
+                    "by": "text",
+                    "value": "Gửi",
+                    "class_name": "android.widget.Button",
+                },
+                {
+                    "by": "text",
+                    "value": "Submit",
+                    "class_name": "android.widget.Button",
+                },
+            ]
+        },
     },
     "login_recipe": {
         "detect_logged_in": _FB_DETECT_LOGGED_IN,
@@ -1192,6 +1271,17 @@ _FB_LOGIN_PROFILE_NATIVE: Dict[str, Any] = {
             },
         },
         "post_submit": {"tap_text_any": ["Tiếp tục", "Continue", "Next"]},
+        "manual_challenges": [
+            {
+                "name": "visual_code",
+                "kind": "captcha",
+                "detect_locator": "manual_captcha_prompt",
+                "input_locator": "manual_captcha_field",
+                "submit_locator": "manual_captcha_submit",
+                "max_attempts": 3,
+                "wait_after_s": 0.5,
+            }
+        ],
     },
 }
 
@@ -1297,6 +1387,41 @@ def _fb_app_start_steps(
             "id": f"{prefix}_dismiss_popups",
             "type": "dismiss_popup",
             "retries": 2,
+        },
+    ]
+
+
+def _fb_post_login_restart_steps(prefix: str) -> List[Dict[str, Any]]:
+    """Restart native Facebook after credentials/TOTP before session proof."""
+    return [
+        {
+            "id": f"{prefix}_post_login_wait",
+            "type": "wait",
+            "seconds": 5,
+        },
+        {
+            "id": f"{prefix}_post_login_stop",
+            "type": "stop_app",
+            "package": "com.facebook.katana",
+        },
+        {
+            "id": f"{prefix}_post_login_restart_delay",
+            "type": "wait",
+            "seconds": 1,
+        },
+        {
+            "id": f"{prefix}_post_login_relaunch",
+            "type": "launch_app",
+            "package": "com.facebook.katana",
+            "stop_before": True,
+            "use_monkey": True,
+            "wait_after": 3,
+        },
+        {
+            "id": f"{prefix}_post_login_relaunch_stable",
+            "type": "wait_stable",
+            "timeout": 8,
+            "stable_duration": 0.5,
         },
     ]
 
@@ -1500,6 +1625,7 @@ def _fb_session_guard_steps(
                     "profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
                     "clear_first": True,
                 },
+                *_fb_post_login_restart_steps(prefix),
                 # login_if_needed returns the moment it taps submit, and the
                 # confirm gate below only *reads* the screen. Facebook answers a
                 # fresh login with a queue of popups (save login info, turn on

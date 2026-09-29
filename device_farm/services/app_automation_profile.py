@@ -194,6 +194,29 @@ class LoginPostSubmitAction(LoginSubmit):
     wait_after_s: float = Field(default=0.5, ge=0.0, le=10.0)
 
 
+class ManualLoginChallenge(StrictProfileModel):
+    """Profile-owned handoff for a value an operator must read and enter."""
+
+    name: str
+    kind: str = "text"
+    prompt: str = ""
+    detect_locator: str
+    input_locator: str
+    submit_locator: str
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    wait_after_s: float = Field(default=0.5, ge=0.0, le=10.0)
+
+    @model_validator(mode="after")
+    def normalize_identity(self) -> "ManualLoginChallenge":
+        self.name = _clean_text(self.name)
+        self.kind = _clean_text(self.kind).casefold()
+        if not self.name:
+            raise ValueError("manual challenge name is required")
+        if not self.kind:
+            raise ValueError("manual challenge kind is required")
+        return self
+
+
 class LoginRecipe(StrictProfileModel):
     detect_logged_in: dict[str, Any]
     fields: dict[str, LoginField] = Field(min_length=1)
@@ -201,6 +224,7 @@ class LoginRecipe(StrictProfileModel):
     post_submit_actions: list[LoginPostSubmitAction] = Field(default_factory=list)
     post_submit_fields: dict[str, LoginField] = Field(default_factory=dict)
     post_submit: LoginSubmit | None = None
+    manual_challenges: list[ManualLoginChallenge] = Field(default_factory=list)
     blocked_text_any: list[str] = Field(default_factory=lambda: ["captcha", "2fa", "verification"])
 
 
@@ -271,6 +295,23 @@ class AppAutomationProfile(StrictProfileModel):
                 raise ValueError(
                     f"login post-submit action references unknown locator {self.login_recipe.post_submit.locator!r}"
                 )
+            challenge_names: set[str] = set()
+            for challenge in self.login_recipe.manual_challenges:
+                if challenge.name in challenge_names:
+                    raise ValueError(
+                        f"duplicate manual challenge name {challenge.name!r}"
+                    )
+                challenge_names.add(challenge.name)
+                for role, locator_name in (
+                    ("detect", challenge.detect_locator),
+                    ("input", challenge.input_locator),
+                    ("submit", challenge.submit_locator),
+                ):
+                    if locator_name not in locator_names:
+                        raise ValueError(
+                            f"manual challenge {challenge.name!r} {role} references "
+                            f"unknown locator {locator_name!r}"
+                        )
         for recipe_name, recipe in self.form_recipes.items():
             for field_name, field in recipe.fields.items():
                 if field.locator not in locator_names:

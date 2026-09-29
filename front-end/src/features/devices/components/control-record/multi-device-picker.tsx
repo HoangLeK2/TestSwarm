@@ -18,6 +18,8 @@ import {
 import { isManualControlBlockedByAutomation } from '@/features/devices/lib/control-record-device-state';
 
 export type MultiDevicePickerOption = {
+  name?: string;
+  display_name?: string;
   brand: string;
   model: string;
   serial: string;

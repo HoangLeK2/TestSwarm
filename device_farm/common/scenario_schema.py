@@ -517,7 +517,9 @@ _STEP_SCHEMA_BASE: Dict[str, Dict[str, Any]] = {
             "Profile-driven login. Detects logged-in state first, fills login_recipe fields from "
             "account/scenario/variables/secret references, then submits. Optional "
             "login_recipe.post_submit_actions can navigate intermediate 2FA screens before "
-            "post_submit_fields such as account.totp_code are entered."
+            "post_submit_fields such as account.totp_code are entered. Profile-declared "
+            "login_recipe.manual_challenges can pause for reusable operator input without "
+            "binding the executor to one platform or app."
         ),
     },
     "platform_session_gate": {

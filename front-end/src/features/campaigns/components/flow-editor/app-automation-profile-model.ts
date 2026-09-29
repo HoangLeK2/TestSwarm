@@ -34,6 +34,18 @@ export type LoginRecipe = {
   post_submit_actions?: LoginPostSubmitAction[];
   post_submit_fields?: Record<string, LoginField>;
   post_submit?: LoginSubmit;
+  manual_challenges?: ManualLoginChallenge[];
+};
+
+export type ManualLoginChallenge = {
+  name?: string;
+  kind?: string;
+  prompt?: string;
+  detect_locator?: string;
+  input_locator?: string;
+  submit_locator?: string;
+  max_attempts?: number;
+  wait_after_s?: number;
 };
 
 export type LoginField = {
@@ -241,6 +253,49 @@ export function patchLoginRecipe(
       ...patch
     }
   });
+}
+
+export function addManualLoginChallenge(step: FlowStep): FlowStep {
+  const profile = appAutomationProfile(step);
+  const recipe = ensureLoginRecipe(profile);
+  const challenges = [...(recipe.manual_challenges ?? [])];
+  const ordinal = challenges.length + 1;
+  challenges.push({
+    name: `manual_challenge_${ordinal}`,
+    kind: 'text',
+    prompt: '',
+    detect_locator: '',
+    input_locator: '',
+    submit_locator: '',
+    max_attempts: 3,
+    wait_after_s: 0.5
+  });
+  return patchLoginRecipe(step, { manual_challenges: challenges });
+}
+
+export function patchManualLoginChallenge(
+  step: FlowStep,
+  index: number,
+  patch: Partial<ManualLoginChallenge>
+): FlowStep {
+  const profile = appAutomationProfile(step);
+  const recipe = ensureLoginRecipe(profile);
+  const challenges = [...(recipe.manual_challenges ?? [])];
+  if (!challenges[index]) return step;
+  challenges[index] = { ...challenges[index], ...patch };
+  return patchLoginRecipe(step, { manual_challenges: challenges });
+}
+
+export function removeManualLoginChallenge(
+  step: FlowStep,
+  index: number
+): FlowStep {
+  const profile = appAutomationProfile(step);
+  const recipe = ensureLoginRecipe(profile);
+  const challenges = (recipe.manual_challenges ?? []).filter(
+    (_challenge, challengeIndex) => challengeIndex !== index
+  );
+  return patchLoginRecipe(step, { manual_challenges: challenges });
 }
 
 export function patchLoginField(

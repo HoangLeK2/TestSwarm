@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import queue
+import threading
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -220,6 +223,102 @@ async def test_preview_stream_passes_org_scenario_registry_for_run_scenario(monk
     assert response.status_code == 200
     assert captured["scenario_registry"] is registry
     assert '"event": "done"' in response.text
+
+
+@pytest.mark.anyio
+async def test_preview_stream_accepts_manual_input_and_continues(monkeypatch):
+    from api.routes.device_control import scenarios as scenario_routes
+
+    captured: dict[str, str] = {}
+    monkeypatch.setattr(
+        scenario_routes,
+        "uuid4",
+        lambda: type("FixedUuid", (), {"hex": "manualinput123456"})(),
+    )
+    monkeypatch.setattr(
+        scenario_routes,
+        "caller_auth_from_request",
+        lambda _request: AuthContext(
+            user_id="user-1",
+            token_type="access",
+            raw_token="test",
+            org_id="org-1",
+        ),
+    )
+    monkeypatch.setattr(scenario_routes, "_apply_preview_variables", AsyncMock())
+
+    def fake_run_scenario_on_device(*_args, **kwargs):
+        handler = kwargs["manual_input_handler"]
+        captured["text"] = handler(
+            {
+                "kind": "captcha",
+                "challenge_id": "visual_code",
+                "prompt": "Hãy nhập các ký tự mà bạn nhìn thấy",
+                "platform": "facebook",
+                "package": "com.facebook.katana",
+            }
+        )
+        return {
+            "serial": "dev-1",
+            "success": True,
+            "steps_executed": 1,
+            "step_results": [],
+            "failed_message": "",
+            "context": {},
+        }
+
+    monkeypatch.setattr(
+        scenario_routes,
+        "run_scenario_on_device",
+        fake_run_scenario_on_device,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=_scenario_app(_FakeDevice())),
+        base_url="http://test",
+    ) as client:
+        stream_task = asyncio.create_task(
+            client.post(
+                "/api/devices/dev-1/scenario/preview-stream",
+                json={"steps": [{"type": "wait", "seconds": 0}]},
+            )
+        )
+        submit_response = None
+        for _ in range(50):
+            submit_response = await client.post(
+                "/api/devices/dev-1/scenario/preview-stream/scn-manualinpu/input",
+                json={"text": "314015"},
+            )
+            if submit_response.status_code != 404:
+                break
+            await asyncio.sleep(0.01)
+        response = await asyncio.wait_for(stream_task, timeout=2)
+
+    assert submit_response is not None
+    assert submit_response.status_code == 200
+    assert submit_response.json()["accepted"] is True
+    assert captured["text"] == "314015"
+    assert '"event": "input_required"' in response.text
+    assert '"challenge_id": "visual_code"' in response.text
+    assert '"platform": "facebook"' in response.text
+    assert '"event": "done"' in response.text
+
+
+def test_preview_manual_input_rejects_duplicate_and_cancelled_submissions():
+    from api.routes.device_control.scenarios import _PreviewManualInput
+
+    cancel_event = threading.Event()
+    broker = _PreviewManualInput(queue.Queue(), cancel_event)
+    with broker._condition:
+        broker._pending = True
+
+    broker.submit("first-code")
+    with pytest.raises(RuntimeError, match="already submitted"):
+        broker.submit("replacement-code")
+
+    cancel_event.set()
+    with pytest.raises(RuntimeError, match="cancelled"):
+        broker.submit("late-code")
 
 
 @pytest.mark.anyio

@@ -2,7 +2,17 @@ import { farmApi } from '@/lib/farm-api';
 import { createSingleFlight } from '../lib/single-flight';
 import { clearH264Cache } from './ws';
 
-const SCRCPY_STREAM_TIMEOUT_MS = 10_000;
+const SCRCPY_REQUEST_TIMEOUT_MS = 10_000;
+const SCRCPY_PREVIEW_ATTACH_TIMEOUT_MS = 10_000;
+const configuredAttachTimeoutMs = Number(
+  process.env.NEXT_PUBLIC_DEVICE_FARM_SCRCPY_ATTACH_TIMEOUT_MS ?? 30_000
+);
+export const SCRCPY_ATTACH_TIMEOUT_MS = Number.isFinite(
+  configuredAttachTimeoutMs
+)
+  ? Math.max(10_000, Math.min(60_000, Math.round(configuredAttachTimeoutMs)))
+  : 30_000;
+export const SCRCPY_AUTO_ATTACH_MAX_RETRIES = 1;
 const SCRCPY_VIEWER_HEARTBEAT_MS = (() => {
   const raw = Number(
     process.env.NEXT_PUBLIC_DEVICE_FARM_SCRCPY_VIEWER_HEARTBEAT_MS ?? 15_000
@@ -107,7 +117,9 @@ async function postScrcpyAttach(
       `/devices/${encodeURIComponent(serial)}/scrcpy/attach`,
       scrcpyAttachPayload(viewerId, options),
       {
-        timeout: SCRCPY_STREAM_TIMEOUT_MS,
+        timeout: viewerId?.startsWith('snapshot-preview:')
+          ? SCRCPY_PREVIEW_ATTACH_TIMEOUT_MS
+          : SCRCPY_ATTACH_TIMEOUT_MS,
         _skip429Retry: skip429Retry,
         ...(controller ? { signal: controller.signal } : {})
       }
@@ -166,7 +178,7 @@ function scheduleScrcpyViewerHeartbeat(
       await farmApi.post(
         `/devices/${encodeURIComponent(serial)}/scrcpy/detach`,
         { viewer_id: viewerId },
-        { timeout: SCRCPY_STREAM_TIMEOUT_MS }
+        { timeout: SCRCPY_REQUEST_TIMEOUT_MS }
       );
     } catch {
       // The backend lease still expires if cleanup cannot be delivered.
@@ -182,7 +194,7 @@ function scheduleScrcpyViewerHeartbeat(
         await farmApi.post(
           `/devices/${encodeURIComponent(serial)}/scrcpy/heartbeat`,
           { viewer_id: viewerId },
-          { timeout: SCRCPY_STREAM_TIMEOUT_MS }
+          { timeout: SCRCPY_REQUEST_TIMEOUT_MS }
         );
       } catch (error) {
         if (
@@ -247,6 +259,10 @@ export function scrcpyAttachErrorMessage(error: unknown): string {
 }
 
 export function isRecoverableScrcpyAttachError(error: unknown): boolean {
+  if (error && typeof error === 'object' && 'code' in error) {
+    const code = (error as { code?: unknown }).code;
+    if (code === 'ECONNABORTED' || code === 'ETIMEDOUT') return true;
+  }
   const status = scrcpyAttachErrorStatus(error);
   if (status === 404 || status === 425 || status === 503) return true;
   if (status !== 400) return false;
@@ -258,6 +274,16 @@ export function isRecoverableScrcpyAttachError(error: unknown): boolean {
     message.includes('not found') ||
     message.includes('not available') ||
     message.includes('unavailable')
+  );
+}
+
+export function shouldRetryScrcpyAttach(
+  error: unknown,
+  retryCount: number
+): boolean {
+  return (
+    retryCount < SCRCPY_AUTO_ATTACH_MAX_RETRIES &&
+    isRecoverableScrcpyAttachError(error)
   );
 }
 
@@ -325,7 +351,7 @@ export const detachScrcpyStream = createSingleFlight(
     const { data } = await farmApi.post(
       `/devices/${encodeURIComponent(serial)}/scrcpy/detach`,
       viewerId ? { viewer_id: viewerId } : {},
-      { timeout: SCRCPY_STREAM_TIMEOUT_MS }
+      { timeout: SCRCPY_REQUEST_TIMEOUT_MS }
     );
     return data;
   },
@@ -349,7 +375,7 @@ export async function detachScrcpyStreamOnPageHide(
     `/devices/${encodeURIComponent(serial)}/scrcpy/detach`,
     viewerId ? { viewer_id: viewerId } : {},
     {
-      timeout: SCRCPY_STREAM_TIMEOUT_MS,
+      timeout: SCRCPY_REQUEST_TIMEOUT_MS,
       adapter: 'fetch',
       fetchOptions: { keepalive: true }
     }

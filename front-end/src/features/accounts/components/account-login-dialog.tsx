@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowRight,
   CheckCircle2,
+  Keyboard,
   LogIn,
   Loader2,
   Smartphone,
@@ -16,7 +18,8 @@ import { useDevices } from '@/features/devices/hooks/use-devices';
 import type { DeviceOut } from '@/features/devices/services/manage-api';
 import {
   cancelPreviewStream,
-  previewScenarioStream
+  previewScenarioStream,
+  submitPreviewManualInput
 } from '@/features/devices/services/api';
 import { orgScenariosApi } from '@/features/org-scenarios/services/api';
 import type { OrgScenarioOut } from '@/features/org-scenarios/services/api';
@@ -28,9 +31,11 @@ import { DeviceControlEmbed } from '@/features/devices/components/device-control
 import { useAccountDevices } from '../hooks/use-accounts';
 import type { AccountOut } from '../services/api';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger
@@ -43,6 +48,13 @@ function deviceLabel(d: Pick<DeviceOut, 'serial' | 'name'>) {
 }
 
 type StepLine = { index: number; type: string; ok: boolean; message: string };
+type ManualInputChallenge = {
+  kind: string;
+  prompt: string;
+  challengeId?: string;
+  platform?: string;
+  packageName?: string;
+};
 
 /**
  * Session-gate refusals that are an operator problem, not a bug. The gate
@@ -57,16 +69,35 @@ const GATE_HINT_REASONS = [
 
 export function AccountLoginDialog({
   account,
-  canUpdate
+  canUpdate,
+  open: controlledOpen,
+  onOpenChange,
+  hideTrigger = false
 }: {
   account: AccountOut;
   canUpdate: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  hideTrigger?: boolean;
 }) {
   const t = useTranslations('accountsFeature.loginDialog');
   const qc = useQueryClient();
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = useCallback(
+    (nextOpen: boolean) => {
+      if (controlledOpen === undefined) setInternalOpen(nextOpen);
+      onOpenChange?.(nextOpen);
+    },
+    [controlledOpen, onOpenChange]
+  );
   const [selectedDeviceId, setSelectedDeviceId] = useState('');
   const [running, setRunning] = useState(false);
+  const [manualInput, setManualInput] = useState<ManualInputChallenge | null>(
+    null
+  );
+  const [manualValue, setManualValue] = useState('');
+  const [submittingManualInput, setSubmittingManualInput] = useState(false);
   const [lines, setLines] = useState<StepLine[]>([]);
   const [loginScenario, setLoginScenario] = useState<OrgScenarioOut | null>(
     null
@@ -169,6 +200,9 @@ export function AccountLoginDialog({
     setLines([]);
     setOutcome(null);
     setRunning(false);
+    setManualInput(null);
+    setManualValue('');
+    setSubmittingManualInput(false);
   }, [open]);
 
   const selected = linkedDevices.find(
@@ -187,6 +221,9 @@ export function AccountLoginDialog({
     setRunning(true);
     setLines([]);
     setOutcome(null);
+    setManualInput(null);
+    setManualValue('');
+    setSubmittingManualInput(false);
     try {
       const ensuredScenario = await ensureLoginScenario();
       const ensuredSteps = Array.isArray(ensuredScenario.body_json?.steps)
@@ -213,12 +250,28 @@ export function AccountLoginDialog({
                 message: String(event.message ?? '')
               }
             ]);
+          } else if (event.event === 'input_required') {
+            setManualInput({
+              kind: String(event.kind ?? 'text'),
+              prompt: String(event.prompt ?? ''),
+              challengeId: String(event.challenge_id ?? '') || undefined,
+              platform: String(event.platform ?? '') || undefined,
+              packageName: String(event.package ?? '') || undefined
+            });
+            setManualValue('');
+            setSubmittingManualInput(false);
+          } else if (event.event === 'input_received') {
+            setManualInput(null);
+            setManualValue('');
+            setSubmittingManualInput(false);
           } else if (event.event === 'done') {
+            setManualInput(null);
             setOutcome({
               ok: event.success === true,
               message: String(event.failed_message ?? '')
             });
           } else if (event.event === 'error') {
+            setManualInput(null);
             setOutcome({ ok: false, message: String(event.error ?? '') });
           }
         },
@@ -240,6 +293,8 @@ export function AccountLoginDialog({
       if (runRef.current?.serial === selected.device.serial)
         runRef.current = null;
       setRunning(false);
+      setManualInput(null);
+      setSubmittingManualInput(false);
       // The scenario writes the platform session itself; refresh what reads it.
       void qc.invalidateQueries({
         queryKey: ['devices', selected.device.id, 'platform-sessions']
@@ -255,6 +310,19 @@ export function AccountLoginDialog({
     account.id,
     qc
   ]);
+
+  const handleManualInput = useCallback(async () => {
+    const active = runRef.current;
+    const value = manualValue.trim();
+    if (!active?.traceId || !value || submittingManualInput) return;
+    setSubmittingManualInput(true);
+    try {
+      await submitPreviewManualInput(active.serial, active.traceId, value);
+    } catch (error) {
+      setSubmittingManualInput(false);
+      toast.error((error as Error).message || t('manualInputFailed'));
+    }
+  }, [manualValue, submittingManualInput, t]);
 
   useEffect(() => {
     if (!outcome) return;
@@ -295,12 +363,14 @@ export function AccountLoginDialog({
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button size='sm' variant='outline' className='h-8 gap-1.5 text-xs'>
-          <LogIn size={14} />
-          {t('trigger')}
-        </Button>
-      </DialogTrigger>
+      {!hideTrigger ? (
+        <DialogTrigger asChild>
+          <Button size='sm' variant='outline' className='h-8 gap-1.5 text-xs'>
+            <LogIn size={14} />
+            {t('trigger')}
+          </Button>
+        </DialogTrigger>
+      ) : null}
       {/* DialogContent's own `sm:max-w-lg` outranks a bare `max-w-*` here —
           tailwind-merge only replaces a class at the same variant — so the
           override has to carry the `sm:` prefix or the mirror stays boxed into
@@ -308,9 +378,9 @@ export function AccountLoginDialog({
       <DialogContent className='z-[1000] w-[min(96vw,72rem)] sm:max-w-none'>
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
-          <p className='text-sm text-muted-foreground'>
+          <DialogDescription className='text-sm text-muted-foreground'>
             {account.display_name || account.username} · {account.platform}
-          </p>
+          </DialogDescription>
         </DialogHeader>
         <div className='grid gap-6 pt-2 sm:grid-cols-[minmax(0,340px)_minmax(0,1fr)]'>
           {/* The step list says what the scenario decided; the mirror says what
@@ -407,6 +477,66 @@ export function AccountLoginDialog({
                 </ul>
               )}
             </div>
+
+            {manualInput ? (
+              <form
+                className='rounded-xl border border-blue-200 bg-blue-50/70 p-4 shadow-sm dark:border-blue-900 dark:bg-blue-950/30'
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void handleManualInput();
+                }}
+              >
+                <div className='flex items-start gap-3'>
+                  <span className='flex size-9 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white'>
+                    <Keyboard size={17} />
+                  </span>
+                  <div className='min-w-0 flex-1'>
+                    <p className='text-sm font-semibold text-foreground'>
+                      {t('manualInputTitle')}
+                    </p>
+                    <p className='mt-1 text-xs text-muted-foreground'>
+                      {manualInput.prompt || t('manualInputPrompt')}
+                    </p>
+                  </div>
+                </div>
+                <label
+                  className='mt-4 block text-xs font-medium text-foreground'
+                  htmlFor='account-login-manual-input'
+                >
+                  {t('manualInputLabel')}
+                </label>
+                <div className='mt-2 flex gap-2'>
+                  <Input
+                    id='account-login-manual-input'
+                    autoFocus
+                    autoComplete='off'
+                    autoCapitalize='none'
+                    autoCorrect='off'
+                    className='h-10 bg-background font-mono text-base tracking-wider'
+                    disabled={submittingManualInput}
+                    maxLength={256}
+                    placeholder={t('manualInputPlaceholder')}
+                    value={manualValue}
+                    onChange={(event) => setManualValue(event.target.value)}
+                  />
+                  <Button
+                    type='submit'
+                    className='h-10 shrink-0 gap-2'
+                    disabled={!manualValue.trim() || submittingManualInput}
+                  >
+                    {submittingManualInput ? (
+                      <Loader2 size={14} className='animate-spin' />
+                    ) : (
+                      <ArrowRight size={14} />
+                    )}
+                    {t('manualInputSubmit')}
+                  </Button>
+                </div>
+                <p className='mt-2 text-[11px] text-muted-foreground'>
+                  {t('manualInputHint')}
+                </p>
+              </form>
+            ) : null}
 
             {lines.length > 0 || outcome ? (
               <div className='space-y-1 rounded-lg border bg-muted/20 p-3'>

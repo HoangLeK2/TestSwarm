@@ -632,6 +632,18 @@ export async function cancelPreviewStream(
   }
 }
 
+/** Submit the operator response requested by an active preview stream. */
+export async function submitPreviewManualInput(
+  serial: string,
+  traceId: string,
+  text: string
+): Promise<void> {
+  await farmApi.post(
+    `/devices/${encodeURIComponent(serial)}/scenario/preview-stream/${encodeURIComponent(traceId)}/input`,
+    { text }
+  );
+}
+
 /** Cancel all running scenarios on a device so the user can take manual control. */
 export async function interruptDevice(
   serial: string

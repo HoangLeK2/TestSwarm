@@ -2,6 +2,7 @@ import { farmApi } from '@/lib/farm-api';
 import {
   DEFAULT_STALL_THRESHOLDS,
   readMediaSample,
+  scheduleFirstFrameKeyframeRetries,
   startMediaProgressWatcher,
   type MediaProgressWatcherHandle,
   type MediaSample,
@@ -341,8 +342,10 @@ export async function startWebRtcStream({
 
   let firstFrameSeen = false;
   let frameCallbackHandle: number | null = null;
+  let stopJoinKeyframeRetries = () => {};
   const markFrame = () => {
     firstFrameSeen = true;
+    stopJoinKeyframeRetries();
     onFrame?.();
     if (video.videoWidth && video.videoHeight) {
       onSize?.(video.videoWidth, video.videoHeight);
@@ -385,6 +388,11 @@ export async function startWebRtcStream({
     pc.removeEventListener('connectionstatechange', requestJoinKeyframe);
     if (firstFrameSeen) return;
     requestWebRtcKeyframe(session.id).catch(() => {});
+    stopJoinKeyframeRetries = scheduleFirstFrameKeyframeRetries({
+      hasFrame: () => firstFrameSeen,
+      isConnected: () => pc.connectionState === 'connected',
+      requestKeyframe: () => requestWebRtcKeyframe(session.id)
+    });
   };
   pc.addEventListener('connectionstatechange', requestJoinKeyframe);
 
@@ -425,6 +433,8 @@ export async function startWebRtcStream({
   } catch (error) {
     watcher?.stop();
     watcher = null;
+    stopJoinKeyframeRetries();
+    pc.removeEventListener('connectionstatechange', requestJoinKeyframe);
     cancelFrameCallback();
     video.removeEventListener('loadeddata', markFrame);
     video.removeEventListener('canplay', requestFirstVideoFrame);
@@ -439,6 +449,8 @@ export async function startWebRtcStream({
   const close = async () => {
     watcher?.stop();
     watcher = null;
+    stopJoinKeyframeRetries();
+    pc.removeEventListener('connectionstatechange', requestJoinKeyframe);
     stallHandler = null;
     cancelFrameCallback();
     video.removeEventListener('loadeddata', markFrame);

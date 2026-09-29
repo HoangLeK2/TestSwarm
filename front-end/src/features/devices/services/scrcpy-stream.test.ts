@@ -141,7 +141,7 @@ test('control screen attach uses normal retry policy and payload', async () => {
     _skip429Retry?: boolean;
     signal?: AbortSignal;
   };
-  assert.equal(controlConfig.timeout, 10_000);
+  assert.equal(controlConfig.timeout, 30_000);
   assert.equal(controlConfig._skip429Retry, false);
   assert.equal(controlConfig.signal?.aborted, false);
   await stream.detachScrcpyStream('serial one', 'device-screen:viewer-1');
@@ -174,6 +174,29 @@ test('pending attach is retryable and does not start viewer heartbeat', async ()
   } finally {
     pendingAttachSerials.delete(serial);
   }
+});
+
+test('attach timeout is retryable instead of becoming a hard stream error', async () => {
+  const stream = await loadScrcpyStream();
+
+  assert.equal(
+    stream.isRecoverableScrcpyAttachError({ code: 'ECONNABORTED' }),
+    true
+  );
+  assert.equal(
+    stream.isRecoverableScrcpyAttachError({ code: 'ETIMEDOUT' }),
+    true
+  );
+  assert.equal(
+    stream.isRecoverableScrcpyAttachError({ code: 'ERR_BAD_REQUEST' }),
+    false
+  );
+  assert.equal(stream.shouldRetryScrcpyAttach({ code: 'ETIMEDOUT' }, 0), true);
+  assert.equal(stream.shouldRetryScrcpyAttach({ code: 'ETIMEDOUT' }, 1), false);
+  assert.equal(
+    stream.shouldRetryScrcpyAttach({ code: 'ERR_BAD_REQUEST' }, 0),
+    false
+  );
 });
 
 test('snapshot preview attach keeps lightweight no-retry policy', async () => {

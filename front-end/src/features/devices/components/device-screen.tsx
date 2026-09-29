@@ -34,6 +34,7 @@ import {
   isRecoverableScrcpyAttachError,
   isScrcpyAttachCancellation,
   scrcpyAttachErrorMessage,
+  shouldRetryScrcpyAttach,
   type ScrcpyAttachOptions
 } from '../services/scrcpy-stream';
 import {
@@ -432,6 +433,7 @@ export function DeviceScreen({
   const pendingScrcpyAttachSerialRef = useRef<string | null>(null);
   const attachedScrcpyWsGenerationRef = useRef<number | null>(null);
   const scrcpyAttachGenerationRef = useRef(0);
+  const scrcpyAttachRetryCountRef = useRef(0);
   const scrcpyAttachRetryTimerRef = useRef<ReturnType<
     typeof setTimeout
   > | null>(null);
@@ -682,6 +684,7 @@ export function DeviceScreen({
 
   useEffect(() => {
     if (webrtcRequested) {
+      scrcpyAttachRetryCountRef.current = 0;
       clearInitialFrameRefreshTimers();
       clearScrcpyAttachRetryTimer();
       const attachedSerial = attachedScrcpySerialRef.current;
@@ -703,6 +706,7 @@ export function DeviceScreen({
       isActive &&
       screenStreamOn;
     if (!shouldAttach) {
+      scrcpyAttachRetryCountRef.current = 0;
       setScrcpyAttachReady(false);
       clearInitialFrameRefreshTimers();
       clearScrcpyAttachRetryTimer();
@@ -767,6 +771,7 @@ export function DeviceScreen({
     }
     attachScrcpyStream(serial, viewerId, scrcpyAttachOptions)
       .then(() => {
+        scrcpyAttachRetryCountRef.current = 0;
         clearScrcpyAttachRetryTimer();
         pendingScrcpyAttachSerialRef.current =
           pendingScrcpyAttachSerialRef.current === serial
@@ -808,13 +813,17 @@ export function DeviceScreen({
           return;
         }
         if (isScrcpyAttachCancellation(err)) return;
+        if (shouldRetryScrcpyAttach(err, scrcpyAttachRetryCountRef.current)) {
+          scrcpyAttachRetryCountRef.current += 1;
+          scheduleScrcpyAttachRetry(generation, serial);
+          return;
+        }
         if (!isRecoverableScrcpyAttachError(err)) {
           const msg = scrcpyAttachErrorMessage(err);
           toast.error(t('screenStreamAttachError'), {
             description: msg || undefined
           });
         }
-        scheduleScrcpyAttachRetry(generation, serial);
       });
 
     return () => {
@@ -861,6 +870,7 @@ export function DeviceScreen({
       let toggleGeneration: number | null = null;
       try {
         if (checked) {
+          scrcpyAttachRetryCountRef.current = 0;
           const generation = scrcpyAttachGenerationRef.current + 1;
           toggleGeneration = generation;
           scrcpyAttachGenerationRef.current = generation;
@@ -910,6 +920,7 @@ export function DeviceScreen({
           attachedScrcpySerialRef.current = toggleSerial;
           attachedScrcpyWsGenerationRef.current = wsConnectedGeneration;
         } else {
+          scrcpyAttachRetryCountRef.current = 0;
           const attachedSerial = attachedScrcpySerialRef.current;
           const pendingSerial = pendingScrcpyAttachSerialRef.current;
           scrcpyAttachGenerationRef.current += 1;
@@ -956,11 +967,15 @@ export function DeviceScreen({
           pendingScrcpyAttachSerialRef.current = null;
           attachedScrcpyWsGenerationRef.current = null;
         }
-        const msg = scrcpyAttachErrorMessage(err);
-        toast.error(
-          checked ? t('screenStreamAttachError') : t('screenStreamDetachError'),
-          { description: msg || undefined }
-        );
+        if (!checked || !isRecoverableScrcpyAttachError(err)) {
+          const msg = scrcpyAttachErrorMessage(err);
+          toast.error(
+            checked
+              ? t('screenStreamAttachError')
+              : t('screenStreamDetachError'),
+            { description: msg || undefined }
+          );
+        }
       } finally {
         setStreamToggleBusy(false);
       }
@@ -1193,6 +1208,7 @@ export function DeviceScreen({
     setMjpegFailed(false);
     setMjpegAttempt(0);
     setMjpegEnabled(mjpegAllowed);
+    scrcpyAttachRetryCountRef.current = 0;
     h264WarmupRef.current = { startedAt: 0, frames: 0 };
     clearInitialFrameRefreshTimers();
     if (inputRefreshTimerRef.current) {

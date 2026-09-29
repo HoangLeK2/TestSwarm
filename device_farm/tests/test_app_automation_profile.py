@@ -101,6 +101,71 @@ def test_login_recipe_accepts_optional_post_submit_auth_code():
     assert profile.login_recipe.post_submit_fields["auth_code"].required is False
 
 
+def test_login_recipe_accepts_profile_declared_manual_challenge():
+    raw = _minimal_profile()
+    raw["semantic_locators"].update(
+        {
+            "challenge_prompt": {
+                "candidates": [{"by": "text", "value": "Enter code"}]
+            },
+            "challenge_field": {
+                "candidates": [{"resource_id_contains": "challenge_input"}]
+            },
+            "challenge_submit": {
+                "candidates": [{"by": "text", "value": "Continue"}]
+            },
+        }
+    )
+    raw["login_recipe"] = {
+        "detect_logged_in": {"any_text": ["Home"]},
+        "fields": {
+            "username": {"locator": "username_field", "value_from": "account.username"},
+            "password": {"locator": "password_field", "value_from": "account.password"},
+        },
+        "submit": {"locator": "login_button"},
+        "manual_challenges": [
+            {
+                "name": "visual_code",
+                "kind": "captcha",
+                "detect_locator": "challenge_prompt",
+                "input_locator": "challenge_field",
+                "submit_locator": "challenge_submit",
+            }
+        ],
+    }
+
+    profile = validate_app_automation_profile(raw)
+
+    assert profile.login_recipe is not None
+    challenge = profile.login_recipe.manual_challenges[0]
+    assert challenge.name == "visual_code"
+    assert challenge.kind == "captcha"
+    assert challenge.max_attempts == 3
+
+
+def test_login_recipe_rejects_unknown_manual_challenge_locator():
+    raw = _minimal_profile()
+    raw["login_recipe"] = {
+        "detect_logged_in": {"any_text": ["Home"]},
+        "fields": {
+            "username": {"locator": "username_field", "value_from": "account.username"},
+            "password": {"locator": "password_field", "value_from": "account.password"},
+        },
+        "submit": {"locator": "login_button"},
+        "manual_challenges": [
+            {
+                "name": "visual_code",
+                "detect_locator": "missing_prompt",
+                "input_locator": "username_field",
+                "submit_locator": "login_button",
+            }
+        ],
+    }
+
+    with pytest.raises(ValidationError, match="manual challenge.*unknown locator"):
+        validate_app_automation_profile(raw)
+
+
 def test_login_recipe_rejects_unknown_post_submit_action_locator():
     raw = _minimal_profile()
     raw["login_recipe"] = {

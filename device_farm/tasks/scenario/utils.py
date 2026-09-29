@@ -62,6 +62,13 @@ _POPUP_DISMISS_PATTERNS: Sequence[Tuple[str, str]] = (
     ("content-desc", "Bỏ qua"), ("content-desc", "Skip"),
 )
 
+_GOOGLE_SAVED_PASSWORD_MARKERS: frozenset[str] = frozenset({
+    "sign in to facebook with your saved password",
+})
+_GOOGLE_SAVED_PASSWORD_CLOSE_LABELS: frozenset[str] = frozenset({
+    "close", "dismiss", "×",
+})
+
 _VOLATILE_ATTRS = re.compile(
     r'\s+(?:index|bounds|focused|selected|drawing-order|rotation)="[^"]*"'
 )
@@ -598,6 +605,44 @@ def _auto_dismiss_popup(device: "DeviceClient") -> bool:
         import xml.etree.ElementTree as _ET
         root = _ET.fromstring(xml)
     except Exception:
+        return False
+
+    visible_labels = {
+        label.strip().casefold()
+        for node in root.iter()
+        for attr in ("text", "content-desc")
+        if (label := str(node.attrib.get(attr) or "").strip())
+    }
+    is_google_saved_password_popup = bool(
+        visible_labels & _GOOGLE_SAVED_PASSWORD_MARKERS
+    )
+    if is_google_saved_password_popup:
+        close_candidates = [
+            (attr, label, node)
+            for node in root.iter()
+            for attr in ("content-desc", "text")
+            if (label := str(node.attrib.get(attr) or "").strip())
+            and label.casefold() in _GOOGLE_SAVED_PASSWORD_CLOSE_LABELS
+            and node.attrib.get("clickable", "true").lower() == "true"
+        ]
+        if len(close_candidates) == 1:
+            attr, label, _ = close_candidates[0]
+            by = "content-desc" if attr == "content-desc" else "text"
+            try:
+                eid = u2.find_element(by, label, timeout=0)
+                if eid is not None:
+                    u2.element_click(eid)
+                    device.hierarchy_invalidate_cache()
+                    log.info(
+                        "[%s] Google saved-password popup dismissed: %s=%r",
+                        device.serial,
+                        by,
+                        label,
+                    )
+                    time.sleep(0.3)
+                    return True
+            except Exception:
+                pass
         return False
 
     for by, value in _POPUP_DISMISS_PATTERNS:

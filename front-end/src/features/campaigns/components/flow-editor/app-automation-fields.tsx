@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { FlowStep } from '../scenario-steps/types';
 import {
+  addManualLoginChallenge,
   addLocator,
   addPopupWatcher,
   appAutomationProfile,
@@ -30,10 +31,12 @@ import {
   patchPostSubmitLoginField,
   patchLoginRecipe,
   patchLoginTarget,
+  patchManualLoginChallenge,
   patchPopupWatcher,
   patchProfile,
   removeFormField,
   removeLocator,
+  removeManualLoginChallenge,
   removePopupWatcher
 } from './app-automation-profile-model';
 import {
@@ -414,6 +417,8 @@ function LoginEditor({
   const loggedInText = listToCsv(recipe.detect_logged_in?.any_text);
   const submitText = listToCsv(recipe.submit?.tap_text_any);
   const postSubmitText = listToCsv(recipe.post_submit?.tap_text_any);
+  const manualChallenges = recipe.manual_challenges ?? [];
+  const challengeLocators = locatorNames(profile);
 
   const packageValue = profile.package ?? '';
   const detectedPackagePreset = KNOWN_LOGIN_APPS.some(
@@ -908,6 +913,174 @@ function LoginEditor({
           </div>
         );
       })}
+
+      <div className='space-y-3 rounded-lg border border-dashed border-border/70 bg-background/70 p-3'>
+        <div className='flex items-start justify-between gap-3'>
+          <div>
+            <div className='text-xs font-semibold'>
+              {t('loginUi.manualChallengesTitle')}
+            </div>
+            <p className='mt-1 text-[11px] leading-relaxed text-muted-foreground'>
+              {t('loginUi.manualChallengesDescription')}
+            </p>
+          </div>
+          <Button
+            type='button'
+            size='sm'
+            variant='outline'
+            className='h-8 shrink-0 gap-1.5 text-xs'
+            onClick={() => commit(update, addManualLoginChallenge(step))}
+          >
+            <Plus size={14} />
+            {t('loginUi.addManualChallenge')}
+          </Button>
+        </div>
+
+        {manualChallenges.length === 0 ? (
+          <p className='text-[11px] text-muted-foreground'>
+            {t('loginUi.noManualChallenges')}
+          </p>
+        ) : (
+          manualChallenges.map((challenge, challengeIndex) => (
+            <div
+              key={`${challenge.name ?? 'challenge'}-${challengeIndex}`}
+              className='space-y-3 rounded-md border border-border/60 bg-muted/20 p-3'
+            >
+              <div className='grid gap-2 sm:grid-cols-[1fr_1fr_auto]'>
+                <F label={t('loginUi.challengeName')}>
+                  <Input
+                    className='h-8 font-mono text-xs'
+                    value={challenge.name ?? ''}
+                    onChange={(event) =>
+                      commit(
+                        update,
+                        patchManualLoginChallenge(step, challengeIndex, {
+                          name: event.target.value
+                        })
+                      )
+                    }
+                  />
+                </F>
+                <F label={t('loginUi.challengeKind')}>
+                  <Input
+                    className='h-8 font-mono text-xs'
+                    value={challenge.kind ?? 'text'}
+                    onChange={(event) =>
+                      commit(
+                        update,
+                        patchManualLoginChallenge(step, challengeIndex, {
+                          kind: event.target.value
+                        })
+                      )
+                    }
+                  />
+                </F>
+                <Button
+                  type='button'
+                  size='icon'
+                  variant='ghost'
+                  className='mt-5 size-8 text-destructive'
+                  aria-label={t('loginUi.removeManualChallenge')}
+                  onClick={() =>
+                    commit(
+                      update,
+                      removeManualLoginChallenge(step, challengeIndex)
+                    )
+                  }
+                >
+                  <Trash2 size={14} />
+                </Button>
+              </div>
+
+              <F label={t('loginUi.challengePrompt')}>
+                <Input
+                  className='h-8 text-xs'
+                  value={challenge.prompt ?? ''}
+                  placeholder={t('loginUi.challengePromptPlaceholder')}
+                  onChange={(event) =>
+                    commit(
+                      update,
+                      patchManualLoginChallenge(step, challengeIndex, {
+                        prompt: event.target.value
+                      })
+                    )
+                  }
+                />
+              </F>
+
+              <div className='grid gap-2 sm:grid-cols-3'>
+                {(
+                  [
+                    ['detect_locator', 'challengeDetectLocator'],
+                    ['input_locator', 'challengeInputLocator'],
+                    ['submit_locator', 'challengeSubmitLocator']
+                  ] as const
+                ).map(([field, label]) => (
+                  <F key={field} label={t(`loginUi.${label}`)}>
+                    <select
+                      className='h-8 w-full rounded-md border border-input bg-background px-2 font-mono text-xs'
+                      value={challenge[field] ?? ''}
+                      onChange={(event) =>
+                        commit(
+                          update,
+                          patchManualLoginChallenge(step, challengeIndex, {
+                            [field]: event.target.value
+                          })
+                        )
+                      }
+                    >
+                      <option value=''>{t('loginUi.chooseLocator')}</option>
+                      {challengeLocators.map((name) => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                  </F>
+                ))}
+              </div>
+
+              <div className='grid gap-2 sm:grid-cols-2'>
+                <F label={t('loginUi.challengeMaxAttempts')}>
+                  <Input
+                    type='number'
+                    min={1}
+                    max={10}
+                    className='h-8 text-xs'
+                    value={challenge.max_attempts ?? 3}
+                    onChange={(event) =>
+                      commit(
+                        update,
+                        patchManualLoginChallenge(step, challengeIndex, {
+                          max_attempts: Number(event.target.value || 1)
+                        })
+                      )
+                    }
+                  />
+                </F>
+                <F label={t('loginUi.challengeWaitAfter')}>
+                  <Input
+                    type='number'
+                    min={0}
+                    max={10}
+                    step={0.1}
+                    className='h-8 text-xs'
+                    value={challenge.wait_after_s ?? 0.5}
+                    onChange={(event) =>
+                      commit(
+                        update,
+                        patchManualLoginChallenge(step, challengeIndex, {
+                          wait_after_s: Number(event.target.value || 0)
+                        })
+                      )
+                    }
+                  />
+                </F>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
 
       <div className='rounded-lg border border-dashed border-border/70 bg-muted/20 px-3 py-2.5'>
         <div className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>

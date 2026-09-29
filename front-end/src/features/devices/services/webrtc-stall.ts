@@ -177,8 +177,18 @@ export const MAX_CONCURRENT_ATTACHES = Number.isFinite(
 /** Long enough for a healthy attach (adapter waits up to 4s for a frame). */
 export const ATTACH_SLOT_HOLD_MS = 5_000;
 
+export type WebRtcAttachPriority = 'interactive' | 'preview';
+
 let activeAttaches = 0;
-const attachWaiters: Array<() => void> = [];
+type AttachWaiter = {
+  grant: () => void;
+};
+const interactiveAttachWaiters: AttachWaiter[] = [];
+const previewAttachWaiters: AttachWaiter[] = [];
+
+function nextAttachWaiter(): AttachWaiter | undefined {
+  return interactiveAttachWaiters.shift() ?? previewAttachWaiters.shift();
+}
 
 function grantAttachSlot(): () => void {
   activeAttaches += 1;
@@ -187,7 +197,7 @@ function grantAttachSlot(): () => void {
     if (released) return;
     released = true;
     activeAttaches = Math.max(0, activeAttaches - 1);
-    attachWaiters.shift()?.();
+    nextAttachWaiter()?.grant();
   };
 }
 
@@ -195,24 +205,36 @@ function grantAttachSlot(): () => void {
  * Resolve with a release function once a slot is free. Rejects on abort, and an
  * aborted waiter gives up its place in the queue.
  */
-export function waitForAttachSlot(signal?: AbortSignal): Promise<() => void> {
+export function waitForAttachSlot(
+  signal?: AbortSignal,
+  priority: WebRtcAttachPriority = 'preview'
+): Promise<() => void> {
   if (signal?.aborted) {
     return Promise.reject(new DOMException('Aborted', 'AbortError'));
   }
-  if (activeAttaches < MAX_CONCURRENT_ATTACHES && attachWaiters.length === 0) {
+  const hasQueuedWaiters =
+    interactiveAttachWaiters.length > 0 || previewAttachWaiters.length > 0;
+  if (activeAttaches < MAX_CONCURRENT_ATTACHES && !hasQueuedWaiters) {
     return Promise.resolve(grantAttachSlot());
   }
   return new Promise((resolve, reject) => {
-    const waiter = () => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve(grantAttachSlot());
+    const queue =
+      priority === 'interactive'
+        ? interactiveAttachWaiters
+        : previewAttachWaiters;
+    const waiter: AttachWaiter = {
+      grant: () => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve(grantAttachSlot());
+      }
     };
     const onAbort = () => {
-      const index = attachWaiters.indexOf(waiter);
-      if (index >= 0) attachWaiters.splice(index, 1);
+      const index = queue.indexOf(waiter);
+      if (index >= 0) queue.splice(index, 1);
+      signal?.removeEventListener('abort', onAbort);
       reject(new DOMException('Aborted', 'AbortError'));
     };
-    attachWaiters.push(waiter);
+    queue.push(waiter);
     signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
@@ -220,7 +242,40 @@ export function waitForAttachSlot(signal?: AbortSignal): Promise<() => void> {
 /** Test hook: the module-level queue would otherwise leak between cases. */
 export function resetAttachSlotsForTest(): void {
   activeAttaches = 0;
-  attachWaiters.length = 0;
+  interactiveAttachWaiters.length = 0;
+  previewAttachWaiters.length = 0;
+}
+
+/**
+ * Retry IDR requests while a newly-connected viewer is still waiting for its
+ * first decoded frame. The publisher applies its own per-device rate gate, so
+ * these retries stay bounded and cannot turn a slow join into an encoder loop.
+ */
+export const FIRST_FRAME_KEYFRAME_RETRY_DELAYS_MS = [3_200, 6_500] as const;
+
+export function scheduleFirstFrameKeyframeRetries({
+  hasFrame,
+  isConnected,
+  requestKeyframe,
+  delaysMs = FIRST_FRAME_KEYFRAME_RETRY_DELAYS_MS
+}: {
+  hasFrame: () => boolean;
+  isConnected: () => boolean;
+  requestKeyframe: () => Promise<void>;
+  delaysMs?: readonly number[];
+}): () => void {
+  let stopped = false;
+  const timers = delaysMs.map((delayMs) =>
+    setTimeout(() => {
+      if (stopped || hasFrame() || !isConnected()) return;
+      void requestKeyframe().catch(() => {});
+    }, delayMs)
+  );
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    timers.forEach((timer) => clearTimeout(timer));
+  };
 }
 
 /** Read one inbound-rtp video sample. Returns null when there is no video yet. */

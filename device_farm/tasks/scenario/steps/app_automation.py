@@ -13,6 +13,7 @@ from services.app_automation_locator import (
 from services.app_automation_profile import (
     AppAutomationProfile,
     FormRecipe,
+    ManualLoginChallenge,
     LoginPostSubmitAction,
     LoginSubmit,
     validate_app_automation_profile,
@@ -40,7 +41,6 @@ _SECRET_REF_TO_VAR = {
     # Facebook profile switched to the explicit account.password reference.
     "secret.login_password": "__ACCOUNT_PASSWORD__",
 }
-
 
 def _load_profile(sc: ScenarioContext, step: Dict[str, Any]) -> AppAutomationProfile:
     raw = (
@@ -235,6 +235,8 @@ def _input_resolved_locator(
     resolution: LocatorResolution,
     text: str,
 ) -> Dict[str, Any]:
+    if _cancelled(sc):
+        raise RuntimeError(f"input {locator_name!r} cancelled")
     if resolution.selector:
         input_step = {
             "type": "input_selector",
@@ -249,11 +251,15 @@ def _input_resolved_locator(
             raise RuntimeError(input_result.get("message") or f"input {locator_name!r} failed")
     else:
         _click_resolution(sc, step, resolution)
+        if _cancelled(sc):
+            raise RuntimeError(f"input {locator_name!r} cancelled")
         u2 = sc.device.u2
         if u2 is None:
             raise RuntimeError("u2 not available after coordinate focus")
         if bool(step.get("clear_first", True)):
             u2.clear_text()
+        if _cancelled(sc):
+            raise RuntimeError(f"input {locator_name!r} cancelled")
         u2.send_keys(text)
     return _resolution_trace(resolution)
 
@@ -445,6 +451,232 @@ def _detect_logged_in(profile: AppAutomationProfile, snapshot: Any) -> bool:
     return False
 
 
+def _resolution_visible_label(snapshot: Any, resolution: LocatorResolution) -> str:
+    """Return the visible label of the node selected by a semantic locator."""
+    for node in snapshot.nodes:
+        if resolution.bounds and node.bounds != resolution.bounds:
+            continue
+        visible = str(node.text or node.desc or "").strip()
+        if visible:
+            return visible
+    return ""
+
+
+def _resolve_manual_challenge_controls(
+    sc: ScenarioContext,
+    profile: AppAutomationProfile,
+    challenge: ManualLoginChallenge,
+    xml: str,
+    snapshot: Any,
+) -> tuple[LocatorResolution, LocatorResolution, LocatorResolution]:
+    return (
+        _resolve_named_locator(
+            sc, profile, challenge.detect_locator, xml, snapshot
+        ),
+        _resolve_named_locator(
+            sc, profile, challenge.input_locator, xml, snapshot
+        ),
+        _resolve_named_locator(
+            sc, profile, challenge.submit_locator, xml, snapshot
+        ),
+    )
+
+
+def _find_manual_login_challenge(
+    sc: ScenarioContext,
+    profile: AppAutomationProfile,
+    challenges: list[ManualLoginChallenge],
+    xml: str,
+    snapshot: Any,
+) -> tuple[ManualLoginChallenge, LocatorResolution] | None:
+    for challenge in challenges:
+        resolution = _resolve_named_locator(
+            sc, profile, challenge.detect_locator, xml, snapshot
+        )
+        if resolution.matched:
+            return challenge, resolution
+    return None
+
+
+def _manual_input_platform(sc: ScenarioContext) -> str:
+    try:
+        value = sc.var_ctx.resolve("${__ACCOUNT_PLATFORM__}")
+    except Exception:
+        return ""
+    platform = str(value or "").strip().casefold()
+    if not platform or platform == "${__account_platform__}":
+        return ""
+    return platform
+
+
+def _handle_manual_login_challenge(
+    sc: ScenarioContext,
+    step: Dict[str, Any],
+    idx: int,
+    profile: AppAutomationProfile,
+    challenge: ManualLoginChallenge,
+    detection: LocatorResolution,
+    xml: str,
+    snapshot: Any,
+) -> tuple[Dict[str, Any], str, Any]:
+    prompt = _resolution_visible_label(snapshot, detection) or challenge.prompt
+    handler = sc.scenario.get("_manual_input_handler")
+    if not callable(handler):
+        raise RuntimeError(
+            "MANUAL_INPUT_REQUIRED: operator input is required for "
+            f"challenge {challenge.name!r}"
+        )
+
+    _, input_resolution, submit_resolution = _resolve_manual_challenge_controls(
+        sc, profile, challenge, xml, snapshot
+    )
+    if not input_resolution.matched:
+        raise RuntimeError(
+            "MANUAL_INPUT_REQUIRED: challenge input could not be identified safely "
+            f"({input_resolution.reason})"
+        )
+    if not submit_resolution.matched:
+        raise RuntimeError(
+            "MANUAL_INPUT_REQUIRED: challenge submit control could not be "
+            f"identified safely ({submit_resolution.reason})"
+        )
+
+    request = {
+        "kind": challenge.kind,
+        "challenge_id": challenge.name,
+        "prompt": prompt,
+        "package": profile.package,
+    }
+    platform = _manual_input_platform(sc)
+    if platform:
+        request["platform"] = platform
+    value = str(handler(request) or "").strip()
+    if not value:
+        raise RuntimeError("MANUAL_INPUT_REQUIRED: operator input is empty")
+    if _cancelled(sc):
+        raise RuntimeError("MANUAL_INPUT_REQUIRED: operator input cancelled")
+
+    xml, snapshot = _current_snapshot(sc)
+    detection, input_resolution, submit_resolution = (
+        _resolve_manual_challenge_controls(
+            sc, profile, challenge, xml, snapshot
+        )
+    )
+    if not detection.matched:
+        raise RuntimeError(
+            "MANUAL_INPUT_REQUIRED: challenge screen changed while awaiting input"
+        )
+    if not input_resolution.matched or not submit_resolution.matched:
+        raise RuntimeError(
+            "MANUAL_INPUT_REQUIRED: challenge controls changed while awaiting input"
+        )
+    if _cancelled(sc):
+        raise RuntimeError("MANUAL_INPUT_REQUIRED: operator input cancelled")
+    _input_resolved_locator(
+        sc,
+        step,
+        idx,
+        challenge.input_locator,
+        input_resolution,
+        value,
+    )
+
+    xml, snapshot = _current_snapshot(sc)
+    _, input_resolution, submit_resolution = _resolve_manual_challenge_controls(
+        sc, profile, challenge, xml, snapshot
+    )
+    if not input_resolution.matched or not submit_resolution.matched:
+        raise RuntimeError(
+            "MANUAL_INPUT_REQUIRED: challenge controls changed before submission"
+        )
+    if _cancelled(sc):
+        raise RuntimeError("MANUAL_INPUT_REQUIRED: operator input cancelled")
+    _click_resolution(sc, step, submit_resolution)
+    _wait_or_cancel(sc, challenge.wait_after_s)
+    next_xml, next_snapshot = _current_snapshot(sc)
+    return (
+        {
+            "challenge_id": challenge.name,
+            "kind": challenge.kind,
+            "prompt": prompt,
+            "package": profile.package,
+            **({"platform": platform} if platform else {}),
+            "submitted": True,
+        },
+        next_xml,
+        next_snapshot,
+    )
+
+
+def _wait_for_manual_login_challenges(
+    sc: ScenarioContext,
+    step: Dict[str, Any],
+    idx: int,
+    profile: AppAutomationProfile,
+    xml: str,
+    snapshot: Any,
+) -> tuple[list[Dict[str, Any]], str, Any]:
+    """Wait for delayed, profile-declared challenges and operator input."""
+    recipe = profile.login_recipe
+    challenges = list(recipe.manual_challenges) if recipe else []
+    if not challenges:
+        return [], xml, snapshot
+
+    timeout_s, poll_s = _get_implicit_wait_config(step, sc.scenario_iw_config)
+    deadline = time.monotonic() + timeout_s
+    traces: list[Dict[str, Any]] = []
+    attempts: dict[str, int] = {}
+    waiting_for_result: str | None = None
+
+    while True:
+        if _cancelled(sc):
+            raise RuntimeError("MANUAL_INPUT_REQUIRED: operator input cancelled")
+
+        detected = _find_manual_login_challenge(
+            sc, profile, challenges, xml, snapshot
+        )
+        now = time.monotonic()
+        detected_name = detected[0].name if detected else None
+        if detected is not None and (
+            waiting_for_result != detected_name or now >= deadline
+        ):
+            challenge, resolution = detected
+            attempt_count = attempts.get(challenge.name, 0)
+            if attempt_count >= challenge.max_attempts:
+                raise RuntimeError(
+                    "MANUAL_INPUT_REQUIRED: challenge "
+                    f"{challenge.name!r} remained visible after the maximum "
+                    "number of attempts"
+                )
+            trace, xml, snapshot = _handle_manual_login_challenge(
+                sc,
+                step,
+                idx,
+                profile,
+                challenge,
+                resolution,
+                xml,
+                snapshot,
+            )
+            traces.append(trace)
+            attempts[challenge.name] = attempt_count + 1
+            waiting_for_result = challenge.name
+            deadline = time.monotonic() + timeout_s
+            continue
+
+        if detected is None and traces:
+            return traces, xml, snapshot
+        if now >= deadline:
+            if detected is None:
+                return traces, xml, snapshot
+            waiting_for_result = None
+            continue
+
+        if _wait_or_cancel(sc, min(poll_s, max(0.0, deadline - now))):
+            raise RuntimeError("MANUAL_INPUT_REQUIRED: operator input cancelled")
+        xml, snapshot = _current_snapshot(sc)
+
+
 @register_step("login_if_needed")
 def handle_login_if_needed(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
     try:
@@ -467,6 +699,12 @@ def handle_login_if_needed(sc: ScenarioContext, step: Dict[str, Any], idx: int, 
         post_submit_action_trace: list[Dict[str, Any]] = []
         post_submit_traces: Dict[str, Any] = {}
         post_submit_trace = None
+        manual_input_traces: list[Dict[str, Any]] = []
+        xml, snapshot = _current_snapshot(sc)
+        challenge_traces, xml, snapshot = _wait_for_manual_login_challenges(
+            sc, step, idx, profile, xml, snapshot
+        )
+        manual_input_traces.extend(challenge_traces)
         post_submit_fields = getattr(recipe, "post_submit_fields", {}) or {}
         entered_post_submit = False
         if post_submit_fields:
@@ -478,6 +716,11 @@ def handle_login_if_needed(sc: ScenarioContext, step: Dict[str, Any], idx: int, 
             post_submit_action_trace = _execute_post_submit_actions(
                 sc, step, profile, list(post_submit_actions)
             )
+            xml, snapshot = _current_snapshot(sc)
+            challenge_traces, xml, snapshot = _wait_for_manual_login_challenges(
+                sc, step, idx, profile, xml, snapshot
+            )
+            manual_input_traces.extend(challenge_traces)
             if post_submit_fields:
                 post_submit_traces, entered_post_submit, xml, snapshot = _input_post_submit_fields(
                     sc, step, idx, profile, post_submit_fields
@@ -486,6 +729,11 @@ def handle_login_if_needed(sc: ScenarioContext, step: Dict[str, Any], idx: int, 
             post_submit = getattr(recipe, "post_submit", None) or recipe.submit
             if entered_post_submit and post_submit is not None:
                 post_submit_trace = _click_submit(sc, step, profile, post_submit, xml, snapshot)
+                xml, snapshot = _current_snapshot(sc)
+                challenge_traces, xml, snapshot = _wait_for_manual_login_challenges(
+                    sc, step, idx, profile, xml, snapshot
+                )
+                manual_input_traces.extend(challenge_traces)
         result.update({
             "message": "login_if_needed: submitted login",
             "login_state": "submitted",
@@ -494,6 +742,8 @@ def handle_login_if_needed(sc: ScenarioContext, step: Dict[str, Any], idx: int, 
             "post_submit_action_trace": post_submit_action_trace,
             "post_submit_locator_trace": post_submit_traces,
             "post_submit_trace": post_submit_trace,
+            "manual_input_trace": manual_input_traces[-1] if manual_input_traces else None,
+            "manual_input_traces": manual_input_traces,
         })
     except Exception as exc:
         result["ok"] = False

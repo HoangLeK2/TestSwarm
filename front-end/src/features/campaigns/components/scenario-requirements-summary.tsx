@@ -1,6 +1,6 @@
 'use client';
 
-import { ShieldCheck, ShieldOff } from 'lucide-react';
+import { ExternalLink, LogIn, ShieldCheck, ShieldOff } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -21,6 +21,7 @@ import {
   SelectValue
 } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
+import { Link } from '@/i18n/navigation';
 import { cn } from '@/lib/utils';
 
 export type ScenarioRequirements = Record<string, any>;
@@ -146,12 +147,14 @@ export function ScenarioRequirementsSettingsDialog({
   open,
   onOpenChange,
   requirements,
-  onChange
+  onChange,
+  sessionLoginHref
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   requirements?: ScenarioRequirements | null;
   onChange: (requirements: ScenarioRequirements) => void;
+  sessionLoginHref?: string;
 }) {
   const t = useTranslations('campaignsFeature.stepEditor.requirements');
   const session = normalizePlatformSessionRequirement(requirements);
@@ -249,6 +252,31 @@ export function ScenarioRequirementsSettingsDialog({
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+          ) : null}
+          {sessionLoginHref ? (
+            <div className='flex flex-col gap-3 rounded-md border bg-muted/20 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between'>
+              <div className='min-w-0'>
+                <p className='flex items-center gap-1.5 text-sm font-medium'>
+                  <LogIn className='size-4 shrink-0' />
+                  {t('sessionLoginTitle')}
+                </p>
+                <p className='mt-1 text-xs text-muted-foreground'>
+                  {t('sessionLoginHint')}
+                </p>
+              </div>
+              <Button
+                asChild
+                type='button'
+                variant='outline'
+                size='sm'
+                className='shrink-0'
+              >
+                <Link href={sessionLoginHref} target='_blank' rel='noreferrer'>
+                  {t('sessionLoginAction')}
+                  <ExternalLink className='ml-1.5 size-3.5' />
+                </Link>
+              </Button>
             </div>
           ) : null}
         </div>

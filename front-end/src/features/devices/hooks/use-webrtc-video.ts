@@ -17,6 +17,7 @@ import {
   RECOVERY_RESET_AFTER_MS,
   acquireRecoverySlot,
   recoveryDelayMs,
+  type WebRtcAttachPriority,
   waitForAttachSlot,
   type StallReason
 } from '../services/webrtc-stall';
@@ -119,6 +120,10 @@ export function useWebRtcVideo(
   );
   const streamKeyRef = useRef(streamKey);
   streamKeyRef.current = streamKey;
+  // Fleet previews may queue behind each other, but an explicitly opened
+  // control/detail stream must take the next free attach slot.
+  const attachPriority: WebRtcAttachPriority =
+    profile === 'visible' || profile === 'degraded' ? 'preview' : 'interactive';
 
   const releaseRecoverySlot = useCallback(() => {
     recoverySlotRef.current?.();
@@ -286,10 +291,13 @@ export function useWebRtcVideo(
     };
     setConnecting(true);
     setFailed(false);
-    waitForAttachSlot(abort.signal)
+    waitForAttachSlot(abort.signal, attachPriority)
       .then((release) => {
         releaseAttachSlot = release;
-        attachHoldTimer = window.setTimeout(freeAttachSlot, ATTACH_SLOT_HOLD_MS);
+        attachHoldTimer = window.setTimeout(
+          freeAttachSlot,
+          ATTACH_SLOT_HOLD_MS
+        );
         return startWebRtcStream({
           serial,
           viewerId,
@@ -350,6 +358,7 @@ export function useWebRtcVideo(
     };
   }, [
     bitrate,
+    attachPriority,
     control,
     enabled,
     handleProgress,

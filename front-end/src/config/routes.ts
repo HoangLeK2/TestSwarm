@@ -68,7 +68,9 @@ export const ROUTES = {
     ROOT: '/dashboard/device-groups'
   },
   ACCOUNTS: {
-    ROOT: '/dashboard/accounts'
+    ROOT: '/dashboard/accounts',
+    LOGIN: (accountId: string) =>
+      `/dashboard/accounts?action=login&account_id=${encodeURIComponent(accountId)}`
   },
   ACCOUNT_GROUPS: {
     ROOT: '/dashboard/device-farm/account-groups'

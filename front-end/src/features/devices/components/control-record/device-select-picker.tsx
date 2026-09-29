@@ -22,6 +22,7 @@ import {
 import { cn } from '@/lib/utils';
 import type { Device } from '@/features/devices/types';
 import {
+  deviceSelectDisplayName,
   deviceSelectFullTitle,
   formatDeviceSelectLabel
 } from '@/features/devices/lib/device-select-label';
@@ -41,7 +42,7 @@ type DeviceSelectPickerProps = {
 function matchesQuery(d: Device, q: string) {
   if (!q) return true;
   const haystack =
-    `${d.brand ?? ''} ${d.model ?? ''} ${d.serial}`.toLowerCase();
+    `${d.name ?? ''} ${d.display_name ?? ''} ${d.brand ?? ''} ${d.model ?? ''} ${d.serial}`.toLowerCase();
   return q
     .toLowerCase()
     .split(/\s+/)
@@ -152,8 +153,7 @@ export function DeviceSelectPicker({
                       <Smartphone className='size-3.5 shrink-0 text-muted-foreground' />
                       <span className='min-w-0 flex-1'>
                         <span className='block truncate font-medium'>
-                          {`${d.brand ?? ''} ${d.model ?? ''}`.trim() ||
-                            d.serial}
+                          {deviceSelectDisplayName(d) || d.serial}
                         </span>
                         <span className='block truncate font-mono text-[10px] text-muted-foreground'>
                           {d.serial}

@@ -23,16 +23,93 @@ _ACTIVE_PREVIEWS: Dict[tuple, dict] = {}
 _ACTIVE_PREVIEWS_LOCK = threading.Lock()
 
 
+class _PreviewManualInput:
+    """One-at-a-time input handoff between a scenario worker and its SSE owner."""
+
+    def __init__(
+        self,
+        event_queue: "queue.Queue[Dict[str, Any] | None]",
+        cancel_event: "threading.Event",
+        *,
+        timeout_s: float = 300.0,
+    ) -> None:
+        self._queue = event_queue
+        self._cancel_event = cancel_event
+        self._timeout_s = timeout_s
+        self._condition = threading.Condition()
+        self._pending = False
+        self._value: str | None = None
+
+    def wait_for_input(self, request: Dict[str, Any]) -> str:
+        kind = str(request.get("kind") or "text").strip() or "text"
+        prompt = str(request.get("prompt") or "").strip()
+        with self._condition:
+            if self._pending:
+                raise RuntimeError("another manual input request is already pending")
+            self._pending = True
+            self._value = None
+            event = {
+                "_event": "input_required",
+                "kind": kind,
+                "prompt": prompt,
+            }
+            for key in ("challenge_id", "platform", "package"):
+                value = str(request.get(key) or "").strip()
+                if value:
+                    event[key] = value
+            self._queue.put(event)
+            deadline = time.monotonic() + self._timeout_s
+            while True:
+                if self._cancel_event.is_set():
+                    self._pending = False
+                    self._value = None
+                    raise RuntimeError("manual input cancelled")
+                if self._value is not None:
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._pending = False
+                    raise RuntimeError("manual input timed out")
+                self._condition.wait(min(0.25, remaining))
+            value = self._value
+            self._value = None
+            self._pending = False
+        self._queue.put({"_event": "input_received", "kind": kind})
+        return value
+
+    def submit(self, text: str) -> None:
+        value = str(text or "").strip()
+        if not value:
+            raise ValueError("manual input must not be empty")
+        if len(value) > 256:
+            raise ValueError("manual input is too long")
+        with self._condition:
+            if self._cancel_event.is_set():
+                raise RuntimeError("manual input cancelled")
+            if not self._pending:
+                raise RuntimeError("no manual input request is pending")
+            if self._value is not None:
+                raise RuntimeError("manual input was already submitted")
+            self._value = value
+            self._condition.notify_all()
+
+    def cancel(self) -> None:
+        with self._condition:
+            self._condition.notify_all()
+
+
 def _register_preview(
     serial: str,
     trace_id: str,
     event: "threading.Event",
     user_id: Optional[str] = None,
+    manual_input: _PreviewManualInput | None = None,
 ) -> None:
     with _ACTIVE_PREVIEWS_LOCK:
         _ACTIVE_PREVIEWS[(serial, trace_id)] = {
             "event": event,
             "user_id": user_id,
+            "manual_input": manual_input,
         }
 
 
@@ -83,7 +160,7 @@ def cancel_all_previews_for_serial(
 from api.auth import policy
 from api.auth.context import AuthContext
 from api.deps import caller_auth_from_request
-from api.schemas.device_control import ScenarioPreviewRequest
+from api.schemas.device_control import InputTextRequest, ScenarioPreviewRequest
 from common.session_lock import SessionLockStore
 from common.totp import account_metadata_value
 from core.config import Config
@@ -108,6 +185,7 @@ def run_scenario_on_device(
     execution_id: Optional[str] = None,
     cancel_event: Optional["threading.Event"] = None,
     scenario_registry: Optional[Dict[str, Any]] = None,
+    manual_input_handler: Optional[Callable[[Dict[str, Any]], str]] = None,
 ) -> Dict[str, Any]:
     from tasks.scenario_task import run_scenario_task
 
@@ -132,6 +210,8 @@ def run_scenario_on_device(
         scenario["_run_hash_scope"] = execution_id
     if scenario_registry:
         scenario["_scenario_registry"] = scenario_registry
+    if manual_input_handler is not None:
+        scenario["_manual_input_handler"] = manual_input_handler
     account_id = str((variables or {}).get("__ACCOUNT_ID__") or "").strip()
     if account_id:
         scenario["account_id"] = account_id
@@ -797,10 +877,16 @@ def build_scenarios_router(
             trace_id=trace_id,
             db_enabled=bool(getattr(config.database, "enabled", False)),
         )
-        cancel_event = threading.Event()
-        _register_preview(serial, trace_id, cancel_event, user_id=user_id)
-
         q: queue.Queue[Dict[str, Any] | None] = queue.Queue()
+        cancel_event = threading.Event()
+        manual_input = _PreviewManualInput(q, cancel_event)
+        _register_preview(
+            serial,
+            trace_id,
+            cancel_event,
+            user_id=user_id,
+            manual_input=manual_input,
+        )
         worker_done = threading.Event()
         main_loop = asyncio.get_running_loop()
 
@@ -843,6 +929,7 @@ def build_scenarios_router(
                     ),
                     cancel_event=cancel_event,
                     scenario_registry=scenario_registry,
+                    manual_input_handler=manual_input.wait_for_input,
                 )
                 finalize(final)
                 q.put({"_event": "done", **final})
@@ -921,12 +1008,50 @@ def build_scenarios_router(
                 {"error": "not owner of this trace"}, status_code=403
             )
         entry["event"].set()
+        input_broker = entry.get("manual_input")
+        if input_broker is not None:
+            input_broker.cancel()
         device = manager.get_device(serial)
         if device is not None:
             from tasks.scenario_task import force_clear_scenario_busy
 
             force_clear_scenario_busy(device)
         return {"ok": True, "serial": serial, "trace_id": trace_id, "cancelled": True}
+
+    @router.post("/devices/{serial}/scenario/preview-stream/{trace_id}/input")
+    async def api_scenario_preview_stream_input(
+        serial: str,
+        trace_id: str,
+        body: InputTextRequest,
+        request: Request,
+    ):
+        entry = _get_preview_entry(serial, trace_id)
+        if entry is None:
+            return JSONResponse(
+                {"error": "trace not found or already finished"}, status_code=404
+            )
+        owner_id = entry.get("user_id")
+        caller_id = _resolve_user_id_from_request(request)
+        if owner_id and caller_id != owner_id:
+            return JSONResponse({"error": "not owner of this trace"}, status_code=403)
+        input_broker = entry.get("manual_input")
+        if input_broker is None:
+            return JSONResponse(
+                {"error": "manual input is unavailable for this trace"},
+                status_code=409,
+            )
+        try:
+            input_broker.submit(body.text)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        except RuntimeError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        return {
+            "ok": True,
+            "serial": serial,
+            "trace_id": trace_id,
+            "accepted": True,
+        }
 
     @router.post("/devices/{serial}/scenario/run")
     async def api_scenario_run(serial: str, body: ScenarioPreviewRequest, request: Request):

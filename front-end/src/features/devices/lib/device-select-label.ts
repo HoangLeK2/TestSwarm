@@ -1,10 +1,13 @@
+import {
+  deviceDisplayName,
+  type DeviceDisplayLike
+} from './device-display-name';
+
 /** Bounded label for device Select (long model/serial otherwise breaks the top bar). */
-export function formatDeviceSelectLabel(d: {
-  brand: string;
-  model: string;
-  serial: string;
-}) {
-  const left = `${d.brand} ${d.model}`.trim().replace(/\s+/g, ' ');
+export function formatDeviceSelectLabel(
+  d: DeviceDisplayLike & { serial: string }
+) {
+  const left = deviceSelectDisplayName(d);
   const s = d.serial;
   const serialShort = s.length > 16 ? `${s.slice(0, 7)}…${s.slice(-6)}` : s;
   if (!left) return serialShort;
@@ -14,11 +17,13 @@ export function formatDeviceSelectLabel(d: {
   return `${leftShort} — ${serialShort}`;
 }
 
-export function deviceSelectFullTitle(d: {
-  brand: string;
-  model: string;
-  serial: string;
-}) {
-  const left = `${d.brand} ${d.model}`.trim();
+export function deviceSelectDisplayName(d: DeviceDisplayLike): string {
+  return deviceDisplayName(d, '').replace(/\s+/g, ' ');
+}
+
+export function deviceSelectFullTitle(
+  d: DeviceDisplayLike & { serial: string }
+) {
+  const left = deviceSelectDisplayName(d);
   return left ? `${left} — ${d.serial}` : d.serial;
 }

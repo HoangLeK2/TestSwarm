@@ -10,6 +10,7 @@ import {
   recoveryDelayMs,
   resetAttachSlotsForTest,
   resetRecoverySlotsForTest,
+  scheduleFirstFrameKeyframeRetries,
   startMediaProgressWatcher,
   waitForAttachSlot,
   type MediaSample
@@ -282,4 +283,57 @@ test('attach slots queue FIFO past the cap and hand over on release', async () =
   await second;
   assert.deepEqual(order, ['aborted', 'first', 'second']);
   resetAttachSlotsForTest();
+});
+
+test('interactive attach jumps ahead of queued previews', async () => {
+  resetAttachSlotsForTest();
+  const held: Array<() => void> = [];
+  for (let i = 0; i < MAX_CONCURRENT_ATTACHES; i += 1) {
+    held.push(await waitForAttachSlot(undefined, 'preview'));
+  }
+  const order: string[] = [];
+  const preview = waitForAttachSlot(undefined, 'preview').then((release) => {
+    order.push('preview');
+    return release;
+  });
+  const interactive = waitForAttachSlot(undefined, 'interactive').then(
+    (release) => {
+      order.push('interactive');
+      return release;
+    }
+  );
+
+  held.shift()?.();
+  const releaseInteractive = await interactive;
+  assert.deepEqual(order, ['interactive']);
+  releaseInteractive();
+  const releasePreview = await preview;
+  assert.deepEqual(order, ['interactive', 'preview']);
+
+  releasePreview();
+  held.forEach((release) => release());
+  resetAttachSlotsForTest();
+});
+
+test('first-frame keyframe retries are bounded and stop after a frame', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let hasFrame = false;
+  let requests = 0;
+  const stop = scheduleFirstFrameKeyframeRetries({
+    hasFrame: () => hasFrame,
+    isConnected: () => true,
+    requestKeyframe: async () => {
+      requests += 1;
+    },
+    delaysMs: [100, 200, 300]
+  });
+
+  t.mock.timers.tick(100);
+  assert.equal(requests, 1);
+  hasFrame = true;
+  t.mock.timers.tick(500);
+  assert.equal(requests, 1);
+  stop();
+  stop();
+  t.mock.timers.reset();
 });

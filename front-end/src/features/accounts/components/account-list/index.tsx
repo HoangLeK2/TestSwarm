@@ -1,7 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
+import { useSearchParams } from 'next/navigation';
 import { enUS, vi } from 'date-fns/locale';
 import { Filter, Search, Users } from 'lucide-react';
 import {
@@ -28,6 +29,7 @@ import {
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { normalizeAccountState } from '../../lib/account-fsm';
+import { AccountLoginDialog } from '../account-login-dialog';
 
 const STATUS_FILTERS: Array<AccountStateKey | 'all'> = [
   'all',
@@ -61,6 +63,12 @@ export function AccountList() {
   const locale = useLocale();
   const dateLocale = locale === 'vi' ? vi : enUS;
   const confirm = useConfirm();
+  const searchParams = useSearchParams();
+  const loginAccountId =
+    searchParams.get('action') === 'login'
+      ? searchParams.get('account_id')
+      : null;
+  const [deepLinkDismissed, setDeepLinkDismissed] = useState(false);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<AccountStateKey | 'all'>(
     'all'
@@ -75,6 +83,14 @@ export function AccountList() {
   const perms = useResourcePermissions('accounts');
 
   const data: AccountOut[] = useMemo(() => accounts ?? [], [accounts]);
+  const deepLinkedAccount = useMemo(
+    () => data.find((account) => account.id === loginAccountId) ?? null,
+    [data, loginAccountId]
+  );
+
+  useEffect(() => {
+    setDeepLinkDismissed(false);
+  }, [loginAccountId]);
 
   const statusLabel: Record<AccountStateKey, string> = useMemo(
     () => ({
@@ -156,6 +172,18 @@ export function AccountList() {
 
   return (
     <div className='space-y-5'>
+      {deepLinkedAccount ? (
+        <AccountLoginDialog
+          key={deepLinkedAccount.id}
+          account={deepLinkedAccount}
+          canUpdate={perms.canUpdate}
+          open={!deepLinkDismissed}
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen) setDeepLinkDismissed(true);
+          }}
+          hideTrigger
+        />
+      ) : null}
       <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-4'>
         <AccountMetricCard
           label={t('metricTotal')}

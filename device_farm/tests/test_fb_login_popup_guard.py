@@ -91,6 +91,128 @@ def test_login_step_is_followed_by_a_popup_dismissal_before_the_confirm_gate(
     )
 
 
+def test_login_restarts_facebook_after_totp_before_confirming_session(
+    login_steps: list[dict[str, Any]],
+) -> None:
+    by_id = {
+        str(step.get("id")): step
+        for step in login_steps
+        if str(step.get("id") or "").startswith("facebook_post_login_")
+    }
+    required = (
+        "facebook_post_login_wait",
+        "facebook_post_login_stop",
+        "facebook_post_login_restart_delay",
+        "facebook_post_login_relaunch",
+        "facebook_post_login_relaunch_stable",
+    )
+    assert all(step_id in by_id for step_id in required)
+
+    types = [step.get("type") for step in login_steps]
+    login_at = types.index("login_if_needed")
+    confirm_at = next(
+        index
+        for index, step in enumerate(login_steps)
+        if step.get("type") == "platform_session_gate"
+        and step.get("phase") == "confirm"
+    )
+    positions = [
+        next(
+            index
+            for index, step in enumerate(login_steps)
+            if step.get("id") == step_id
+        )
+        for step_id in required
+    ]
+    assert login_at < positions[0] < positions[1] < positions[2] < positions[3]
+    assert positions[3] < positions[4] < confirm_at
+
+    assert by_id["facebook_post_login_wait"] == {
+        "id": "facebook_post_login_wait",
+        "type": "wait",
+        "seconds": 5,
+    }
+    assert by_id["facebook_post_login_stop"] == {
+        "id": "facebook_post_login_stop",
+        "type": "stop_app",
+        "package": "com.facebook.katana",
+    }
+    assert by_id["facebook_post_login_restart_delay"] == {
+        "id": "facebook_post_login_restart_delay",
+        "type": "wait",
+        "seconds": 1,
+    }
+    relaunch = by_id["facebook_post_login_relaunch"]
+    assert relaunch["type"] == "launch_app"
+    assert relaunch["package"] == "com.facebook.katana"
+    assert relaunch["stop_before"] is True
+    assert relaunch["use_monkey"] is True
+    assert relaunch["wait_after"] == 3
+    assert by_id["facebook_post_login_relaunch_stable"] == {
+        "id": "facebook_post_login_relaunch_stable",
+        "type": "wait_stable",
+        "timeout": 8,
+        "stable_duration": 0.5,
+    }
+
+    popup_at = next(
+        index
+        for index, step in enumerate(login_steps)
+        if step.get("id") == "facebook_post_login_popups"
+    )
+    assert positions[4] < popup_at < confirm_at
+
+
+def test_login_opens_own_profile_then_syncs_after_session_confirmation(
+    login_steps: list[dict[str, Any]],
+) -> None:
+    confirm_at = next(
+        index
+        for index, step in enumerate(login_steps)
+        if step.get("type") == "platform_session_gate"
+        and step.get("phase") == "confirm"
+    )
+    open_profile_at = next(
+        index
+        for index, step in enumerate(login_steps)
+        if step.get("id") == "facebook_open_own_profile"
+    )
+    sync_at = next(
+        index
+        for index, step in enumerate(login_steps)
+        if step.get("id") == "facebook_read_own_profile"
+    )
+
+    assert confirm_at < open_profile_at < sync_at
+    assert login_steps[sync_at]["type"] == "social_sync_connections"
+    open_profile = login_steps[open_profile_at]
+    assert open_profile["then"] == [
+        {
+            "type": "tap_selector",
+            "by": "content-desc",
+            "value": "Đi tới trang cá nhân",
+            "timeout": 5,
+        }
+    ]
+    assert open_profile["else"] == [
+        {
+            "type": "if_element",
+            "by": "content-desc",
+            "value": "Trang cá nhân",
+            "timeout": 2,
+            "then": [
+                {
+                    "type": "tap_selector",
+                    "by": "content-desc",
+                    "value": "Trang cá nhân",
+                    "timeout": 5,
+                }
+            ],
+            "else": [],
+        }
+    ]
+
+
 def test_post_login_dismissal_repeats(login_steps: list[dict[str, Any]]) -> None:
     """One pass is not enough: the next popup renders after the previous closes."""
     repeats = [

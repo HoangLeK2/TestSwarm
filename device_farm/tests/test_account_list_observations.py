@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from api.deps import _get_current_user, _get_db
 from api.routes.accounts import router as accounts_router
 from db.database import Base
-from db.models.account import Account
+from db.models.account import Account, DeviceAccount
 from db.models.account_graph_metric import AccountGraphMetric
 from db.models.device import Device
 from db.models.device_platform_session import DevicePlatformSession
@@ -75,7 +75,12 @@ async def _seed(session_factory):
     async with session_factory() as session:
         session.add_all(
             [
-                Device(id="device-1", serial="serial-1", org_id="org-1"),
+                Device(
+                    id="device-1",
+                    serial="serial-1",
+                    name="Điện thoại chính",
+                    org_id="org-1",
+                ),
                 Device(id="device-2", serial="serial-2", org_id="org-1"),
                 Account(
                     id="account-read",
@@ -139,6 +144,13 @@ async def _seed(session_factory):
                     value=9999,
                     observed_at=_NOW,
                 ),
+                DeviceAccount(
+                    id="link-1",
+                    device_id="device-1",
+                    account_id="account-read",
+                    is_primary=True,
+                    assigned_at=_NOW,
+                ),
             ]
         )
         await session.commit()
@@ -160,9 +172,11 @@ async def test_account_list_reports_the_latest_profile_reading(session_factory):
     assert read["observed_display_name"] == "Thanh Trung Thảo"
     assert read["friends_count"] == 51
     assert read["friends_observed_at"]
+    assert read["assigned_device_name"] == "Điện thoại chính"
     # The operator's own field is untouched by a profile reading.
     assert read["display_name"] == ""
 
     never = rows["account-unread"]
     assert never["observed_display_name"] is None
     assert never["friends_count"] is None
+    assert never["assigned_device_name"] is None

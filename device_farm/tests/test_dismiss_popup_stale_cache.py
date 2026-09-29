@@ -152,6 +152,56 @@ def test_dismisses_google_saved_password_popup_by_semantic_close_label() -> None
     assert device.clicked == [("text", "×")]
 
 
+def test_dismisses_google_saved_password_popup_from_real_google_hierarchy() -> None:
+    device = _XmlDevice(
+        """<hierarchy>
+          <node class="android.widget.FrameLayout" package="com.google.android.gms">
+            <node resource-id="com.google.android.gms:id/design_bottom_sheet">
+              <node resource-id="com.google.android.gms:id/cancel"
+                    content-desc="Cancel"
+                    class="android.widget.ImageView"
+                    clickable="true" />
+              <node resource-id="com.google.android.gms:id/title"
+                    text="Sign in to Facebook with your saved password" />
+              <node resource-id="com.google.android.gms:id/continue_button"
+                    text="Continue"
+                    class="android.widget.Button"
+                    clickable="true" />
+            </node>
+          </node>
+        </hierarchy>""",
+        {("content-desc", "Cancel")},
+    )
+
+    assert _auto_dismiss_popup(device) is True
+    assert device.clicked == [("content-desc", "Cancel")]
+
+
+def test_dismisses_facebook_stop_profile_setup_dialog_from_real_screen() -> None:
+    device = _XmlDevice(
+        """<hierarchy>
+          <node text="Tiếp tục thiết lập trang cá nhân" />
+          <node text="Dừng thiết lập trang cá nhân của bạn?" />
+          <node text="TIẾP TỤC" class="android.widget.Button" clickable="true" />
+          <node text="DỪNG" class="android.widget.Button" clickable="true" />
+        </hierarchy>""",
+        {("text", "DỪNG")},
+    )
+
+    assert _auto_dismiss_popup(device) is True
+    assert device.clicked == [("text", "DỪNG")]
+
+
+def test_does_not_click_unscoped_stop_label() -> None:
+    device = _XmlDevice(
+        '<hierarchy><node text="DỪNG" clickable="true" /></hierarchy>',
+        {("text", "DỪNG")},
+    )
+
+    assert _auto_dismiss_popup(device) is False
+    assert device.clicked == []
+
+
 def test_does_not_click_unscoped_or_ambiguous_close_glyph() -> None:
     unscoped = _XmlDevice(
         '<hierarchy><node text="×" clickable="true" /></hierarchy>',

@@ -227,6 +227,18 @@ export function getAccountColumns(
       }
     },
     {
+      id: 'phone',
+      accessorKey: 'assigned_device_name',
+      header: t('colPhone'),
+      cell: ({ row }) => (
+        <span className='text-sm'>
+          {row.original.assigned_device_name || (
+            <span className='text-muted-foreground'>{t('phoneUnassigned')}</span>
+          )}
+        </span>
+      )
+    },
+    {
       id: 'friends',
       accessorKey: 'friends_count',
       header: t('colFriends'),
@@ -275,6 +287,33 @@ export function getAccountColumns(
               </Badge>
             ))}
           </div>
+        );
+      }
+    },
+    {
+      id: 'notes',
+      accessorKey: 'notes',
+      header: t('colNotes'),
+      cell: ({ row }) => {
+        const notes = row.original.notes?.trim();
+        if (!notes) {
+          return (
+            <span className='text-sm text-muted-foreground'>
+              {t('noNotes')}
+            </span>
+          );
+        }
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className='block max-w-[220px] truncate text-sm'>
+                {notes}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent className='max-w-sm whitespace-pre-wrap'>
+              {notes}
+            </TooltipContent>
+          </Tooltip>
         );
       }
     },

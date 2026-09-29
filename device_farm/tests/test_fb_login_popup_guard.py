@@ -191,7 +191,7 @@ def test_login_opens_own_profile_then_syncs_after_session_confirmation(
             "type": "tap_selector",
             "by": "content-desc",
             "value": "Đi tới trang cá nhân",
-            "timeout": 5,
+            "timeout": 3,
         }
     ]
     assert open_profile["else"] == [
@@ -199,18 +199,81 @@ def test_login_opens_own_profile_then_syncs_after_session_confirmation(
             "type": "if_element",
             "by": "content-desc",
             "value": "Trang cá nhân",
-            "timeout": 2,
+            "timeout": 1,
             "then": [
                 {
                     "type": "tap_selector",
                     "by": "content-desc",
                     "value": "Trang cá nhân",
-                    "timeout": 5,
+                    "timeout": 3,
                 }
             ],
             "else": [],
         }
     ]
+
+
+def test_login_dismisses_profile_setup_dialog_before_profile_sync(
+    login_steps: list[dict[str, Any]],
+) -> None:
+    positions = {
+        str(step.get("id")): index
+        for index, step in enumerate(login_steps)
+        if step.get("id")
+    }
+    open_at = positions["facebook_open_own_profile"]
+    guard_at = positions.get("facebook_profile_setup_guard")
+    popup_at = positions.get("facebook_profile_setup_popups")
+    sync_at = positions["facebook_read_own_profile"]
+
+    assert guard_at is not None
+    assert popup_at is not None, (
+        "profile setup popup must be dismissed after opening the profile"
+    )
+    assert open_at < guard_at < popup_at < sync_at
+
+    popup_step = login_steps[popup_at]
+    assert popup_step["type"] == "repeat"
+    assert _dismisses_popups(popup_step)
+    assert int(popup_step["count"]) <= 3
+    assert float(popup_step["delay_between"]) <= 0.5
+
+    guard = login_steps[guard_at]
+    assert guard["type"] == "if_element"
+    assert guard["by"] == "text"
+    assert guard["value"] == "Tiếp tục thiết lập trang cá nhân"
+    assert float(guard["timeout"]) <= 1
+
+    dialog_guard = guard["then"][0]
+    assert dialog_guard["value"] == "Dừng thiết lập trang cá nhân của bạn?"
+    assert dialog_guard["then"][0]["id"] == (
+        "facebook_profile_setup_popups_already_open"
+    )
+    assert dialog_guard["else"][0] == {
+        "id": "facebook_profile_setup_back",
+        "type": "key",
+        "key": "back",
+    }
+    assert dialog_guard["else"][1]["id"] == "facebook_profile_setup_popups"
+    assert guard["else"][0]["id"] == "facebook_read_own_profile"
+    assert guard["else"][1]["id"] == "facebook_leave_own_profile"
+
+
+def test_login_popup_cleanup_uses_short_bounded_waits(
+    login_steps: list[dict[str, Any]],
+) -> None:
+    by_id = {
+        str(step.get("id")): step for step in login_steps if step.get("id")
+    }
+    assert float(by_id["facebook_post_confirm_popup_delay"]["seconds"]) <= 0.5
+
+    for step_id, max_count in (
+        ("facebook_preflight_popups", 3),
+        ("facebook_post_confirm_popups", 5),
+    ):
+        repeat = by_id[step_id]
+        assert int(repeat["count"]) <= max_count
+        assert float(repeat["delay_between"]) <= 0.5
 
 
 def test_post_login_dismissal_repeats(login_steps: list[dict[str, Any]]) -> None:
@@ -246,7 +309,35 @@ def test_login_dismisses_popups_before_preflight_gate(
         if step.get("type") == "repeat" and _dismisses_popups(step)
     ]
     assert repeats, "preflight must drain Facebook popups before reading readiness"
-    assert any(int(step.get("count") or 0) >= 5 for step in repeats)
+    assert any(int(step.get("count") or 0) >= 3 for step in repeats)
+
+
+def test_login_restores_facebook_foreground_after_preflight_popup_cleanup(
+    login_steps: list[dict[str, Any]],
+) -> None:
+    """Credential Manager can remain the visible package after Cancel."""
+    positions = {
+        str(step.get("id")): index
+        for index, step in enumerate(login_steps)
+        if step.get("id")
+    }
+    popup_at = positions.get("facebook_preflight_popups")
+    relaunch_at = positions.get("facebook_preflight_relaunch")
+    gate_at = positions.get("facebook_session_preflight")
+
+    assert popup_at is not None
+    assert relaunch_at is not None, (
+        "login must bring Facebook back to the foreground after dismissing "
+        "the Google saved-password sheet"
+    )
+    assert gate_at is not None
+    assert popup_at < relaunch_at < gate_at
+
+    relaunch = login_steps[relaunch_at]
+    assert relaunch["type"] == "launch_app"
+    assert relaunch["package"] == "com.facebook.katana"
+    assert relaunch["use_monkey"] is True
+    assert relaunch["wait_after"] == 2
 
 
 def test_login_dismisses_popups_after_confirm_gate(
@@ -271,7 +362,7 @@ def test_login_dismisses_popups_after_confirm_gate(
         if step.get("type") == "repeat" and _dismisses_popups(step)
     ]
     assert repeats, "post-confirm Facebook popups must be dismissed"
-    assert any(int(step.get("count") or 0) >= 5 for step in repeats)
+    assert any(int(step.get("count") or 0) >= 3 for step in repeats)
 
 
 def test_popup_dismissal_matches_facebook_uppercase_skip_label() -> None:

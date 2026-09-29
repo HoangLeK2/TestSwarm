@@ -50,7 +50,8 @@ function accountMatchesSearch(account: AccountOut, query: string) {
     account.observed_display_name,
     account.platform,
     account.tags,
-    account.state_reason
+    account.state_reason,
+    account.assigned_device_name
   ]
     .filter(Boolean)
     .some((value) => String(value).toLowerCase().includes(normalized));

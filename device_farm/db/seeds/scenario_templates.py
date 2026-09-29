@@ -1312,7 +1312,7 @@ def _fb_read_own_profile_steps(prefix: str) -> List[Dict[str, Any]]:
         "type": "tap_selector",
         "by": "content-desc",
         "value": "Đi tới trang cá nhân",
-        "timeout": 5,
+        "timeout": 3,
     }
     return [
         {
@@ -1320,7 +1320,7 @@ def _fb_read_own_profile_steps(prefix: str) -> List[Dict[str, Any]]:
             "type": "if_element",
             "by": "content-desc",
             "value": "Đi tới trang cá nhân",
-            "timeout": 4,
+            "timeout": 2,
             "title": "Đi tới trang cá nhân",
             "then": [deepcopy(open_profile)],
             "else": [
@@ -1328,13 +1328,13 @@ def _fb_read_own_profile_steps(prefix: str) -> List[Dict[str, Any]]:
                     "type": "if_element",
                     "by": "content-desc",
                     "value": "Trang cá nhân",
-                    "timeout": 2,
+                    "timeout": 1,
                     "then": [
                         {
                             "type": "tap_selector",
                             "by": "content-desc",
                             "value": "Trang cá nhân",
-                            "timeout": 5,
+                            "timeout": 3,
                         }
                     ],
                     "else": [],
@@ -1344,18 +1344,59 @@ def _fb_read_own_profile_steps(prefix: str) -> List[Dict[str, Any]]:
         {
             "id": f"{prefix}_profile_settle",
             "type": "wait_stable",
-            "timeout": 8,
-            "stable_duration": 0.6,
+            "timeout": 5,
+            "stable_duration": 0.4,
         },
         {
-            "id": f"{prefix}_read_own_profile",
-            "type": "social_sync_connections",
-            "platform": "facebook",
-            "metric": "friends",
-            "timeout": 12,
-            "title": "Đọc tên hiển thị và số bạn",
+            "id": f"{prefix}_profile_setup_guard",
+            "type": "if_element",
+            "by": "text",
+            "value": "Tiếp tục thiết lập trang cá nhân",
+            "timeout": 1,
+            "then": [
+                {
+                    "id": f"{prefix}_profile_setup_dialog_guard",
+                    "type": "if_element",
+                    "by": "text",
+                    "value": "Dừng thiết lập trang cá nhân của bạn?",
+                    "timeout": 0.3,
+                    "then": [
+                        {
+                            "id": f"{prefix}_profile_setup_popups_already_open",
+                            "type": "repeat",
+                            "count": 3,
+                            "delay_between": 0.4,
+                            "steps": [{"type": "dismiss_popup", "retries": 2}],
+                        }
+                    ],
+                    "else": [
+                        {
+                            "id": f"{prefix}_profile_setup_back",
+                            "type": "key",
+                            "key": "back",
+                        },
+                        {
+                            "id": f"{prefix}_profile_setup_popups",
+                            "type": "repeat",
+                            "count": 3,
+                            "delay_between": 0.4,
+                            "steps": [{"type": "dismiss_popup", "retries": 2}],
+                        },
+                    ],
+                }
+            ],
+            "else": [
+                {
+                    "id": f"{prefix}_read_own_profile",
+                    "type": "social_sync_connections",
+                    "platform": "facebook",
+                    "metric": "friends",
+                    "timeout": 6,
+                    "title": "Đọc tên hiển thị và số bạn",
+                },
+                {"id": f"{prefix}_leave_own_profile", "type": "key", "key": "back"},
+            ],
         },
-        {"id": f"{prefix}_leave_own_profile", "type": "key", "key": "back"},
     ]
 
 
@@ -1432,18 +1473,19 @@ def _fb_session_guard_steps(
     allow_login_recovery: bool = True,
     stop_before: bool = False,
     use_monkey: bool = False,
+    restore_foreground_after_preflight: bool = False,
 ) -> List[Dict[str, Any]]:
     post_confirm_cleanup = [
         {
             "id": f"{prefix}_post_confirm_popup_delay",
             "type": "wait",
-            "seconds": 1,
+            "seconds": 0.5,
         },
         {
             "id": f"{prefix}_post_confirm_popups",
             "type": "repeat",
-            "count": 8,
-            "delay_between": 1,
+            "count": 5,
+            "delay_between": 0.5,
             "steps": [{"type": "dismiss_popup", "retries": 3}],
         },
     ]
@@ -1451,8 +1493,8 @@ def _fb_session_guard_steps(
         {
             "id": f"{prefix}_preflight_popups",
             "type": "repeat",
-            "count": 5,
-            "delay_between": 1,
+            "count": 3,
+            "delay_between": 0.5,
             "steps": [{"type": "dismiss_popup", "retries": 3}],
         },
     ]
@@ -1463,6 +1505,20 @@ def _fb_session_guard_steps(
             use_monkey=use_monkey,
         ),
         *preflight_cleanup,
+        *(
+            [
+                {
+                    "id": f"{prefix}_preflight_relaunch",
+                    "type": "launch_app",
+                    "package": "com.facebook.katana",
+                    "use_monkey": True,
+                    "wait_after": 2,
+                    "title": "Đưa Facebook về foreground sau popup hệ thống",
+                }
+            ]
+            if restore_foreground_after_preflight
+            else []
+        ),
         {
             "id": f"{prefix}_session_preflight",
             "type": "platform_session_gate", "platform": "facebook",
@@ -1670,6 +1726,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                 "facebook",
                 stop_before=True,
                 use_monkey=True,
+                restore_foreground_after_preflight=True,
             ),
             # Confirming the session says "somebody is signed in"; only the
             # profile header says who. Read it here, where the session row was

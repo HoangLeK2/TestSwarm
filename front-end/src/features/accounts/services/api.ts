@@ -25,6 +25,7 @@ export type AccountVerificationHold = {
 };
 
 export type AccountOut = GeneratedAccountOut & {
+  assigned_device_name?: string | null;
   verification_hold?: AccountVerificationHold | null;
   verification_hold_until?: string | null;
 };

@@ -66,7 +66,14 @@ _GOOGLE_SAVED_PASSWORD_MARKERS: frozenset[str] = frozenset({
     "sign in to facebook with your saved password",
 })
 _GOOGLE_SAVED_PASSWORD_CLOSE_LABELS: frozenset[str] = frozenset({
-    "close", "dismiss", "×",
+    "cancel", "close", "dismiss", "×",
+})
+
+_FACEBOOK_PROFILE_SETUP_STOP_MARKERS: frozenset[str] = frozenset({
+    "dừng thiết lập trang cá nhân của bạn?",
+})
+_FACEBOOK_PROFILE_SETUP_STOP_LABELS: frozenset[str] = frozenset({
+    "dừng",
 })
 
 _VOLATILE_ATTRS = re.compile(
@@ -635,6 +642,38 @@ def _auto_dismiss_popup(device: "DeviceClient") -> bool:
                     device.hierarchy_invalidate_cache()
                     log.info(
                         "[%s] Google saved-password popup dismissed: %s=%r",
+                        device.serial,
+                        by,
+                        label,
+                    )
+                    time.sleep(0.3)
+                    return True
+            except Exception:
+                pass
+        return False
+
+    is_facebook_profile_setup_stop_dialog = bool(
+        visible_labels & _FACEBOOK_PROFILE_SETUP_STOP_MARKERS
+    )
+    if is_facebook_profile_setup_stop_dialog:
+        stop_candidates = [
+            (attr, label, node)
+            for node in root.iter()
+            for attr in ("content-desc", "text")
+            if (label := str(node.attrib.get(attr) or "").strip())
+            and label.casefold() in _FACEBOOK_PROFILE_SETUP_STOP_LABELS
+            and node.attrib.get("clickable", "true").lower() == "true"
+        ]
+        if len(stop_candidates) == 1:
+            attr, label, _ = stop_candidates[0]
+            by = "content-desc" if attr == "content-desc" else "text"
+            try:
+                eid = u2.find_element(by, label, timeout=0)
+                if eid is not None:
+                    u2.element_click(eid)
+                    device.hierarchy_invalidate_cache()
+                    log.info(
+                        "[%s] Facebook profile-setup stop dialog dismissed: %s=%r",
                         device.serial,
                         by,
                         label,

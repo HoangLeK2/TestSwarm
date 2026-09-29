@@ -97,6 +97,7 @@ class AccountOut(BaseModel):
     observed_display_name: Optional[str] = None
     friends_count: Optional[int] = None
     friends_observed_at: Optional[datetime] = None
+    assigned_device_name: Optional[str] = None
     verification_hold: Optional[AccountVerificationHoldOut] = None
     verification_hold_until: Optional[datetime] = None
     # password_encrypted is intentionally excluded from all responses

@@ -217,7 +217,33 @@ async def _observations_for(db, accounts) -> dict[str, dict[str, Any]]:
     }
 
 
-def _account_to_out(account, observed: dict[str, Any] | None = None) -> AccountOut:
+async def _assigned_device_names_for(db, accounts) -> dict[str, str]:
+    ids = [account.id for account in accounts]
+    if not ids:
+        return {}
+    rows = await db.execute(
+        select(DeviceAccount.account_id, Device.name)
+        .join(Device, Device.id == DeviceAccount.device_id)
+        .where(DeviceAccount.account_id.in_(ids))
+        .order_by(
+            DeviceAccount.account_id,
+            DeviceAccount.is_primary.desc(),
+            DeviceAccount.assigned_at.desc(),
+        )
+    )
+    names: dict[str, str] = {}
+    for account_id, device_name in rows:
+        name = (device_name or "").strip()
+        if name and account_id not in names:
+            names[account_id] = name
+    return names
+
+
+def _account_to_out(
+    account,
+    observed: dict[str, Any] | None = None,
+    assigned_device_name: str | None = None,
+) -> AccountOut:
     state = getattr(account, "state", None) or account.status
     seen = observed or {}
     verification_hold = get_verification_hold(account)
@@ -225,6 +251,7 @@ def _account_to_out(account, observed: dict[str, Any] | None = None) -> AccountO
         observed_display_name=seen.get("observed_display_name"),
         friends_count=seen.get("friends_count"),
         friends_observed_at=seen.get("friends_observed_at"),
+        assigned_device_name=assigned_device_name,
         verification_hold=verification_hold,
         verification_hold_until=(
             verification_hold.remind_at if verification_hold is not None else None
@@ -569,7 +596,15 @@ async def list_accounts_endpoint(
         offset=offset,
     )
     observed = await _observations_for(db, accounts)
-    return [_account_to_out(a, observed.get(a.id)) for a in accounts]
+    assigned_device_names = await _assigned_device_names_for(db, accounts)
+    return [
+        _account_to_out(
+            account,
+            observed.get(account.id),
+            assigned_device_names.get(account.id),
+        )
+        for account in accounts
+    ]
 
 
 @router.post(

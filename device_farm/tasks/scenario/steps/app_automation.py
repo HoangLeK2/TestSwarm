@@ -96,6 +96,20 @@ def _snapshot_has_any_text(snapshot: Any, texts: list[str]) -> bool:
     return False
 
 
+def _snapshot_has_any_exact_text(snapshot: Any, texts: list[str]) -> bool:
+    needles = {str(text).strip().casefold() for text in texts if str(text).strip()}
+    if not needles:
+        return False
+    for node in snapshot.nodes:
+        values = {
+            str(node.text or "").strip().casefold(),
+            str(node.desc or "").strip().casefold(),
+        }
+        if needles.intersection(values):
+            return True
+    return False
+
+
 def _selector_spec(selector: Dict[str, Any]) -> ScenarioSelectorSpec:
     return ScenarioSelectorSpec(
         by=str(selector.get("by") or "text"),
@@ -314,6 +328,13 @@ def _click_submit(
     if submit.tap_text:
         labels.append(submit.tap_text)
     labels.extend(submit.tap_text_any)
+    visible_labels = {
+        str(value or "").strip().casefold()
+        for node in snapshot.nodes
+        for value in (node.text, node.desc)
+        if str(value or "").strip()
+    }
+    labels.sort(key=lambda label: str(label).strip().casefold() not in visible_labels)
     errors = []
     for label in labels:
         spec = ScenarioSelectorSpec(by="text", value=str(label))
@@ -376,11 +397,20 @@ def _wait_for_post_submit_action(
     deadline = time.monotonic() + float(action.timeout_s)
     while True:
         xml, snapshot = _current_snapshot(sc)
+        if action.skip_text_exact_any and _snapshot_has_any_exact_text(
+            snapshot, action.skip_text_exact_any
+        ):
+            return None
         if action.skip_when_text_any and _snapshot_has_any_text(
             snapshot, action.skip_when_text_any
         ):
             return None
-        if not action.when_text_any or _snapshot_has_any_text(snapshot, action.when_text_any):
+        has_condition = bool(action.when_text_any or action.when_text_exact_any)
+        if (
+            not has_condition
+            or _snapshot_has_any_exact_text(snapshot, action.when_text_exact_any)
+            or _snapshot_has_any_text(snapshot, action.when_text_any)
+        ):
             return xml, snapshot
         if _cancelled(sc) or time.monotonic() >= deadline:
             return None
@@ -398,7 +428,9 @@ def _execute_post_submit_actions(
         trace: Dict[str, Any] = {
             "index": index,
             "when_text_any": action.when_text_any,
+            "when_text_exact_any": action.when_text_exact_any,
             "skip_when_text_any": action.skip_when_text_any,
+            "skip_text_exact_any": action.skip_text_exact_any,
             "matched": False,
             "executed": False,
         }

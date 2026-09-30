@@ -6242,6 +6242,8 @@
       "devicePickerClear": "Clear all",
       "devicePickerReadyHint": "Schedules normally run on ready devices. Check the status before selecting a phone.",
       "devicePickerReadyState": "Ready",
+      "devicePickerNameLoading": "Loading device name…",
+      "devicePickerNameUnavailable": "Device name unavailable",
       "deviceGroupLabel": "Device group (optional)",
       "allReadyDevices": "All ready devices",
       "filterStateLabel": "Device state filter",

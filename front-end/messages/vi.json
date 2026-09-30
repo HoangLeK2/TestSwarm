@@ -5775,6 +5775,8 @@
       "devicePickerClear": "Bỏ chọn tất cả",
       "devicePickerReadyHint": "Lịch thường chạy trên thiết bị sẵn sàng. Hãy kiểm tra trạng thái trước khi chọn máy.",
       "devicePickerReadyState": "Sẵn sàng",
+      "devicePickerNameLoading": "Đang tải tên thiết bị…",
+      "devicePickerNameUnavailable": "Không tải được tên thiết bị",
       "deviceGroupLabel": "Nhóm thiết bị (không bắt buộc)",
       "allReadyDevices": "Tất cả thiết bị sẵn sàng",
       "filterStateLabel": "Trạng thái thiết bị",

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import {
   ChevronLeft,
@@ -10,8 +10,12 @@ import {
   X
 } from 'lucide-react';
 
-import { useDevicePage } from '@/features/devices/hooks/use-devices';
+import {
+  useDevicePage,
+  useDevices
+} from '@/features/devices/hooks/use-devices';
 import { useDebouncedCallback } from '@/hooks/use-debounced-callback';
+import { resolveScheduleDeviceLabels } from './schedule-device-labels';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -55,7 +59,8 @@ export function ScheduleDevicePicker({
     pageSize: PAGE_SIZE,
     q: query || undefined
   });
-  const items = data?.items ?? [];
+  const { data: allDevices, isError: allDevicesError } = useDevices();
+  const items = useMemo(() => data?.items ?? [], [data?.items]);
   const pageCount = Math.max(1, data?.page_count ?? 1);
   const readyHint = t('devicePickerReadyHint');
   const readyStateLabel = t('devicePickerReadyState');
@@ -64,12 +69,10 @@ export function ScheduleDevicePicker({
     setPage(1);
   }, [query]);
 
-  // Labels accumulate as pages load; serials we have never seen (reopening an
-  // old schedule) fall back to the serial itself rather than an extra request.
-  const labels = useRef(new Map<string, string>());
-  for (const device of items) {
-    labels.current.set(device.serial, device.name || device.serial);
-  }
+  const labels = useMemo(
+    () => resolveScheduleDeviceLabels(value, items, allDevices ?? []),
+    [allDevices, items, value]
+  );
 
   const toggle = (serial: string) => {
     onChange(
@@ -77,6 +80,14 @@ export function ScheduleDevicePicker({
         ? value.filter((s) => s !== serial)
         : [...value, serial]
     );
+  };
+
+  const deviceChipLabel = (serial: string) => {
+    const label = labels.get(serial);
+    if (label && label !== serial) return label;
+    if (allDevices) return serial;
+    if (allDevicesError) return t('devicePickerNameUnavailable');
+    return t('devicePickerNameLoading');
   };
 
   return (
@@ -201,7 +212,7 @@ export function ScheduleDevicePicker({
               className='inline-flex items-center gap-1 rounded-full border bg-muted/50 py-0.5 pl-2 pr-1 text-xs'
             >
               <span className='max-w-[12rem] truncate'>
-                {labels.current.get(serial) ?? serial}
+                {deviceChipLabel(serial)}
               </span>
               <button
                 type='button'

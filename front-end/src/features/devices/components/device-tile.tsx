@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   type MutableRefObject,
   type ReactNode
 } from 'react';
@@ -147,6 +148,15 @@ export function DeviceTile({
     width: number;
     height: number;
   } | null>(null);
+  const streamRefreshRef = useRef<(() => void) | null>(null);
+
+  const sendInputWithRefresh = useCallback(
+    (message: object) => {
+      wsSend(message);
+      if (streamTransport === 'webrtc') streamRefreshRef.current?.();
+    },
+    [streamTransport, wsSend]
+  );
 
   useEffect(() => {
     setStreamRenderSize(null);
@@ -209,7 +219,7 @@ export function DeviceTile({
     (scale: number) => {
       const dw = device.screen_width || 1080;
       const dh = device.screen_height || 1920;
-      wsSend({
+      sendInputWithRefresh({
         type: 'pinch',
         serial: device.serial,
         cx: Math.round(dw / 2),
@@ -218,7 +228,12 @@ export function DeviceTile({
         ms: 400
       });
     },
-    [wsSend, device.serial, device.screen_width, device.screen_height]
+    [
+      sendInputWithRefresh,
+      device.serial,
+      device.screen_width,
+      device.screen_height
+    ]
   );
 
   const handleStreamSize = useCallback(
@@ -232,7 +247,7 @@ export function DeviceTile({
 
   const handleSwipeExt = useCallback(
     (direction: 'up' | 'down' | 'left' | 'right') => {
-      wsSend({
+      sendInputWithRefresh({
         type: 'swipe_ext',
         serial: device.serial,
         direction,
@@ -240,20 +255,20 @@ export function DeviceTile({
         ms: 500
       });
     },
-    [wsSend, device.serial]
+    [sendInputWithRefresh, device.serial]
   );
 
   const handleScreenOn = useCallback(
-    () => wsSend({ type: 'screen_on', serial: device.serial }),
-    [wsSend, device.serial]
+    () => sendInputWithRefresh({ type: 'screen_on', serial: device.serial }),
+    [sendInputWithRefresh, device.serial]
   );
   const handleScreenOff = useCallback(
-    () => wsSend({ type: 'screen_off', serial: device.serial }),
-    [wsSend, device.serial]
+    () => sendInputWithRefresh({ type: 'screen_off', serial: device.serial }),
+    [sendInputWithRefresh, device.serial]
   );
   const handleUnlock = useCallback(
-    () => wsSend({ type: 'unlock', serial: device.serial }),
-    [wsSend, device.serial]
+    () => sendInputWithRefresh({ type: 'unlock', serial: device.serial }),
+    [sendInputWithRefresh, device.serial]
   );
 
   const [liveInputOpen, setLiveInputOpen] = useState(false);
@@ -261,13 +276,13 @@ export function DeviceTile({
     () =>
       !compact
         ? {
-            wsSend,
+            wsSend: sendInputWithRefresh,
             disabled: readOnlyPreview,
             open: liveInputOpen,
             onOpenChange: setLiveInputOpen
           }
         : undefined,
-    [compact, wsSend, readOnlyPreview, liveInputOpen]
+    [compact, sendInputWithRefresh, readOnlyPreview, liveInputOpen]
   );
 
   return (
@@ -356,6 +371,7 @@ export function DeviceTile({
                         streamFetchPriority={streamFetchPriority}
                         streamTransport={streamTransport}
                         captureFrameRef={captureFrameRef}
+                        streamRefreshRef={streamRefreshRef}
                         regionSelect={regionSelect}
                         streamFit={streamFit}
                         onStreamSize={handleStreamSize}
@@ -382,7 +398,11 @@ export function DeviceTile({
                     className='h-full min-h-0 self-stretch'
                     onToggleMode={() => onToggleMode(device.serial)}
                     onKey={(key) =>
-                      wsSend({ type: 'key', serial: device.serial, key })
+                      sendInputWithRefresh({
+                        type: 'key',
+                        serial: device.serial,
+                        key
+                      })
                     }
                     onRestart={() => onRestart(device.serial)}
                     gestureMode={gestureMode}
@@ -426,7 +446,13 @@ export function DeviceTile({
             mode={mode}
             layout='below'
             onToggleMode={() => onToggleMode(device.serial)}
-            onKey={(key) => wsSend({ type: 'key', serial: device.serial, key })}
+            onKey={(key) =>
+              sendInputWithRefresh({
+                type: 'key',
+                serial: device.serial,
+                key
+              })
+            }
             onRestart={() => onRestart(device.serial)}
             compact={compact}
             gestureMode={gestureMode}

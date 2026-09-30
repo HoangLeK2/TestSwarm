@@ -40,7 +40,9 @@ export type StallThresholds = {
 };
 
 export const DEFAULT_STALL_THRESHOLDS: StallThresholds = {
-  decoderStallMs: 3_000,
+  // Short decode gaps happen during a static screen or encoder reset. The old
+  // 3s window recycled healthy PeerConnections and caused repeated blackouts.
+  decoderStallMs: 8_000,
   firstFrameMs: 12_000
 };
 
@@ -62,7 +64,13 @@ export function classifyStall(
   if (latest.framesDecoded > anchor.framesDecoded) return null;
   const ageMs = latest.at - anchor.at;
   if (anchor.framesDecoded === 0) {
-    return ageMs >= thresholds.firstFrameMs ? 'no_media' : null;
+    if (ageMs < thresholds.firstFrameMs) return null;
+    // RTP reached the browser, so the transport is alive; the decoder joined
+    // mid-GOP and needs one fresh IDR. Treat this like a decoder stall so the
+    // caller can repair the existing connection before rebuilding it.
+    return latest.bytesReceived > anchor.bytesReceived
+      ? 'decoder_stalled'
+      : 'no_media';
   }
   if (latest.bytesReceived > anchor.bytesReceived) {
     return ageMs >= thresholds.decoderStallMs ? 'decoder_stalled' : null;
@@ -131,6 +139,42 @@ export function acquireRecoverySlot(): (() => void) | null {
 /** Test hook: the module-level counter would otherwise leak between cases. */
 export function resetRecoverySlotsForTest(): void {
   activeRecoveries = 0;
+}
+
+/**
+ * Browser-side guard for viewer-driven IDR requests.
+ *
+ * The adapter has its own 3s safety gate because RESET_VIDEO reconfigures the
+ * phone encoder. This slightly wider page-wide gate also deduplicates a control
+ * view and dashboard preview watching the same device.
+ */
+export const KEYFRAME_REPAIR_COOLDOWN_MS = 4_000;
+const lastKeyframeRepairAt = new Map<string, number>();
+
+export function acquireKeyframeRepair(
+  serial: string,
+  now: number = Date.now()
+): boolean {
+  if (!serial) return false;
+  const last = lastKeyframeRepairAt.get(serial);
+  if (last !== undefined && now - last < KEYFRAME_REPAIR_COOLDOWN_MS) {
+    return false;
+  }
+  lastKeyframeRepairAt.set(serial, now);
+  return true;
+}
+
+/** Test hook: the module-level per-device gate must not leak between cases. */
+export function resetKeyframeRepairsForTest(): void {
+  lastKeyframeRepairAt.clear();
+}
+
+/** Request an IDR only when no decoded-frame progress followed an input. */
+export function shouldRequestWebRtcRefreshAfterInput(
+  progressVersionAtInput: number,
+  currentProgressVersion: number
+): boolean {
+  return currentProgressVersion <= progressVersionAtInput;
 }
 
 /**
@@ -314,6 +358,10 @@ export function startMediaProgressWatcher({
   // about it yet. Reporting the same stall on every subsequent tick would turn
   // one freeze into a stream of recovery attempts.
   let paused = false;
+  // `resume()` must remember the stalled decoder count. If the repaired IDR
+  // lands before the next poll, treating that poll as a fresh baseline hides
+  // the recovery and leaves UI state stuck on "stalled" for a static screen.
+  let framesDecodedBeforeRepair: number | null = null;
 
   const tick = async () => {
     if (closed || paused) return;
@@ -329,6 +377,13 @@ export function startMediaProgressWatcher({
     const latest = await sample();
     if (closed || paused || !latest) return;
     if (!anchor) {
+      if (
+        framesDecodedBeforeRepair !== null &&
+        latest.framesDecoded > framesDecodedBeforeRepair
+      ) {
+        onProgress?.(latest);
+      }
+      framesDecodedBeforeRepair = null;
       anchor = latest;
       suspected = null;
       return;
@@ -360,6 +415,7 @@ export function startMediaProgressWatcher({
     },
     resume: () => {
       if (closed) return;
+      framesDecodedBeforeRepair = anchor?.framesDecoded ?? null;
       anchor = null;
       suspected = null;
       paused = false;

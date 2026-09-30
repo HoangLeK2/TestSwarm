@@ -92,6 +92,12 @@ export type WebRtcStreamController = {
    * to need a page refresh.
    */
   setStallHandler: (handler: ((reason: StallReason) => void) | null) => void;
+  /** Re-arm the watchdog after an in-place decoder repair. */
+  resumeWatcher: () => void;
+  /** Monotonic count of watchdog samples that decoded at least one new frame. */
+  getProgressVersion: () => number;
+  /** Ask for one adapter-gated IDR tied to this controller's lifecycle. */
+  requestKeyframe: () => Promise<void>;
   close: () => Promise<void>;
 };
 
@@ -127,6 +133,18 @@ async function keepWebRtcSessionAlive(
   await postJson(`/media/webrtc/sessions/${sessionId}/heartbeat`, {
     ttl_seconds: WEBRTC_SESSION_TTL_SECONDS
   });
+}
+
+/** Ask the adapter for one rate-limited IDR without replacing this session. */
+export async function requestWebRtcKeyframe(
+  sessionId: string,
+  signal?: AbortSignal
+): Promise<void> {
+  await farmApi.post(
+    `/media/webrtc/sessions/${sessionId}/keyframe`,
+    {},
+    { timeout: 3_000, signal }
+  );
 }
 
 /**
@@ -317,6 +335,7 @@ export async function startWebRtcStream({
     stallHandler = handler;
   };
   let watcher: MediaProgressWatcherHandle | null = null;
+  let progressVersion = 0;
 
   let firstFrameSeen = false;
   let frameCallbackHandle: number | null = null;
@@ -384,7 +403,10 @@ export async function startWebRtcStream({
     watcher = startMediaProgressWatcher({
       sample: () => readMediaSample(pc),
       thresholds: DEFAULT_STALL_THRESHOLDS,
-      onProgress,
+      onProgress: (latest) => {
+        progressVersion += 1;
+        onProgress?.(latest);
+      },
       onStall: (reason) => stallHandler?.(reason)
     });
   } catch (error) {
@@ -411,7 +433,10 @@ export async function startWebRtcStream({
     video.removeEventListener('playing', requestFirstVideoFrame);
     video.removeEventListener('resize', markFrame);
     pc.close();
-    video.srcObject = null;
+    // Keep the ended MediaStream attached until the replacement connection's
+    // ontrack swaps it. Chromium retains the last painted frame this way;
+    // clearing srcObject here caused every recovery to flash a black screen.
+    // An unmounted video is collected normally, and disabling WebRTC hides it.
     await closeSession();
   };
 
@@ -423,6 +448,9 @@ export async function startWebRtcStream({
     sessionId: session.id,
     peerConnection: pc,
     setStallHandler,
+    resumeWatcher: () => watcher?.resume(),
+    getProgressVersion: () => progressVersion,
+    requestKeyframe: () => requestWebRtcKeyframe(session.id, signal),
     close
   };
 }

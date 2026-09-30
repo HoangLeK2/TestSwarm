@@ -5,11 +5,14 @@ import {
   DEFAULT_STALL_THRESHOLDS,
   MAX_CONCURRENT_ATTACHES,
   MAX_RECOVERY_ATTEMPTS,
+  acquireKeyframeRepair,
   acquireRecoverySlot,
   classifyStall,
   recoveryDelayMs,
   resetAttachSlotsForTest,
+  resetKeyframeRepairsForTest,
   resetRecoverySlotsForTest,
+  shouldRequestWebRtcRefreshAfterInput,
   startMediaProgressWatcher,
   waitForAttachSlot,
   type MediaSample
@@ -47,9 +50,9 @@ test('bytes arriving with no decoded frame reports decoder_stalled', () => {
   assert.equal(classifyStall(anchor, latest), 'decoder_stalled');
 });
 
-test('decoder_stalled needs the full window, not one flat frame', () => {
+test('a brief decoder pause does not recycle a healthy connection', () => {
   const anchor = sample({ at: 0 });
-  const latest = sample({ at: 1_500, bytesReceived: 5000 });
+  const latest = sample({ at: 7_000, bytesReceived: 5000 });
   assert.equal(classifyStall(anchor, latest), null);
 });
 
@@ -58,15 +61,25 @@ test('a missing first frame uses the first-frame budget', () => {
   const inside = sample({
     at: DEFAULT_STALL_THRESHOLDS.firstFrameMs - 1,
     framesDecoded: 0,
-    bytesReceived: 5_000
+    bytesReceived: 0
   });
   assert.equal(classifyStall(anchor, inside), null);
   const outside = sample({
     at: DEFAULT_STALL_THRESHOLDS.firstFrameMs,
     framesDecoded: 0,
-    bytesReceived: 10_000
+    bytesReceived: 0
   });
   assert.equal(classifyStall(anchor, outside), 'no_media');
+});
+
+test('RTP arriving without a first decoded frame asks for decoder repair', () => {
+  const anchor = sample({ at: 0, framesDecoded: 0, bytesReceived: 0 });
+  const latest = sample({
+    at: DEFAULT_STALL_THRESHOLDS.firstFrameMs,
+    framesDecoded: 0,
+    bytesReceived: 10_000
+  });
+  assert.equal(classifyStall(anchor, latest), 'decoder_stalled');
 });
 
 test('a failed connection is reported without waiting for a counter window', () => {
@@ -123,6 +136,20 @@ test('a slot release is idempotent', () => {
   assert.ok(acquireRecoverySlot());
   assert.equal(acquireRecoverySlot(), null);
   resetRecoverySlotsForTest();
+});
+
+test('keyframe repair is shared and rate-limited per device', () => {
+  resetKeyframeRepairsForTest();
+  assert.equal(acquireKeyframeRepair('SERIAL-1', 10_000), true);
+  assert.equal(acquireKeyframeRepair('SERIAL-1', 12_000), false);
+  assert.equal(acquireKeyframeRepair('SERIAL-2', 12_000), true);
+  assert.equal(acquireKeyframeRepair('SERIAL-1', 14_000), true);
+  resetKeyframeRepairsForTest();
+});
+
+test('input refresh is skipped when media progressed after the command', () => {
+  assert.equal(shouldRequestWebRtcRefreshAfterInput(12, 12), true);
+  assert.equal(shouldRequestWebRtcRefreshAfterInput(12, 13), false);
 });
 
 test('a missing first frame is only reported after two samples', async (t) => {
@@ -192,10 +219,12 @@ test('resume re-arms the watcher after an in-place repair', async (t) => {
   let bytes = 1_000;
   let frames = 10;
   const reasons: string[] = [];
+  const progress: number[] = [];
   const watcher = startMediaProgressWatcher({
     sample: async () =>
       sample({ at: clock, bytesReceived: bytes, framesDecoded: frames }),
     onStall: (reason) => reasons.push(reason),
+    onProgress: (latest) => progress.push(latest.framesDecoded),
     isVisible: () => true
   });
 
@@ -219,10 +248,9 @@ test('resume re-arms the watcher after an in-place repair', async (t) => {
   // The repair landed: frames move again and the re-armed watcher stays quiet.
   watcher.resume();
   frames += 1;
-  await tick(1_000); // re-arms the anchor at the new clock
-  frames += 1;
   await tick(1_000);
   assert.deepEqual(reasons, ['decoder_stalled']);
+  assert.deepEqual(progress, [11], 'the repaired IDR clears stalled state');
 
   // It did not stay fixed. The watcher is live again and reports the next stall,
   // which is what lets the caller escalate past the keyframe rung.

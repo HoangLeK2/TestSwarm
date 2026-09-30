@@ -258,6 +258,8 @@ interface DeviceScreenProps {
    * screenshot — since media moved to go2rtc the backend has no frame to give.
    */
   captureFrameRef?: MutableRefObject<(() => string | null) | null>;
+  /** Lets controls outside the mirror request a guarded WebRTC frame refresh. */
+  streamRefreshRef?: MutableRefObject<(() => void) | null>;
   /**
    * Drag a rectangle on the mirror instead of tapping through to the device —
    * used to cut a tap_image template out of the screen the user is looking at.
@@ -311,6 +313,7 @@ export function DeviceScreen({
   scrcpyAttachOptions,
   scrcpyViewerRole = 'control-screen',
   captureFrameRef,
+  streamRefreshRef,
   regionSelect
 }: DeviceScreenProps) {
   const t = useTranslations('devicesFarm');
@@ -639,6 +642,17 @@ export function DeviceScreen({
     onSize: updateStreamSize,
     onError: handleWebRtcError
   });
+  const requestWebRtcFrameRefresh = webrtc.requestFrameRefresh;
+
+  useEffect(() => {
+    if (!streamRefreshRef) return;
+    streamRefreshRef.current = requestWebRtcFrameRefresh;
+    return () => {
+      if (streamRefreshRef.current === requestWebRtcFrameRefresh) {
+        streamRefreshRef.current = null;
+      }
+    };
+  }, [requestWebRtcFrameRefresh, streamRefreshRef]);
 
   // Control is an explicit viewer: always ask the backend to attach scrcpy in
   // continuous mode. If auto-attach is disabled server-side, this starts video;
@@ -1542,6 +1556,10 @@ export function DeviceScreen({
   }, [captureFrameRef, showWebRtcVideo, showH264Canvas]);
 
   const requestStreamRefreshAfterInput = useCallback(() => {
+    if (webrtcRequested) {
+      requestWebRtcFrameRefresh();
+      return;
+    }
     if (!h264SubscriptionAllowed) return;
 
     const requestIfStillNeeded = (frameVersionAtInput: number) => {
@@ -1579,7 +1597,9 @@ export function DeviceScreen({
     h264DecodeAllowed,
     h264Only,
     h264SubscriptionAllowed,
-    isActive
+    isActive,
+    requestWebRtcFrameRefresh,
+    webrtcRequested
   ]);
 
   const bind = useGesture(

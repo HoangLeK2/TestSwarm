@@ -14,8 +14,10 @@ import {
   ATTACH_SLOT_HOLD_MS,
   MAX_RECOVERY_ATTEMPTS,
   RECOVERY_RESET_AFTER_MS,
+  acquireKeyframeRepair,
   acquireRecoverySlot,
   recoveryDelayMs,
+  shouldRequestWebRtcRefreshAfterInput,
   type WebRtcAttachPriority,
   waitForAttachSlot,
   type StallReason
@@ -40,6 +42,7 @@ const configuredCloseGraceMs = Number(
 const WEBRTC_TRANSIENT_CLOSE_GRACE_MS = Number.isFinite(configuredCloseGraceMs)
   ? Math.max(0, Math.min(15_000, Math.round(configuredCloseGraceMs)))
   : 8000;
+const WEBRTC_INPUT_REFRESH_WAIT_MS = 1_200;
 
 type WarmWebRtcEntry = {
   controller: WebRtcStreamController;
@@ -82,9 +85,13 @@ export function useWebRtcVideo(
   const [recoveryEpoch, setRecoveryEpoch] = useState(0);
   const recoveryAttemptRef = useRef(0);
   const recoveryTimerRef = useRef<number | null>(null);
+  const inputRefreshTimerRef = useRef<number | null>(null);
   const recoveryInFlightRef = useRef(false);
   const recoverySlotRef = useRef<(() => void) | null>(null);
   const healthySinceRef = useRef(0);
+  // One in-place decoder repair per recovery cycle. Repeating IDR resets can
+  // reconfigure fragile phone encoders, so a failed repair escalates instead.
+  const keyframeUsedRef = useRef(false);
   const streamKey = useMemo(
     () =>
       [
@@ -133,6 +140,7 @@ export function useWebRtcVideo(
     // few seconds retry at zero backoff forever.
     if (now - healthySinceRef.current >= RECOVERY_RESET_AFTER_MS) {
       recoveryAttemptRef.current = 0;
+      keyframeUsedRef.current = false;
       setFailed(false);
       setGaveUp(false);
     }
@@ -169,27 +177,82 @@ export function useWebRtcVideo(
     }, recoveryDelayMs(attempt));
   }, []);
 
+  const requestFrameRefresh = useCallback(() => {
+    const controller = controllerRef.current;
+    if (!controller) return;
+    const progressVersionAtInput = controller.getProgressVersion();
+    if (inputRefreshTimerRef.current !== null) {
+      window.clearTimeout(inputRefreshTimerRef.current);
+    }
+    inputRefreshTimerRef.current = window.setTimeout(() => {
+      inputRefreshTimerRef.current = null;
+      if (controllerRef.current !== controller) return;
+      if (
+        !shouldRequestWebRtcRefreshAfterInput(
+          progressVersionAtInput,
+          controller.getProgressVersion()
+        )
+      ) {
+        return;
+      }
+      if (!acquireKeyframeRepair(serial)) return;
+      controller.requestKeyframe().catch(() => {});
+    }, WEBRTC_INPUT_REFRESH_WAIT_MS);
+  }, [serial]);
+
   const handleStall = useCallback(
     (reason: StallReason) => {
       if (recoveryInFlightRef.current) return;
       setStalled(true);
       healthySinceRef.current = 0;
+      const controller = controllerRef.current;
+      if (
+        reason === 'decoder_stalled' &&
+        !keyframeUsedRef.current &&
+        controller
+      ) {
+        keyframeUsedRef.current = true;
+        if (!acquireKeyframeRepair(serial)) {
+          // Another viewer for this device just requested the same IDR. It is
+          // shared at the publisher, so wait for that frame on this connection.
+          controller.resumeWatcher();
+          return;
+        }
+        controller
+          .requestKeyframe()
+          .then(() => {
+            if (controllerRef.current !== controller) return;
+            // If the IDR does not repair decoding, the re-armed watcher reports
+            // again and this spent rung escalates to a session rebuild.
+            controller.resumeWatcher();
+          })
+          .catch(() => {
+            if (controllerRef.current !== controller) return;
+            scheduleRecovery(reason);
+          });
+        return;
+      }
       scheduleRecovery(reason);
     },
-    [scheduleRecovery]
+    [scheduleRecovery, serial]
   );
 
   // A manual restart gets a full ladder, not whatever the last run left over.
   useEffect(() => {
     recoveryAttemptRef.current = 0;
+    keyframeUsedRef.current = false;
     setGaveUp(false);
-  }, [restartKey]);
+  }, [restartKey, serial]);
 
   useEffect(
     () => () => {
       if (recoveryTimerRef.current !== null) {
         window.clearTimeout(recoveryTimerRef.current);
         recoveryTimerRef.current = null;
+      }
+      if (inputRefreshTimerRef.current !== null) {
+        window.clearTimeout(inputRefreshTimerRef.current);
+        inputRefreshTimerRef.current = null;
       }
       recoverySlotRef.current?.();
       recoverySlotRef.current = null;
@@ -338,7 +401,14 @@ export function useWebRtcVideo(
     viewerId
   ]);
 
-  return { active, connecting, failed, stalled, gaveUp };
+  return {
+    active,
+    connecting,
+    failed,
+    stalled,
+    gaveUp,
+    requestFrameRefresh
+  };
 }
 
 /** Drop a cached controller immediately instead of on the grace timer. */

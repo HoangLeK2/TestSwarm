@@ -390,70 +390,76 @@ def _wait_or_cancel(sc: ScenarioContext, seconds: float) -> bool:
     return False
 
 
-def _wait_for_post_submit_action(
-    sc: ScenarioContext,
+def _post_submit_action_matches_snapshot(
     action: LoginPostSubmitAction,
-) -> tuple[str, Any] | None:
-    deadline = time.monotonic() + float(action.timeout_s)
-    while True:
-        xml, snapshot = _current_snapshot(sc)
-        if action.skip_text_exact_any and _snapshot_has_any_exact_text(
-            snapshot, action.skip_text_exact_any
-        ):
-            return None
-        if action.skip_when_text_any and _snapshot_has_any_text(
-            snapshot, action.skip_when_text_any
-        ):
-            return None
-        has_condition = bool(action.when_text_any or action.when_text_exact_any)
-        if (
-            not has_condition
-            or _snapshot_has_any_exact_text(snapshot, action.when_text_exact_any)
-            or _snapshot_has_any_text(snapshot, action.when_text_any)
-        ):
-            return xml, snapshot
-        if _cancelled(sc) or time.monotonic() >= deadline:
-            return None
-        _wait_or_cancel(sc, min(float(action.poll_s), max(0.0, deadline - time.monotonic())))
+    snapshot: Any,
+) -> bool:
+    if action.skip_text_exact_any and _snapshot_has_any_exact_text(
+        snapshot, action.skip_text_exact_any
+    ):
+        return False
+    if action.skip_when_text_any and _snapshot_has_any_text(
+        snapshot, action.skip_when_text_any
+    ):
+        return False
+    has_condition = bool(action.when_text_any or action.when_text_exact_any)
+    return not has_condition or bool(
+        _snapshot_has_any_exact_text(snapshot, action.when_text_exact_any)
+        or _snapshot_has_any_text(snapshot, action.when_text_any)
+    )
 
 
-def _execute_post_submit_actions(
+def _post_submit_action_trace(
+    index: int,
+    action: LoginPostSubmitAction,
+) -> Dict[str, Any]:
+    return {
+        "index": index,
+        "when_text_any": action.when_text_any,
+        "when_text_exact_any": action.when_text_exact_any,
+        "skip_when_text_any": action.skip_when_text_any,
+        "skip_text_exact_any": action.skip_text_exact_any,
+        "matched": False,
+        "executed": False,
+        "execution_count": 0,
+    }
+
+
+def _execute_visible_post_submit_action(
     sc: ScenarioContext,
     step: Dict[str, Any],
     profile: AppAutomationProfile,
     actions: list[LoginPostSubmitAction],
-) -> list[Dict[str, Any]]:
-    traces: list[Dict[str, Any]] = []
+    already_executed: set[int],
+    phase_started_at: float,
+    zero_timeout_grace_s: float,
+    xml: str,
+    snapshot: Any,
+) -> tuple[int, Dict[str, Any]] | None:
+    elapsed_s = max(0.0, time.monotonic() - phase_started_at)
     for index, action in enumerate(actions):
-        trace: Dict[str, Any] = {
-            "index": index,
-            "when_text_any": action.when_text_any,
-            "when_text_exact_any": action.when_text_exact_any,
-            "skip_when_text_any": action.skip_when_text_any,
-            "skip_text_exact_any": action.skip_text_exact_any,
-            "matched": False,
-            "executed": False,
-        }
-        found = _wait_for_post_submit_action(sc, action)
-        if found is None:
-            trace["reason"] = "condition_not_visible"
-            traces.append(trace)
+        if index in already_executed:
             continue
-        xml, snapshot = found
-        trace["matched"] = True
+        if elapsed_s > max(float(action.timeout_s), zero_timeout_grace_s):
+            continue
+        if not _post_submit_action_matches_snapshot(action, snapshot):
+            continue
         submit = LoginSubmit(
             tap_text=action.tap_text,
             tap_text_any=action.tap_text_any,
             locator=action.locator,
         )
-        trace["action_trace"] = _click_submit(sc, step, profile, submit, xml, snapshot)
+        trace = _post_submit_action_trace(index, action)
+        trace["matched"] = True
+        trace["action_trace"] = _click_submit(
+            sc, step, profile, submit, xml, snapshot
+        )
         trace["executed"] = True
+        trace["execution_count"] = 1
         if _wait_or_cancel(sc, float(action.wait_after_s)):
             trace["cancelled"] = True
-            traces.append(trace)
-            break
-        traces.append(trace)
-    return traces
+        return index, trace
+    return None
 
 
 def _input_post_submit_fields(
@@ -477,6 +483,209 @@ def _input_post_submit_fields(
     return traces, entered_post_submit, xml, snapshot
 
 
+def _post_submit_fields_visible(
+    sc: ScenarioContext,
+    profile: AppAutomationProfile,
+    fields: Dict[str, Any],
+    field_names: set[str],
+    xml: str,
+    snapshot: Any,
+) -> bool:
+    return any(
+        _resolve_named_locator(
+            sc, profile, fields[field_name].locator, xml, snapshot
+        ).matched
+        for field_name in field_names
+        if field_name in fields
+    )
+
+
+def _run_post_submit_login_states(
+    sc: ScenarioContext,
+    step: Dict[str, Any],
+    idx: int,
+    profile: AppAutomationProfile,
+    xml: str,
+    snapshot: Any,
+) -> tuple[
+    list[Dict[str, Any]],
+    Dict[str, Any],
+    Dict[str, Any] | None,
+    list[Dict[str, Any]],
+]:
+    """React to whichever login state is visible until the flow settles."""
+    recipe = profile.login_recipe
+    if recipe is None:
+        return [], {}, None, []
+
+    actions = list(recipe.post_submit_actions or [])
+    post_submit_fields = dict(recipe.post_submit_fields or {})
+    challenges = list(recipe.manual_challenges or [])
+    if not (actions or post_submit_fields or challenges):
+        return [], {}, None, []
+
+    implicit_timeout_s, implicit_poll_s = _get_implicit_wait_config(
+        step, sc.scenario_iw_config
+    )
+    state_timeout_s = max(
+        implicit_timeout_s,
+        max((float(action.timeout_s) for action in actions), default=0.0),
+    )
+    poll_s = min(
+        implicit_poll_s,
+        min((float(action.poll_s) for action in actions), default=implicit_poll_s),
+    )
+    deadline = time.monotonic() + state_timeout_s
+    action_traces: list[Dict[str, Any]] = []
+    field_traces: Dict[str, Any] = {}
+    post_submit_trace: Dict[str, Any] | None = None
+    manual_input_traces: list[Dict[str, Any]] = []
+    action_indexes_since_submit: set[int] = set()
+    challenge_attempts: dict[str, int] = {}
+    challenge_retry_after: dict[str, float] = {}
+    submitted_field_names: set[str] = set()
+    action_phase_started_at = time.monotonic()
+
+    transitions = 0
+    while transitions < 24:
+        if _cancelled(sc):
+            raise RuntimeError("MANUAL_INPUT_REQUIRED: operator input cancelled")
+        if _detect_logged_in(profile, snapshot):
+            break
+        if _detect_login_failure(profile, snapshot):
+            raise RuntimeError("recognized login failure screen")
+
+        now = time.monotonic()
+        detected = _find_manual_login_challenge(
+            sc, profile, challenges, xml, snapshot
+        )
+        if detected is not None:
+            challenge, detection = detected
+            retry_after = challenge_retry_after.get(challenge.name, 0.0)
+            if now >= retry_after:
+                attempt_count = challenge_attempts.get(challenge.name, 0)
+                if attempt_count >= challenge.max_attempts:
+                    raise RuntimeError(
+                        "MANUAL_INPUT_REQUIRED: challenge "
+                        f"{challenge.name!r} remained visible after the maximum "
+                        "number of attempts"
+                    )
+                trace, xml, snapshot = _handle_manual_login_challenge(
+                    sc,
+                    step,
+                    idx,
+                    profile,
+                    challenge,
+                    detection,
+                    xml,
+                    snapshot,
+                )
+                manual_input_traces.append(trace)
+                challenge_attempts[challenge.name] = attempt_count + 1
+                challenge_retry_after[challenge.name] = (
+                    time.monotonic() + implicit_timeout_s
+                )
+                action_indexes_since_submit.clear()
+                submitted_field_names.clear()
+                action_phase_started_at = time.monotonic()
+                deadline = time.monotonic() + state_timeout_s
+                transitions += 1
+                continue
+
+        entered_post_submit = False
+        available_post_submit_fields = {
+            field_name: field
+            for field_name, field in post_submit_fields.items()
+            if field_name not in submitted_field_names
+        }
+        if available_post_submit_fields:
+            current_field_traces, entered_post_submit, xml, snapshot = (
+                _input_post_submit_fields(
+                    sc, step, idx, profile, available_post_submit_fields
+                )
+            )
+            for field_name, trace in current_field_traces.items():
+                if field_name not in field_traces or trace.get("matched"):
+                    field_traces[field_name] = trace
+        if entered_post_submit:
+            post_submit = recipe.post_submit or recipe.submit
+            post_submit_trace = _click_submit(
+                sc, step, profile, post_submit, xml, snapshot
+            )
+            submitted_field_names.update(
+                field_name
+                for field_name, trace in current_field_traces.items()
+                if trace.get("matched")
+            )
+            action_indexes_since_submit.clear()
+            action_phase_started_at = time.monotonic()
+            deadline = time.monotonic() + state_timeout_s
+            xml, snapshot = _current_snapshot(sc)
+            transitions += 1
+            continue
+
+        visible_action = None
+        submitted_fields_still_visible = _post_submit_fields_visible(
+            sc,
+            profile,
+            post_submit_fields,
+            submitted_field_names,
+            xml,
+            snapshot,
+        )
+        if not submitted_fields_still_visible:
+            visible_action = _execute_visible_post_submit_action(
+                sc,
+                step,
+                profile,
+                actions,
+                action_indexes_since_submit,
+                action_phase_started_at,
+                poll_s,
+                xml,
+                snapshot,
+            )
+        if visible_action is not None:
+            action_index, trace = visible_action
+            if not action_traces:
+                action_traces = [
+                    _post_submit_action_trace(index, action)
+                    for index, action in enumerate(actions)
+                ]
+            previous = action_traces[action_index]
+            trace["execution_count"] = int(previous.get("execution_count") or 0) + 1
+            action_traces[action_index] = trace
+            action_indexes_since_submit.add(action_index)
+            submitted_field_names.clear()
+            action_phase_started_at = time.monotonic()
+            deadline = time.monotonic() + state_timeout_s
+            xml, snapshot = _current_snapshot(sc)
+            transitions += 1
+            continue
+
+        now = time.monotonic()
+        if now >= deadline:
+            if submitted_fields_still_visible:
+                raise RuntimeError(
+                    "post-submit credential field remained visible after submission"
+                )
+            if any(
+                _post_submit_action_matches_snapshot(action, snapshot)
+                for action in actions
+            ):
+                raise RuntimeError(
+                    "recognized login state remained unresolved after its action timeout"
+                )
+            break
+        if _wait_or_cancel(sc, min(poll_s, max(0.0, deadline - now))):
+            raise RuntimeError("MANUAL_INPUT_REQUIRED: operator input cancelled")
+        xml, snapshot = _current_snapshot(sc)
+    if transitions >= 24:
+        raise RuntimeError("login state machine exceeded the maximum number of transitions")
+
+    return action_traces, field_traces, post_submit_trace, manual_input_traces
+
+
 def _detect_logged_in(profile: AppAutomationProfile, snapshot: Any) -> bool:
     recipe = profile.login_recipe
     if recipe is None:
@@ -486,6 +695,22 @@ def _detect_logged_in(profile: AppAutomationProfile, snapshot: Any) -> bool:
     if isinstance(any_text, list) and _snapshot_has_any_text(snapshot, [str(item) for item in any_text]):
         return True
     return False
+
+
+def _detect_login_failure(profile: AppAutomationProfile, snapshot: Any) -> bool:
+    recipe = profile.login_recipe
+    if recipe is None:
+        return False
+    detect = recipe.detect_logged_in or {}
+    failure_text = (
+        detect.get("failure_text_exact_any") if isinstance(detect, dict) else None
+    )
+    return bool(
+        isinstance(failure_text, list)
+        and _snapshot_has_any_exact_text(
+            snapshot, [str(item) for item in failure_text]
+        )
+    )
 
 
 def _resolution_visible_label(snapshot: Any, resolution: LocatorResolution) -> str:
@@ -645,75 +870,6 @@ def _handle_manual_login_challenge(
     )
 
 
-def _wait_for_manual_login_challenges(
-    sc: ScenarioContext,
-    step: Dict[str, Any],
-    idx: int,
-    profile: AppAutomationProfile,
-    xml: str,
-    snapshot: Any,
-) -> tuple[list[Dict[str, Any]], str, Any]:
-    """Wait for delayed, profile-declared challenges and operator input."""
-    recipe = profile.login_recipe
-    challenges = list(recipe.manual_challenges) if recipe else []
-    if not challenges:
-        return [], xml, snapshot
-
-    timeout_s, poll_s = _get_implicit_wait_config(step, sc.scenario_iw_config)
-    deadline = time.monotonic() + timeout_s
-    traces: list[Dict[str, Any]] = []
-    attempts: dict[str, int] = {}
-    waiting_for_result: str | None = None
-
-    while True:
-        if _cancelled(sc):
-            raise RuntimeError("MANUAL_INPUT_REQUIRED: operator input cancelled")
-
-        detected = _find_manual_login_challenge(
-            sc, profile, challenges, xml, snapshot
-        )
-        now = time.monotonic()
-        detected_name = detected[0].name if detected else None
-        if detected is not None and (
-            waiting_for_result != detected_name or now >= deadline
-        ):
-            challenge, resolution = detected
-            attempt_count = attempts.get(challenge.name, 0)
-            if attempt_count >= challenge.max_attempts:
-                raise RuntimeError(
-                    "MANUAL_INPUT_REQUIRED: challenge "
-                    f"{challenge.name!r} remained visible after the maximum "
-                    "number of attempts"
-                )
-            trace, xml, snapshot = _handle_manual_login_challenge(
-                sc,
-                step,
-                idx,
-                profile,
-                challenge,
-                resolution,
-                xml,
-                snapshot,
-            )
-            traces.append(trace)
-            attempts[challenge.name] = attempt_count + 1
-            waiting_for_result = challenge.name
-            deadline = time.monotonic() + timeout_s
-            continue
-
-        if detected is None and traces:
-            return traces, xml, snapshot
-        if now >= deadline:
-            if detected is None:
-                return traces, xml, snapshot
-            waiting_for_result = None
-            continue
-
-        if _wait_or_cancel(sc, min(poll_s, max(0.0, deadline - now))):
-            raise RuntimeError("MANUAL_INPUT_REQUIRED: operator input cancelled")
-        xml, snapshot = _current_snapshot(sc)
-
-
 @register_step("login_if_needed")
 def handle_login_if_needed(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
     try:
@@ -733,44 +889,15 @@ def handle_login_if_needed(sc: ScenarioContext, step: Dict[str, Any], idx: int, 
             )
             xml, snapshot = _current_snapshot(sc)
         submit_trace = _click_submit(sc, step, profile, recipe.submit, xml, snapshot)
-        post_submit_action_trace: list[Dict[str, Any]] = []
-        post_submit_traces: Dict[str, Any] = {}
-        post_submit_trace = None
-        manual_input_traces: list[Dict[str, Any]] = []
         xml, snapshot = _current_snapshot(sc)
-        challenge_traces, xml, snapshot = _wait_for_manual_login_challenges(
+        (
+            post_submit_action_trace,
+            post_submit_traces,
+            post_submit_trace,
+            manual_input_traces,
+        ) = _run_post_submit_login_states(
             sc, step, idx, profile, xml, snapshot
         )
-        manual_input_traces.extend(challenge_traces)
-        post_submit_fields = getattr(recipe, "post_submit_fields", {}) or {}
-        entered_post_submit = False
-        if post_submit_fields:
-            post_submit_traces, entered_post_submit, xml, snapshot = _input_post_submit_fields(
-                sc, step, idx, profile, post_submit_fields
-            )
-        post_submit_actions = getattr(recipe, "post_submit_actions", []) or []
-        if post_submit_actions and not entered_post_submit:
-            post_submit_action_trace = _execute_post_submit_actions(
-                sc, step, profile, list(post_submit_actions)
-            )
-            xml, snapshot = _current_snapshot(sc)
-            challenge_traces, xml, snapshot = _wait_for_manual_login_challenges(
-                sc, step, idx, profile, xml, snapshot
-            )
-            manual_input_traces.extend(challenge_traces)
-            if post_submit_fields:
-                post_submit_traces, entered_post_submit, xml, snapshot = _input_post_submit_fields(
-                    sc, step, idx, profile, post_submit_fields
-                )
-        if post_submit_fields:
-            post_submit = getattr(recipe, "post_submit", None) or recipe.submit
-            if entered_post_submit and post_submit is not None:
-                post_submit_trace = _click_submit(sc, step, profile, post_submit, xml, snapshot)
-                xml, snapshot = _current_snapshot(sc)
-                challenge_traces, xml, snapshot = _wait_for_manual_login_challenges(
-                    sc, step, idx, profile, xml, snapshot
-                )
-                manual_input_traces.extend(challenge_traces)
         result.update({
             "message": "login_if_needed: submitted login",
             "login_state": "submitted",

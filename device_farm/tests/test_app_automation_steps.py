@@ -128,7 +128,19 @@ _XML_FACEBOOK_LOADING = """
 
 _XML_FACEBOOK_HOME = """
 <hierarchy>
+  <node text="What's on your mind" class="android.widget.TextView" bounds="[50,180][1010,260]" />
+</hierarchy>
+"""
+
+_XML_GENERIC_HOME = """
+<hierarchy>
   <node text="Home" class="android.widget.TextView" bounds="[50,180][1010,260]" />
+</hierarchy>
+"""
+
+_XML_FACEBOOK_LOGIN_ERROR = """
+<hierarchy>
+  <node text="Something went wrong" class="android.widget.TextView" bounds="[50,180][1010,260]" />
 </hierarchy>
 """
 
@@ -350,6 +362,19 @@ class PasswordRetryFakeDevice(FakeDevice):
             self._xml_idx += 1
 
 
+class VolatilePasswordRetryFakeDevice(PasswordRetryFakeDevice):
+    def __init__(self, xml: str | list[str]) -> None:
+        super().__init__(xml)
+        self._dump_index = 0
+
+    def hierarchy_xml(self, force_refresh: bool = False) -> str:
+        xml = super().hierarchy_xml(force_refresh=force_refresh)
+        if "Mật khẩu," not in xml:
+            return xml
+        self._dump_index += 1
+        return xml.replace("<hierarchy>", f'<hierarchy index="{self._dump_index}">')
+
+
 class DelayedCaptchaDevice(FakeDevice):
     def __init__(self) -> None:
         super().__init__([
@@ -357,6 +382,7 @@ class DelayedCaptchaDevice(FakeDevice):
             _XML_FACEBOOK_LOADING,
             _XML_FACEBOOK_CAPTCHA_VI,
             _XML_WITH_FACEBOOK_AUTH_CODE_DIRECT,
+            _XML_FACEBOOK_HOME,
         ])
         self._loading_dumps = 0
 
@@ -364,6 +390,23 @@ class DelayedCaptchaDevice(FakeDevice):
         if self._xml_idx == 1 and force_refresh:
             self._loading_dumps += 1
             if self._loading_dumps >= 2:
+                self._xml_idx = 2
+        return super().hierarchy_xml(force_refresh=force_refresh)
+
+
+class DelayedWrongPasswordDevice(FakeDevice):
+    def __init__(self) -> None:
+        super().__init__([
+            _XML_FACEBOOK_LOGIN_EN,
+            _XML_FACEBOOK_LOADING,
+            _XML_FACEBOOK_WRONG_PASSWORD_CODE_PROMPT,
+        ])
+        self._loading_dumps = 0
+
+    def hierarchy_xml(self, force_refresh: bool = False) -> str:
+        if self._xml_idx == 1 and force_refresh:
+            self._loading_dumps += 1
+            if self._loading_dumps >= 3:
                 self._xml_idx = 2
         return super().hierarchy_xml(force_refresh=force_refresh)
 
@@ -469,7 +512,7 @@ def test_login_if_needed_supports_legacy_secret_login_password_alias():
 
 
 def test_login_if_needed_fills_optional_post_submit_auth_code_when_visible():
-    sc = _sc(_XML_WITH_AUTH_CODE)
+    sc = _sc([_XML, _XML_WITH_AUTH_CODE, _XML_GENERIC_HOME])
     sc.scenario = {"app_automation_profile": _auth_code_profile()}
     result = {"index": 0, "type": "login_if_needed", "ok": True}
 
@@ -483,7 +526,7 @@ def test_login_if_needed_fills_optional_post_submit_auth_code_when_visible():
 
 def test_login_if_needed_generates_totp_from_activity_local_secret(monkeypatch):
     monkeypatch.setattr(app_automation_steps, "generate_totp", lambda secret: f"totp-{secret}")
-    sc = _sc(_XML_WITH_AUTH_CODE)
+    sc = _sc([_XML, _XML_WITH_AUTH_CODE, _XML_GENERIC_HOME])
     sc.var_ctx = VariableContext(
         scenario_vars={"__ACCOUNT_PASSWORD__": "account-pw", "__ACCOUNT_TOTP_SECRET__": "SECRET1"},
         campaign_vars={
@@ -508,6 +551,7 @@ def test_login_if_needed_navigates_facebook_approval_before_totp():
         _XML_CONFIRM_METHODS,
         _XML_CONFIRM_METHODS,
         _XML_WITH_FACEBOOK_AUTH_CODE,
+        _XML_GENERIC_HOME,
     ])
     sc.scenario = {"app_automation_profile": _facebook_auth_code_profile()}
     result = {"index": 0, "type": "login_if_needed", "ok": True}
@@ -529,6 +573,7 @@ def test_builtin_facebook_login_supports_english_form_and_totp_path():
         _XML_CONFIRM_METHODS_EN,
         _XML_CONFIRM_METHODS_EN,
         _XML_WITH_FACEBOOK_AUTH_CODE_EN,
+        _XML_FACEBOOK_HOME,
     ])
     sc.scenario = {"app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE)}
     result = {"index": 0, "type": "login_if_needed", "ok": True}
@@ -559,6 +604,7 @@ def test_builtin_facebook_login_inputs_totp_when_facebook_skips_method_picker():
     sc = _sc([
         _XML_FACEBOOK_LOGIN_EN,
         _XML_WITH_FACEBOOK_AUTH_CODE_DIRECT,
+        _XML_FACEBOOK_HOME,
     ])
     sc.scenario = {"app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE)}
     result = {"index": 0, "type": "login_if_needed", "ok": True}
@@ -649,12 +695,206 @@ def test_builtin_facebook_login_retries_password_after_captcha():
     assert result["post_submit_locator_trace"]["password_retry"]["matched"] is True
 
 
+def test_builtin_facebook_login_accepts_direct_password_retry_without_captcha():
+    sc = _sc()
+    sc.device = PasswordRetryFakeDevice([
+        _XML_FACEBOOK_LOGIN_EN,
+        _XML_FACEBOOK_PASSWORD_RETRY,
+        _XML_FACEBOOK_HOME,
+    ])
+    sc.scenario = {"app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE)}
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.01}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is True
+    assert sc.device.u2.sent == ["account-user", "account-pw", "account-pw"]
+    assert result["post_submit_action_trace"] == []
+    assert result["post_submit_locator_trace"]["password_retry"]["matched"] is True
+
+
+def test_builtin_facebook_login_accepts_direct_password_retry_after_captcha():
+    prompts: list[dict] = []
+    sc = _sc()
+    sc.device = PasswordRetryFakeDevice([
+        _XML_FACEBOOK_LOGIN_EN,
+        _XML_FACEBOOK_CAPTCHA_VI,
+        _XML_FACEBOOK_PASSWORD_RETRY,
+        _XML_FACEBOOK_HOME,
+    ])
+    sc.scenario = {
+        "app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
+        "_manual_input_handler": lambda request: prompts.append(request) or "314015",
+    }
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.01}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is True
+    assert [prompt["challenge_id"] for prompt in prompts] == ["visual_code"]
+    assert sc.device.u2.sent == [
+        "account-user",
+        "account-pw",
+        "314015",
+        "account-pw",
+    ]
+    assert result["post_submit_action_trace"] == []
+    assert result["post_submit_locator_trace"]["password_retry"]["matched"] is True
+
+
+def test_builtin_facebook_login_retries_password_again_after_method_selection():
+    sc = _sc()
+    sc.device = PasswordRetryFakeDevice([
+        _XML_FACEBOOK_LOGIN_EN,
+        _XML_FACEBOOK_PASSWORD_RETRY,
+        _XML_FACEBOOK_WRONG_PASSWORD_CODE_PROMPT,
+        _XML_FACEBOOK_CONFIRM_WITH_PASSWORD,
+        _XML_FACEBOOK_PASSWORD_RETRY,
+        _XML_FACEBOOK_HOME,
+    ])
+    sc.scenario = {"app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE)}
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.01}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is True
+    assert sc.device.u2.sent == [
+        "account-user",
+        "account-pw",
+        "account-pw",
+        "account-pw",
+    ]
+    assert any("Thử cách khác" in clicked for clicked in sc.device.u2.clicked)
+    assert any("Mật khẩu" in clicked for clicked in sc.device.u2.clicked)
+    assert result["post_submit_locator_trace"]["password_retry"]["matched"] is True
+
+
+def test_builtin_facebook_login_does_not_resubmit_password_on_volatile_hierarchy():
+    profile = deepcopy(_FB_LOGIN_PROFILE_NATIVE)
+    for action in profile["login_recipe"]["post_submit_actions"]:
+        action["timeout_s"] = 0
+        action["wait_after_s"] = 0
+    sc = _sc()
+    sc.device = VolatilePasswordRetryFakeDevice([
+        _XML_FACEBOOK_LOGIN_EN,
+        _XML_FACEBOOK_PASSWORD_RETRY,
+    ])
+    sc.scenario = {"app_automation_profile": profile}
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.01}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is False
+    assert "credential field remained visible" in result["message"]
+    assert sc.device.u2.sent == ["account-user", "account-pw", "account-pw"]
+
+
+def test_builtin_facebook_login_fails_on_known_error_screen():
+    sc = _sc([_XML_FACEBOOK_LOGIN_EN, _XML_FACEBOOK_LOGIN_ERROR])
+    sc.scenario = {"app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE)}
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.01}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is False
+    assert "recognized login failure screen" in result["message"]
+
+
+def test_builtin_facebook_login_respects_each_action_timeout():
+    profile = deepcopy(_FB_LOGIN_PROFILE_NATIVE)
+    for action in profile["login_recipe"]["post_submit_actions"]:
+        action["timeout_s"] = 0.5
+        action["wait_after_s"] = 0
+    profile["login_recipe"]["post_submit_actions"][0]["timeout_s"] = 0.1
+    sc = _sc()
+    sc.device = DelayedWrongPasswordDevice()
+    sc.scenario = {"app_automation_profile": profile}
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.1}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is False
+    assert "action timeout" in result["message"]
+    assert not any("Thử cách khác" in clicked for clicked in sc.device.u2.clicked)
+
+
+def test_builtin_facebook_login_re_evaluates_state_after_password_retry():
+    prompts: list[dict] = []
+    sc = _sc()
+    sc.device = PasswordRetryFakeDevice([
+        _XML_FACEBOOK_LOGIN_EN,
+        _XML_FACEBOOK_CAPTCHA_VI,
+        _XML_FACEBOOK_PASSWORD_RETRY,
+        _XML_WAITING_FOR_APPROVAL,
+        _XML_CONFIRM_METHODS,
+        _XML_CONFIRM_METHODS,
+        _XML_WITH_FACEBOOK_AUTH_CODE,
+        _XML_FACEBOOK_HOME,
+    ])
+    sc.scenario = {
+        "app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
+        "_manual_input_handler": lambda request: prompts.append(request) or "314015",
+    }
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.01}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is True
+    assert [prompt["challenge_id"] for prompt in prompts] == ["visual_code"]
+    assert sc.device.u2.sent == [
+        "account-user",
+        "account-pw",
+        "314015",
+        "account-pw",
+        "123456",
+    ]
+    assert any("Thử cách khác" in clicked for clicked in sc.device.u2.clicked)
+    assert any("Ứng dụng xác thực" in clicked for clicked in sc.device.u2.clicked)
+    assert result["login_state"] == "submitted"
+
+
 def test_builtin_facebook_login_waits_for_manual_captcha_then_continues_to_totp():
     prompts: list[dict] = []
     sc = _sc([
         _XML_FACEBOOK_LOGIN_EN,
         _XML_FACEBOOK_CAPTCHA_VI,
         _XML_WITH_FACEBOOK_AUTH_CODE_DIRECT,
+        _XML_FACEBOOK_HOME,
     ])
     sc.scenario = {
         "app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
@@ -697,6 +937,7 @@ def test_manual_challenge_runtime_is_profile_driven_not_facebook_package():
         _XML_FACEBOOK_LOGIN_EN,
         _XML_FACEBOOK_CAPTCHA_VI,
         _XML_WITH_FACEBOOK_AUTH_CODE_DIRECT,
+        _XML_FACEBOOK_HOME,
     ])
     sc.scenario = {
         "app_automation_profile": profile,
@@ -747,6 +988,7 @@ def test_builtin_facebook_login_allows_replacement_captcha():
         _XML_FACEBOOK_CAPTCHA_VI,
         _XML_FACEBOOK_CAPTCHA_VI,
         _XML_WITH_FACEBOOK_AUTH_CODE_DIRECT,
+        _XML_FACEBOOK_HOME,
     ])
     sc.scenario = {
         "app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
@@ -866,6 +1108,7 @@ def test_builtin_facebook_captcha_submits_when_keyboard_pans_prompt_offscreen():
         _XML_FACEBOOK_CAPTCHA_VI,
         _XML_FACEBOOK_CAPTCHA_KEYBOARD_PANNED,
         _XML_WITH_FACEBOOK_AUTH_CODE_DIRECT,
+        _XML_FACEBOOK_HOME,
     ])
     send_keys = sc.device.u2.send_keys
     tap = sc.device.tap
@@ -962,6 +1205,34 @@ def test_builtin_facebook_captcha_accepts_unique_content_description_button():
         _XML_FACEBOOK_LOGIN_EN,
         content_desc_submit,
         _XML_WITH_FACEBOOK_AUTH_CODE_DIRECT,
+        _XML_FACEBOOK_HOME,
+    ])
+    sc.scenario = {
+        "app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
+        "_manual_input_handler": lambda _request: "314015",
+    }
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.1}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is True
+    assert sc.device.u2.sent == ["account-user", "account-pw", "314015", "123456"]
+
+
+def test_builtin_facebook_captcha_accepts_unique_exact_view_submit():
+    view_submit = _XML_FACEBOOK_CAPTCHA_VI.replace(
+        'class="android.widget.Button"', 'class="android.view.View"'
+    )
+    sc = _sc([
+        _XML_FACEBOOK_LOGIN_EN,
+        view_submit,
+        _XML_WITH_FACEBOOK_AUTH_CODE_DIRECT,
+        _XML_FACEBOOK_HOME,
     ])
     sc.scenario = {
         "app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
@@ -1007,12 +1278,40 @@ def test_builtin_facebook_captcha_refuses_duplicate_submit_controls():
     assert sc.device.u2.sent == ["account-user", "account-pw"]
 
 
+def test_builtin_facebook_captcha_refuses_mixed_class_duplicate_submit_controls():
+    duplicate_submit = _XML_FACEBOOK_CAPTCHA_VI.replace(
+        "</hierarchy>",
+        '<node text="Tiếp tục" class="android.view.View" '
+        'bounds="[90,1040][990,1160]" /></hierarchy>',
+    )
+    prompts: list[dict] = []
+    sc = _sc([_XML_FACEBOOK_LOGIN_EN, duplicate_submit])
+    sc.scenario = {
+        "app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
+        "_manual_input_handler": lambda request: prompts.append(request) or "314015",
+    }
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.1}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is False
+    assert "ambiguous candidates" in result["message"]
+    assert prompts == []
+    assert sc.device.u2.sent == ["account-user", "account-pw"]
+
+
 def test_builtin_facebook_login_nested_branch_keeps_manual_input_handler():
     prompts: list[dict] = []
     device = FakeDevice([
         _XML_FACEBOOK_LOGIN_EN,
         _XML_FACEBOOK_CAPTCHA_VI,
         _XML_WITH_FACEBOOK_AUTH_CODE_DIRECT,
+        _XML_FACEBOOK_HOME,
     ])
     scenario = {
         "steps": [

@@ -1076,6 +1076,15 @@ def _fb_crawl_current_target_feed_steps(
 
 _FB_DETECT_LOGGED_IN: Dict[str, Any] = {
     "any_text": ["Trang chủ", "Tìm kiếm", "Bạn đang nghĩ gì?", "What's on your mind"],
+    "failure_text_exact_any": [
+        "Đã xảy ra lỗi",
+        "Đã xảy ra sự cố",
+        "Sai thông tin đăng nhập",
+        "Tên người dùng hoặc mật khẩu không hợp lệ",
+        "Something went wrong",
+        "Invalid login information",
+        "Invalid username or password",
+    ],
 }
 
 _FB_LOGIN_PROFILE_NATIVE: Dict[str, Any] = {
@@ -1179,46 +1188,16 @@ _FB_LOGIN_PROFILE_NATIVE: Dict[str, Any] = {
         },
         "manual_captcha_submit": {
             "candidates": [
-                {
-                    "by": "text",
-                    "value": "Tiếp tục",
-                    "class_name": "android.widget.Button",
-                },
-                {
-                    "by": "description",
-                    "value": "Tiếp tục",
-                    "class_name": "android.widget.Button",
-                },
-                {
-                    "by": "text",
-                    "value": "Continue",
-                    "class_name": "android.widget.Button",
-                },
-                {
-                    "by": "description",
-                    "value": "Continue",
-                    "class_name": "android.widget.Button",
-                },
-                {
-                    "by": "text",
-                    "value": "Next",
-                    "class_name": "android.widget.Button",
-                },
-                {
-                    "by": "description",
-                    "value": "Next",
-                    "class_name": "android.widget.Button",
-                },
-                {
-                    "by": "text",
-                    "value": "Gửi",
-                    "class_name": "android.widget.Button",
-                },
-                {
-                    "by": "text",
-                    "value": "Submit",
-                    "class_name": "android.widget.Button",
-                },
+                {"by": "text", "value": "Tiếp tục"},
+                {"by": "text", "value": "Continue"},
+                {"by": "text", "value": "Next"},
+                {"by": "text", "value": "Gửi"},
+                {"by": "text", "value": "Submit"},
+                {"by": "description", "value": "Tiếp tục"},
+                {"by": "description", "value": "Continue"},
+                {"by": "description", "value": "Next"},
+                {"by": "description", "value": "Gửi"},
+                {"by": "description", "value": "Submit"},
             ]
         },
     },

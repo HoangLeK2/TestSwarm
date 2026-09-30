@@ -43,6 +43,9 @@ const WEBRTC_TRANSIENT_CLOSE_GRACE_MS = Number.isFinite(configuredCloseGraceMs)
   ? Math.max(0, Math.min(15_000, Math.round(configuredCloseGraceMs)))
   : 8000;
 const WEBRTC_INPUT_REFRESH_WAIT_MS = 1_200;
+// Waiting for the page-wide recovery semaphore is not a failed media repair.
+// Retry the slot quickly without consuming one of the bounded recovery rungs.
+const WEBRTC_RECOVERY_SLOT_RETRY_MS = 500;
 
 type WarmWebRtcEntry = {
   controller: WebRtcStreamController;
@@ -86,9 +89,16 @@ export function useWebRtcVideo(
   const recoveryAttemptRef = useRef(0);
   const recoveryTimerRef = useRef<number | null>(null);
   const inputRefreshTimerRef = useRef<number | null>(null);
+  const lastInputKeyframeRef = useRef<{
+    controller: WebRtcStreamController;
+    progressVersion: number;
+  } | null>(null);
   const recoveryInFlightRef = useRef(false);
   const recoverySlotRef = useRef<(() => void) | null>(null);
   const healthySinceRef = useRef(0);
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+  const previousSerialRef = useRef(serial);
   // One in-place decoder repair per recovery cycle. Repeating IDR resets can
   // reconfigure fragile phone encoders, so a failed repair escalates instead.
   const keyframeUsedRef = useRef(false);
@@ -147,7 +157,7 @@ export function useWebRtcVideo(
   }, []);
 
   const scheduleRecovery = useCallback((reason: StallReason) => {
-    if (recoveryTimerRef.current !== null) return;
+    if (!enabledRef.current || recoveryTimerRef.current !== null) return;
     const attempt = recoveryAttemptRef.current;
     if (attempt >= MAX_RECOVERY_ATTEMPTS) {
       // Out of rungs. Surface it rather than retrying forever: at this point
@@ -156,14 +166,17 @@ export function useWebRtcVideo(
       setGaveUp(true);
       return;
     }
-    recoveryTimerRef.current = window.setTimeout(() => {
+    const attemptRecovery = () => {
       recoveryTimerRef.current = null;
+      if (!enabledRef.current) return;
       const release = acquireRecoverySlot();
       if (!release) {
-        // The page-wide cap is full. Count the attempt so the next wait is
-        // longer, and come back on that schedule.
-        recoveryAttemptRef.current += 1;
-        scheduleRecovery(reason);
+        // The page-wide cap is full. Capacity contention is not a failed
+        // recovery, so keep this rung and wait instead of eventually giving up
+        // without ever repairing the media session.
+        recoveryTimerRef.current = window.setTimeout(() => {
+          attemptRecovery();
+        }, WEBRTC_RECOVERY_SLOT_RETRY_MS);
         return;
       }
       recoverySlotRef.current = release;
@@ -174,16 +187,20 @@ export function useWebRtcVideo(
       // timer would let the very next mount hand the user the dead one back.
       evictWarmController(streamKeyRef.current);
       setRecoveryEpoch((value) => value + 1);
-    }, recoveryDelayMs(attempt));
+    };
+    recoveryTimerRef.current = window.setTimeout(
+      attemptRecovery,
+      recoveryDelayMs(attempt)
+    );
   }, []);
 
   const requestFrameRefresh = useCallback(() => {
     const controller = controllerRef.current;
     if (!controller) return;
+    // Keep the earliest deadline while the operator is tapping or typing. A
+    // debounce would postpone repair forever on an already-frozen screen.
+    if (inputRefreshTimerRef.current !== null) return;
     const progressVersionAtInput = controller.getProgressVersion();
-    if (inputRefreshTimerRef.current !== null) {
-      window.clearTimeout(inputRefreshTimerRef.current);
-    }
     inputRefreshTimerRef.current = window.setTimeout(() => {
       inputRefreshTimerRef.current = null;
       if (controllerRef.current !== controller) return;
@@ -195,14 +212,43 @@ export function useWebRtcVideo(
       ) {
         return;
       }
+      const currentProgressVersion = controller.getProgressVersion();
+      const lastKeyframe = lastInputKeyframeRef.current;
+      if (
+        lastKeyframe?.controller === controller &&
+        lastKeyframe.progressVersion === currentProgressVersion
+      ) {
+        return;
+      }
       if (!acquireKeyframeRepair(serial)) return;
-      controller.requestKeyframe().catch(() => {});
+      controller
+        .requestKeyframe()
+        .then(() => {
+          if (controllerRef.current !== controller) return;
+          lastInputKeyframeRef.current = {
+            controller,
+            progressVersion: currentProgressVersion
+          };
+        })
+        .catch(() => {});
     }, WEBRTC_INPUT_REFRESH_WAIT_MS);
   }, [serial]);
 
   const handleStall = useCallback(
     (reason: StallReason) => {
       if (recoveryInFlightRef.current) return;
+      if (
+        healthySinceRef.current > 0 &&
+        Date.now() - healthySinceRef.current >= RECOVERY_RESET_AFTER_MS
+      ) {
+        // A repaired stream can be perfectly healthy while the Android screen
+        // is static and emits no further frames. Reset the ladder here too, so
+        // the next real stall still gets the cheap keyframe rung.
+        recoveryAttemptRef.current = 0;
+        keyframeUsedRef.current = false;
+        setFailed(false);
+        setGaveUp(false);
+      }
       setStalled(true);
       healthySinceRef.current = 0;
       const controller = controllerRef.current;
@@ -261,7 +307,29 @@ export function useWebRtcVideo(
   );
 
   useEffect(() => {
+    if (previousSerialRef.current === serial) return;
+    previousSerialRef.current = serial;
+    if (recoveryTimerRef.current !== null) {
+      window.clearTimeout(recoveryTimerRef.current);
+      recoveryTimerRef.current = null;
+    }
+    releaseRecoverySlot();
+    lastInputKeyframeRef.current = null;
+    const video = videoRef.current;
+    if (video?.srcObject instanceof MediaStream) {
+      // The last painted frame is safe only for recovery of the same device.
+      // Never show one device while controls already target another serial.
+      video.srcObject = null;
+    }
+  }, [releaseRecoverySlot, serial, videoRef]);
+
+  useEffect(() => {
     if (!enabled || !serial || !videoRef.current) {
+      if (recoveryTimerRef.current !== null) {
+        window.clearTimeout(recoveryTimerRef.current);
+        recoveryTimerRef.current = null;
+      }
+      releaseRecoverySlot();
       setActive(false);
       setConnecting(false);
       return;
@@ -474,6 +542,13 @@ function attachExistingController(
     .find((candidate) => candidate?.kind === 'video');
   if (track && video.srcObject === null) {
     video.srcObject = new MediaStream([track]);
+  } else if (track && video.srcObject instanceof MediaStream) {
+    const attachedTrack = video.srcObject.getVideoTracks()[0];
+    if (attachedTrack !== track) {
+      // A recovery keeps the last painted frame until the replacement is
+      // ready. Warm reuse must still replace that ended track explicitly.
+      video.srcObject = new MediaStream([track]);
+    }
   }
   const markFrame = () => {
     onFrame();

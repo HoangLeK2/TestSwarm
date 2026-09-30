@@ -263,8 +263,10 @@ export function DeviceTile({
     [sendInputWithRefresh, device.serial]
   );
   const handleScreenOff = useCallback(
-    () => sendInputWithRefresh({ type: 'screen_off', serial: device.serial }),
-    [sendInputWithRefresh, device.serial]
+    // A black/static screen is the expected result, so an IDR request would
+    // only reset the encoder without improving feedback.
+    () => wsSend({ type: 'screen_off', serial: device.serial }),
+    [wsSend, device.serial]
   );
   const handleUnlock = useCallback(
     () => sendInputWithRefresh({ type: 'unlock', serial: device.serial }),

@@ -1242,6 +1242,16 @@ _FB_LOGIN_PROFILE_NATIVE: Dict[str, Any] = {
                 "wait_after_s": 0.5,
             },
             {
+                "when_text_exact_any": [
+                    "Chọn cách xác nhận tài khoản",
+                    "Choose a way to confirm your account",
+                ],
+                "tap_text_any": ["Tiếp tục", "Continue", "Next"],
+                "timeout_s": 6,
+                "poll_s": 0.5,
+                "wait_after_s": 1,
+            },
+            {
                 "when_text_any": [
                     "Kiểm tra thông báo trên thiết bị khác",
                     "Đang chờ phê duyệt",

@@ -515,3 +515,27 @@ def test_login_detect_logged_in_markers_are_facebook_specific() -> None:
     assert {"Trang chủ", "Tìm kiếm", "Bạn đang nghĩ gì?", "What's on your mind"}.issubset(
         set(any_text)
     )
+
+
+def test_login_confirms_password_method_before_retrying_password(
+    login_steps: list[dict[str, Any]],
+) -> None:
+    """Selecting Password does not leave Facebook's method picker."""
+    login_step = next(
+        step for step in login_steps if step.get("type") == "login_if_needed"
+    )
+    actions = (
+        login_step.get("profile", {})
+        .get("login_recipe", {})
+        .get("post_submit_actions", [])
+    )
+    title = "Chọn cách xác nhận tài khoản"
+    matching = [
+        action
+        for action in actions
+        if title in (action.get("when_text_exact_any") or [])
+    ]
+
+    assert len(matching) == 2
+    assert "Mật khẩu" in matching[0].get("tap_text_any", [])
+    assert "Tiếp tục" in matching[1].get("tap_text_any", [])

@@ -590,6 +590,7 @@ def test_builtin_facebook_login_supports_english_form_and_totp_path():
     assert [trace["executed"] for trace in result["post_submit_action_trace"]] == [
         False,
         False,
+        False,
         True,
         True,
         True,
@@ -629,7 +630,9 @@ def test_builtin_facebook_login_retries_password_when_code_delivery_is_offered()
         _XML_FACEBOOK_LOGIN_EN,
         _XML_FACEBOOK_WRONG_PASSWORD_CODE_PROMPT,
         _XML_FACEBOOK_CONFIRM_WITH_PASSWORD,
+        _XML_FACEBOOK_CONFIRM_WITH_PASSWORD,
         _XML_FACEBOOK_PASSWORD_RETRY,
+        _XML_WITH_FACEBOOK_AUTH_CODE,
         _XML_FACEBOOK_HOME,
     ])
     sc.scenario = {"app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE)}
@@ -643,11 +646,18 @@ def test_builtin_facebook_login_retries_password_when_code_delivery_is_offered()
     )
 
     assert result["ok"] is True
-    assert sc.device.u2.sent == ["account-user", "account-pw", "account-pw"]
+    assert sc.device.u2.sent == [
+        "account-user",
+        "account-pw",
+        "account-pw",
+        "123456",
+    ]
     assert any("Thử cách khác" in clicked for clicked in sc.device.u2.clicked)
     assert any("Mật khẩu" in clicked for clicked in sc.device.u2.clicked)
+    assert any("Tiếp tục" in clicked for clicked in sc.device.u2.clicked)
     assert any("Đăng nhập" in clicked for clicked in sc.device.u2.clicked)
     assert [trace["executed"] for trace in result["post_submit_action_trace"]] == [
+        True,
         True,
         True,
         False,

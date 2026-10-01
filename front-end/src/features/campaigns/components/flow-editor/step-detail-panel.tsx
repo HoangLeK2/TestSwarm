@@ -90,6 +90,11 @@ import { VerifyScreenFields } from './verify-screen-fields';
 import type { VariablePreviewValues } from './variable-preview';
 import { contentInteractionPresentation } from './content-interaction-presentation';
 import {
+  keywordInputValue,
+  keywordListFromInput,
+  reconcileKeywordInputDraft
+} from './keyword-list-input';
+import {
   evaluateNodeCapabilityStatus,
   nodeCapabilityBadgeLabel,
   type DeviceCapabilityMap,
@@ -368,17 +373,6 @@ function valueInsertRowClassName() {
   return 'flex min-w-0 flex-col gap-2';
 }
 
-function keywordInputValue(value: unknown): string {
-  return Array.isArray(value) ? value.join(', ') : String(value ?? '');
-}
-
-function keywordListFromInput(value: string): string[] {
-  return value
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
 function JsonTextarea({
   label,
   value,
@@ -551,6 +545,57 @@ function VariableTextInput({
         }
       />
     </div>
+  );
+}
+
+function KeywordListTextInput({
+  availableVariables,
+  identity,
+  value,
+  onValueChange,
+  placeholder,
+  className = 'h-8 text-xs',
+  t
+}: {
+  availableVariables: string[];
+  identity: string;
+  value: unknown;
+  onValueChange: (value: string[]) => void;
+  placeholder?: string;
+  className?: string;
+  t: ReturnType<typeof useTranslations>;
+}) {
+  const [draft, setDraft] = useState(() => keywordInputValue(value));
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const identityRef = useRef(identity);
+
+  useEffect(() => {
+    const sameInput = identityRef.current === identity;
+    identityRef.current = identity;
+    const nextDraft = reconcileKeywordInputDraft(
+      draftRef.current,
+      value,
+      sameInput
+    );
+    if (nextDraft === draftRef.current) return;
+    draftRef.current = nextDraft;
+    setDraft(nextDraft);
+  }, [identity, value]);
+
+  return (
+    <VariableTextInput
+      availableVariables={availableVariables}
+      t={t}
+      className={className}
+      value={draft}
+      placeholder={placeholder}
+      onValueChange={(nextDraft) => {
+        draftRef.current = nextDraft;
+        setDraft(nextDraft);
+        onValueChange(keywordListFromInput(nextDraft));
+      }}
+    />
   );
 }
 
@@ -2439,49 +2484,46 @@ export function StepDetailPanel({
                     </p>
                   )}
                   <F label={tField('requiredKeywords')}>
-                    <VariableTextInput
+                    <KeywordListTextInput
                       availableVariables={availableVariables}
+                      identity={`${stepIdentity}:required_keywords`}
                       t={t}
                       className='h-8 text-xs'
-                      value={keywordInputValue(step.required_keywords)}
+                      value={step.required_keywords}
                       placeholder={
                         postFlow.isPost
                           ? tPostFlow('requiredKeywordsPlaceholder')
                           : 'Hoang Le, OpenAI'
                       }
-                      onValueChange={(value) =>
-                        update({
-                          required_keywords: keywordListFromInput(value)
-                        })
+                      onValueChange={(keywords) =>
+                        update({ required_keywords: keywords })
                       }
                     />
                   </F>
                   <div className='grid grid-cols-2 gap-2'>
                     <F label={tField('bonusKeywords')}>
-                      <VariableTextInput
+                      <KeywordListTextInput
                         availableVariables={availableVariables}
+                        identity={`${stepIdentity}:optional_keywords`}
                         t={t}
                         className='h-8 text-xs'
-                        value={keywordInputValue(step.optional_keywords)}
+                        value={step.optional_keywords}
                         placeholder='company, city'
-                        onValueChange={(value) =>
-                          update({
-                            optional_keywords: keywordListFromInput(value)
-                          })
+                        onValueChange={(keywords) =>
+                          update({ optional_keywords: keywords })
                         }
                       />
                     </F>
                     <F label={tField('blockedKeywords')}>
-                      <VariableTextInput
+                      <KeywordListTextInput
                         availableVariables={availableVariables}
+                        identity={`${stepIdentity}:forbidden_keywords`}
                         t={t}
                         className='h-8 text-xs'
-                        value={keywordInputValue(step.forbidden_keywords)}
+                        value={step.forbidden_keywords}
                         placeholder='fake, page'
-                        onValueChange={(value) =>
-                          update({
-                            forbidden_keywords: keywordListFromInput(value)
-                          })
+                        onValueChange={(keywords) =>
+                          update({ forbidden_keywords: keywords })
                         }
                       />
                     </F>
@@ -2596,30 +2638,28 @@ export function StepDetailPanel({
                     </F>
                   </div>
                   <F label={tField('mutualKeywords')}>
-                    <VariableTextInput
+                    <KeywordListTextInput
                       availableVariables={availableVariables}
+                      identity={`${stepIdentity}:common_keywords`}
                       t={t}
                       className='h-8 text-xs'
-                      value={keywordInputValue(step.common_keywords)}
+                      value={step.common_keywords}
                       placeholder={tField('phMutualKeywords')}
-                      onValueChange={(value) =>
-                        update({
-                          common_keywords: keywordListFromInput(value)
-                        })
+                      onValueChange={(keywords) =>
+                        update({ common_keywords: keywords })
                       }
                     />
                   </F>
                   <F label={tField('blockedKeywords')}>
-                    <VariableTextInput
+                    <KeywordListTextInput
                       availableVariables={availableVariables}
+                      identity={`${stepIdentity}:forbidden_keywords`}
                       t={t}
                       className='h-8 text-xs'
-                      value={keywordInputValue(step.forbidden_keywords)}
+                      value={step.forbidden_keywords}
                       placeholder='trang, page, sponsored, anonymous'
-                      onValueChange={(value) =>
-                        update({
-                          forbidden_keywords: keywordListFromInput(value)
-                        })
+                      onValueChange={(keywords) =>
+                        update({ forbidden_keywords: keywords })
                       }
                     />
                   </F>
@@ -2672,17 +2712,14 @@ export function StepDetailPanel({
                 <>
                   <StepPanelHint>{t('scanPostsHint')}</StepPanelHint>
                   <F label={tField('postKeywords')}>
-                    <VariableTextInput
+                    <KeywordListTextInput
                       availableVariables={availableVariables}
+                      identity={`${stepIdentity}:keywords`}
                       t={t}
                       className='h-8 text-xs'
-                      value={keywordInputValue(step.keywords)}
+                      value={step.keywords}
                       placeholder={tField('phPostKeywords')}
-                      onValueChange={(value) =>
-                        update({
-                          keywords: keywordListFromInput(value)
-                        })
-                      }
+                      onValueChange={(keywords) => update({ keywords })}
                     />
                   </F>
                   <F label='Comment'>
@@ -2851,44 +2888,41 @@ export function StepDetailPanel({
                       {matchedProfileVerificationHint}
                     </StepPanelHint>
                     <F label={tField('requiredProfileKeywords')}>
-                      <VariableTextInput
+                      <KeywordListTextInput
                         availableVariables={availableVariables}
+                        identity={`${stepIdentity}:required_keywords`}
                         t={t}
                         className='h-8 text-xs'
-                        value={keywordInputValue(step.required_keywords)}
+                        value={step.required_keywords}
                         placeholder={tField('phProfileKeywords')}
-                        onValueChange={(value) =>
-                          update({
-                            required_keywords: keywordListFromInput(value)
-                          })
+                        onValueChange={(keywords) =>
+                          update({ required_keywords: keywords })
                         }
                       />
                     </F>
                     <F label={tField('bonusKeywords')}>
-                      <VariableTextInput
+                      <KeywordListTextInput
                         availableVariables={availableVariables}
+                        identity={`${stepIdentity}:optional_keywords`}
                         t={t}
                         className='h-8 text-xs'
-                        value={keywordInputValue(step.optional_keywords)}
+                        value={step.optional_keywords}
                         placeholder={tField('phBonusKeywords')}
-                        onValueChange={(value) =>
-                          update({
-                            optional_keywords: keywordListFromInput(value)
-                          })
+                        onValueChange={(keywords) =>
+                          update({ optional_keywords: keywords })
                         }
                       />
                     </F>
                     <F label={tField('blockedKeywords')}>
-                      <VariableTextInput
+                      <KeywordListTextInput
                         availableVariables={availableVariables}
+                        identity={`${stepIdentity}:forbidden_keywords`}
                         t={t}
                         className='h-8 text-xs'
-                        value={keywordInputValue(step.forbidden_keywords)}
+                        value={step.forbidden_keywords}
                         placeholder='page, group, anonymous'
-                        onValueChange={(value) =>
-                          update({
-                            forbidden_keywords: keywordListFromInput(value)
-                          })
+                        onValueChange={(keywords) =>
+                          update({ forbidden_keywords: keywords })
                         }
                       />
                     </F>

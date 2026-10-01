@@ -1519,7 +1519,40 @@ def _handle_social_scan_posts_interact(
     if platform_name is None:
         return
     wants_comment = _bool_value(step.get("require_comment"), True) and bool(comment_text)
-    if _pacing_blocked(
+    selector_config = {
+        key: step[key]
+        for key in (
+            "like_terms",
+            "liked_terms",
+            "comment_terms",
+            "comment_input_terms",
+            "comment_submit_terms",
+            "overlay_close_terms",
+            "forbidden_context_terms",
+            "comment_input_classes",
+            "input_classes",
+        )
+        if key in step
+    }
+    flow_params = {
+        "keywords": keywords or [],
+        "match_mode": match_mode or "any",
+        "comment_text": comment_text or "",
+        "target_count": max(1, int(target_count or 1)),
+        "max_scrolls": max(0, int(max_scrolls or 0)),
+        "scan_timeout_seconds": max(1.0, float(scan_timeout or timeout)),
+        "scroll_x_ratio": scroll_x_ratio,
+        "scroll_y1_ratio": step.get("scroll_y1_ratio", 0.78),
+        "scroll_y2_ratio": step.get("scroll_y2_ratio", 0.34),
+        "scroll_duration_s": step.get("scroll_duration_s", 0.45),
+        "scroll_wait_s": step.get("scroll_wait_s", 0.7),
+        "comment_wait_s": step.get("comment_wait_s", 0.8),
+        "submit_wait_s": step.get("submit_wait_s", 0.6),
+        "require_comment": _bool_value(step.get("require_comment"), True),
+        "like_post": _bool_value(step.get("like_post"), True),
+        **selector_config,
+    }
+    pacing_blocked = _pacing_blocked(
         sc,
         step,
         result,
@@ -1527,58 +1560,53 @@ def _handle_social_scan_posts_interact(
         action_type=(
             ACTION_CONTENT_COMMENT if wants_comment else ACTION_CONTENT_LIKE
         ),
-    ):
-        return
+    )
 
     try:
-        selector_config = {
-            key: step[key]
-            for key in (
-                "like_terms",
-                "liked_terms",
-                "comment_terms",
-                "comment_input_terms",
-                "comment_submit_terms",
-                "overlay_close_terms",
-                "forbidden_context_terms",
-                "comment_input_classes",
-                "input_classes",
-            )
-            if key in step
-        }
         flow_result = _u2_flow_with_recovery(
             sc,
             flow_name,
-            {
-                "keywords": keywords or [],
-                "match_mode": match_mode or "any",
-                "comment_text": comment_text or "",
-                "target_count": max(1, int(target_count or 1)),
-                "max_scrolls": max(0, int(max_scrolls or 0)),
-                "scan_timeout_seconds": max(1.0, float(scan_timeout or timeout)),
-                "scroll_x_ratio": scroll_x_ratio,
-                "scroll_y1_ratio": step.get("scroll_y1_ratio", 0.78),
-                "scroll_y2_ratio": step.get("scroll_y2_ratio", 0.34),
-                "scroll_duration_s": step.get("scroll_duration_s", 0.45),
-                "scroll_wait_s": step.get("scroll_wait_s", 0.7),
-                "comment_wait_s": step.get("comment_wait_s", 0.8),
-                "submit_wait_s": step.get("submit_wait_s", 0.6),
-                "require_comment": _bool_value(step.get("require_comment"), True),
-                "like_post": _bool_value(step.get("like_post"), True),
-                **selector_config,
-            },
+            (
+                {
+                    **flow_params,
+                    # A blocked action still has to inspect the visible post.
+                    # Otherwise the scenario reports success and an
+                    # unconditional next scroll silently skips a match. Keep
+                    # this pass read-only and fixed to the current screen.
+                    "comment_text": "",
+                    "target_count": 1,
+                    "max_scrolls": 0,
+                    "require_comment": False,
+                    "like_post": False,
+                    "verify_like": False,
+                }
+                if pacing_blocked
+                else flow_params
+            ),
             timeout=timeout,
             priority="visible",
             cancel_event=sc.cancel_event,
         )
     except Exception as exc:
-        _fail(
-            sc,
-            step,
-            result,
-            outcome="agent_boot_flow_failed",
-            message=f"{step_name}: agent-boot flow failed: {exc}",
-        )
+        if pacing_blocked:
+            _fail(
+                sc,
+                step,
+                result,
+                outcome="rate_limited_scan_failed",
+                message=(
+                    f"{step_name}: interaction is rate-limited and the visible "
+                    f"post could not be checked safely: {exc}"
+                ),
+            )
+        else:
+            _fail(
+                sc,
+                step,
+                result,
+                outcome="agent_boot_flow_failed",
+                message=f"{step_name}: agent-boot flow failed: {exc}",
+            )
         return
 
     target = (
@@ -1591,9 +1619,91 @@ def _handle_social_scan_posts_interact(
             sc,
             step,
             result,
-            outcome="agent_boot_flow_invalid",
-            message=f"{step_name}: agent-boot returned an invalid payload",
+            outcome=(
+                "rate_limited_scan_invalid"
+                if pacing_blocked
+                else "agent_boot_flow_invalid"
+            ),
+            message=(
+                f"{step_name}: the rate-limited visible-post check returned "
+                "an invalid payload"
+                if pacing_blocked
+                else f"{step_name}: agent-boot returned an invalid payload"
+            ),
         )
+        return
+
+    if pacing_blocked:
+        # Agent-boot counts a scan-only match as a verified action so it can
+        # stop at target_count. Normalize the orchestration payload: the match
+        # is verified, but no social interaction happened while rate-limited.
+        scan_target = {
+            **target,
+            "interacted_count": 0,
+            "liked_count": 0,
+            "commented_count": 0,
+        }
+        scan_reason = str(scan_target.get("reason") or "")
+        no_match = scan_reason == "no_matching_post"
+        if scan_target.get("verified") is True:
+            result.update(
+                {
+                    "ok": False,
+                    "outcome": "matching_post_rate_limited",
+                    "message": (
+                        f"{step_name}: matching post found, but the account is "
+                        "rate-limited; stopping before the next scroll"
+                    ),
+                    "action_performed": False,
+                    "batch": True,
+                    "target_type": "post",
+                    "target_count": 1,
+                    "interacted_count": 0,
+                    "liked_count": 0,
+                    "commented_count": 0,
+                    "candidate_count": scan_target.get("candidate_count", 0),
+                    "screens_scanned": scan_target.get("screens_scanned", 0),
+                    "scrolls": 0,
+                    "resolver": scan_target,
+                }
+            )
+        elif no_match:
+            result.update(
+                {
+                    "candidate_count": scan_target.get("candidate_count", 0),
+                    "screens_scanned": scan_target.get("screens_scanned", 0),
+                    "scrolls": 0,
+                    "resolver": scan_target,
+                }
+            )
+        else:
+            result["resolver"] = scan_target
+            _fail(
+                sc,
+                step,
+                result,
+                outcome="rate_limited_scan_unverified",
+                message=(
+                    f"{step_name}: interaction is rate-limited and the visible "
+                    "post could not be ruled out safely"
+                ),
+            )
+            save_as = str(step.get("save_as") or "").strip()
+            if save_as:
+                _set_runtime_variable(
+                    sc,
+                    save_as,
+                    content_scan_payload(scan_target, platform=platform_name),
+                )
+            return
+        _save_result(sc, step, result)
+        save_as = str(step.get("save_as") or "").strip()
+        if save_as:
+            _set_runtime_variable(
+                sc,
+                save_as,
+                content_scan_payload(scan_target, platform=platform_name),
+            )
         return
 
     interacted_count = int(target.get("interacted_count") or 0)

@@ -1945,7 +1945,81 @@ def _scan_step(**overrides: object) -> dict[str, object]:
     return step
 
 
-def test_scan_step_skips_the_device_when_rate_limited(monkeypatch) -> None:
+def test_scan_step_stops_on_matching_post_when_rate_limited(monkeypatch) -> None:
+    from tasks.scenario.steps import dispatch_step
+
+    monkeypatch.setattr(
+        "services.action_pacing.check_action_allowed",
+        lambda **_: {"allowed": False, "reason": "rate_limited"},
+    )
+    device = _FakeDevice("<hierarchy></hierarchy>")
+    device.flow_result = {
+        "ok": True,
+        "value": {
+            "verified": True,
+            "interacted_count": 1,
+            "candidate_count": 1,
+            "screens_scanned": 1,
+            "scrolls": 0,
+            "actions": [{"matched_keywords": ["ai"], "row_text": "AI post"}],
+        },
+    }
+    sc = _context(device)
+    result = dispatch_step(sc, _scan_step(save_as="_post_scan"), 0)
+
+    assert result["outcome"] == "matching_post_rate_limited"
+    assert result["action_performed"] is False
+    assert result["interacted_count"] == 0
+    # Fail the step so an unconditional next scroll cannot move past the match.
+    assert result["ok"] is False
+    assert len(device.flows) == 1
+    _, params, *_ = device.flows[0]
+    assert params["keywords"] == ["ai"]
+    assert params["max_scrolls"] == 0
+    assert params["target_count"] == 1
+    assert params["like_post"] is False
+    assert params["require_comment"] is False
+    assert params["comment_text"] == ""
+    saved_scan = sc.ctx["vars"]["_post_scan"]
+    assert saved_scan["verified"] is True
+    assert saved_scan["interacted_count"] == 0
+    assert saved_scan["actions"][0]["matched_keywords"] == ["ai"]
+
+
+def test_scan_step_continues_after_read_only_no_match_when_rate_limited(
+    monkeypatch,
+) -> None:
+    from tasks.scenario.steps import dispatch_step
+
+    monkeypatch.setattr(
+        "services.action_pacing.check_action_allowed",
+        lambda **_: {"allowed": False, "reason": "rate_limited"},
+    )
+    device = _FakeDevice("<hierarchy></hierarchy>")
+    device.flow_result = {
+        "ok": True,
+        "value": {
+            "verified": False,
+            "reason": "no_matching_post",
+            "interacted_count": 0,
+            "candidate_count": 0,
+            "screens_scanned": 1,
+            "scrolls": 0,
+        },
+    }
+    result = dispatch_step(_context(device), _scan_step(), 0)
+
+    assert result["outcome"] == "rate_limited"
+    assert result["action_performed"] is False
+    assert result["ok"] is True
+    assert len(device.flows) == 1
+    _, params, *_ = device.flows[0]
+    assert params["max_scrolls"] == 0
+    assert params["like_post"] is False
+    assert params["require_comment"] is False
+
+
+def test_scan_step_stops_when_rate_limited_read_only_scan_fails(monkeypatch) -> None:
     from tasks.scenario.steps import dispatch_step
 
     monkeypatch.setattr(
@@ -1955,12 +2029,35 @@ def test_scan_step_skips_the_device_when_rate_limited(monkeypatch) -> None:
     device = _FakeDevice("<hierarchy></hierarchy>")
     result = dispatch_step(_context(device), _scan_step(), 0)
 
-    assert result["outcome"] == "rate_limited"
+    assert result["outcome"] == "rate_limited_scan_failed"
     assert result["action_performed"] is False
-    # Not a failure: the feed will still be there in a minute.
-    assert result["ok"] is True
-    # The whole point — agent-boot is never asked to like or comment.
-    assert device.flows == []
+    assert result["ok"] is False
+    assert len(device.flows) == 1
+
+
+def test_scan_step_stops_when_rate_limited_screen_is_not_a_feed(monkeypatch) -> None:
+    from tasks.scenario.steps import dispatch_step
+
+    monkeypatch.setattr(
+        "services.action_pacing.check_action_allowed",
+        lambda **_: {"allowed": False, "reason": "rate_limited"},
+    )
+    device = _FakeDevice("<hierarchy></hierarchy>")
+    device.flow_result = {
+        "ok": True,
+        "value": {
+            "verified": False,
+            "reason": "screen_is_not_a_feed",
+            "interacted_count": 0,
+            "screens_scanned": 1,
+        },
+    }
+    result = dispatch_step(_context(device), _scan_step(), 0)
+
+    assert result["outcome"] == "rate_limited_scan_unverified"
+    assert result["action_performed"] is False
+    assert result["ok"] is False
+    assert len(device.flows) == 1
 
 
 def test_scan_step_paces_comments_and_likes_under_different_budgets(
@@ -1983,6 +2080,14 @@ def test_scan_step_paces_comments_and_likes_under_different_budgets(
     monkeypatch.setattr("services.action_pacing.check_action_allowed", _record)
 
     device = _FakeDevice("<hierarchy></hierarchy>")
+    device.flow_result = {
+        "ok": True,
+        "value": {
+            "verified": False,
+            "reason": "no_matching_post",
+            "interacted_count": 0,
+        },
+    }
     dispatch_step(_context(device), _scan_step(), 0)
     dispatch_step(
         _context(device),

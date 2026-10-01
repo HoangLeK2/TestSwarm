@@ -1,10 +1,14 @@
 package rtspserver
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,6 +73,18 @@ func TestPublisherConfigKeepsSmallRealtimeQueue(t *testing.T) {
 
 	if publisher.cfg.QueueMax != 4 {
 		t.Fatalf("queue max=%d, want 4", publisher.cfg.QueueMax)
+	}
+}
+
+func TestPublisherDefaultsRemoteRTSPTimeoutToFiveSeconds(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	publisher := New(Config{RTSPAddress: "127.0.0.1:0"}, logger)
+	t.Cleanup(func() {
+		_ = publisher.Close(context.Background())
+	})
+
+	if publisher.cfg.RemoteTimeout != 5*time.Second {
+		t.Fatalf("remote timeout=%s, want 5s", publisher.cfg.RemoteTimeout)
 	}
 }
 
@@ -214,6 +230,7 @@ func TestRTSPSinkUsesTheAnnouncedMediaNotTheLocalOne(t *testing.T) {
 		forma,
 		slog.New(slog.NewTextHandler(os.Stderr, nil)),
 	)
+	sink.retryAttempt = 4
 	state := &streamState{
 		serial:    "SERIAL-1",
 		media:     localMedia,
@@ -235,7 +252,133 @@ func TestRTSPSinkUsesTheAnnouncedMediaNotTheLocalOne(t *testing.T) {
 	if sink.media == state.media {
 		t.Fatal("sink must write to the announced media, not the local server's")
 	}
+	if sink.retryAttempt != 0 {
+		t.Fatalf("successful publish kept retry attempt=%d, want reset to 0", sink.retryAttempt)
+	}
+
+	sink.writePacket = func(*gortsplib.Client, *description.Media, *rtp.Packet) error {
+		return errors.New("forced write failure")
+	}
+	started := time.Now()
+	if err := sink.WriteRTP(packet); err == nil {
+		t.Fatal("forced packet write unexpectedly succeeded")
+	}
+	if sink.retryAttempt != 1 {
+		t.Fatalf("write failure retry attempt=%d, want 1", sink.retryAttempt)
+	}
+	retryIn := sink.nextDial.Sub(started)
+	if retryIn < 800*time.Millisecond || retryIn > 1200*time.Millisecond {
+		t.Fatalf("write failure retry=%s, want 800ms..1.2s", retryIn)
+	}
 	sink.Close()
+}
+
+func TestRemoteRetryDelayGrowsWithJitterAndCaps(t *testing.T) {
+	tests := []struct {
+		attempt int
+		min     time.Duration
+		max     time.Duration
+	}{
+		{attempt: 0, min: 800 * time.Millisecond, max: 1200 * time.Millisecond},
+		{attempt: 1, min: 1600 * time.Millisecond, max: 2400 * time.Millisecond},
+		{attempt: 2, min: 3200 * time.Millisecond, max: 4800 * time.Millisecond},
+		{attempt: 3, min: 6400 * time.Millisecond, max: 9600 * time.Millisecond},
+		{attempt: 4, min: 10 * time.Second, max: remoteRetryMax},
+		{attempt: 20, min: 10 * time.Second, max: remoteRetryMax},
+	}
+
+	for _, tt := range tests {
+		got := remoteRetryDelay(tt.attempt, 0x12345678)
+		if got < tt.min || got > tt.max {
+			t.Fatalf("attempt %d delay=%s, want %s..%s", tt.attempt, got, tt.min, tt.max)
+		}
+	}
+
+	first := remoteRetryDelay(0, remoteRetrySeed("rtsp://farm:secret@host:8554/device-A"))
+	second := remoteRetryDelay(0, remoteRetrySeed("rtsp://farm:secret@host:8554/device-B"))
+	if first == second {
+		t.Fatalf("different streams received identical initial jitter: %s", first)
+	}
+
+	for _, attempt := range []int{4, 20} {
+		counts := make(map[time.Duration]int)
+		for i := 0; i < 100; i++ {
+			rawURL := fmt.Sprintf("rtsp://farm:secret@host:8554/device-%03d", i)
+			counts[remoteRetryDelay(attempt, remoteRetrySeed(rawURL))]++
+		}
+		if len(counts) < 20 {
+			t.Fatalf("attempt %d produced only %d distinct fleet delays", attempt, len(counts))
+		}
+		if counts[remoteRetryMax] > 10 {
+			t.Fatalf("attempt %d collapsed %d streams onto the 15s cap", attempt, counts[remoteRetryMax])
+		}
+	}
+}
+
+func TestRTSPSinkFailedConnectEscalatesRetryBackoff(t *testing.T) {
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve port: %v", err)
+	}
+	addr := probe.Addr().String()
+	probe.Close()
+
+	forma := &format.H264{PayloadTyp: 96, PacketizationMode: 1}
+	sink := newRTSPSink("rtsp://"+addr+"/device-SERIAL-1", 20*time.Millisecond, forma, nil)
+
+	started := time.Now()
+	if sink.ensure() {
+		t.Fatal("closed RTSP endpoint unexpectedly connected")
+	}
+	first := sink.nextDial.Sub(started)
+	if first < 800*time.Millisecond || first > 1200*time.Millisecond {
+		t.Fatalf("first retry=%s, want 800ms..1.2s", first)
+	}
+	if sink.retryAttempt != 1 {
+		t.Fatalf("retry attempt=%d, want 1", sink.retryAttempt)
+	}
+
+	sink.nextDial = time.Time{}
+	started = time.Now()
+	if sink.ensure() {
+		t.Fatal("closed RTSP endpoint unexpectedly connected on retry")
+	}
+	second := sink.nextDial.Sub(started)
+	if second < 1600*time.Millisecond || second > 2400*time.Millisecond {
+		t.Fatalf("second retry=%s, want 1.6s..2.4s", second)
+	}
+	if sink.retryAttempt != 2 {
+		t.Fatalf("retry attempt=%d, want 2", sink.retryAttempt)
+	}
+}
+
+func TestRemoteURLForLogRedactsCredentials(t *testing.T) {
+	got := remoteURLForLog("rtsp://farm:super-secret@host.example:8554/device-SERIAL-1")
+	want := "rtsp://host.example:8554/device-SERIAL-1"
+	if got != want {
+		t.Fatalf("log URL=%q, want %q", got, want)
+	}
+	if got := remoteURLForLog("not a URL"); got != "[invalid remote URL]" {
+		t.Fatalf("invalid log URL=%q", got)
+	}
+}
+
+func TestRemoteWriteErrorLogRedactsCredentials(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&output, nil))
+	state := &streamState{
+		serial:    "SERIAL-1",
+		remoteURL: "rtsp://farm:super-secret@host.example:8554/device-SERIAL-1",
+	}
+
+	state.logRemoteWriteError(logger, errors.New("forced write failure"))
+	got := output.String()
+	if strings.Contains(got, "super-secret") || strings.Contains(got, "farm@") {
+		t.Fatalf("remote write log leaked credentials: %s", got)
+	}
+	if !strings.Contains(got, "rtsp://host.example:8554/device-SERIAL-1") {
+		t.Fatalf("remote write log lost safe target context: %s", got)
+	}
 }
 
 func TestNextTimestampUsesMicrosecondsOn90kHzClock(t *testing.T) {

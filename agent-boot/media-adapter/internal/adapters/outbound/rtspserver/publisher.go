@@ -141,7 +141,7 @@ func New(cfg Config, logger *slog.Logger) *Publisher {
 		cfg.RemoteQueueSize = minRemoteQueueSize
 	}
 	if cfg.RemoteTimeout <= 0 {
-		cfg.RemoteTimeout = 1500 * time.Millisecond
+		cfg.RemoteTimeout = 5 * time.Second
 	}
 	if cfg.IDRMinInterval <= 0 {
 		cfg.IDRMinInterval = 3 * time.Second
@@ -560,8 +560,9 @@ func (s *streamState) remoteLoop(logger *slog.Logger) {
 // Draining resynchronises to now, and the IDR request makes the gap decodable.
 //
 // Overflow is not hypothetical. writeRemote calls WritePacketRTP synchronously
-// with a 1500ms WriteTimeout, and deployments run RemoteQueueSize=32 — about a
-// second of packets at 15fps — so any hiccup on the uplink fills it.
+// with a 5s WriteTimeout. RemoteQueueSize=256 is large enough for measured
+// keyframe bursts, but a sustained WAN stall can still fill it; draining keeps
+// recovery anchored to the newest decodable picture instead of stale packets.
 //
 // ponytail: drains the whole queue, which discards good packets from the tail
 // too. Cutting at the RTP marker bit would drop only up to the access-unit
@@ -618,7 +619,7 @@ func (s *streamState) logRemoteWriteError(logger *slog.Logger, err error) {
 		return
 	}
 	s.remoteNextLog = now.Add(5 * time.Second)
-	logger.Warn("media adapter remote RTSP packet dropped", "serial", s.serial, "url", s.remoteURL, "error", err)
+	logger.Warn("media adapter remote RTSP packet dropped", "serial", s.serial, "url", remoteURLForLog(s.remoteURL), "error", err)
 }
 
 func (s *streamState) closeRemote() {
@@ -1002,7 +1003,7 @@ func ConfigFromEnv() Config {
 		InputFPS:        envInt("MEDIA_ADAPTER_INPUT_FPS", 15),
 		WriteQueueSize:  envInt("MEDIA_ADAPTER_RTSP_WRITE_QUEUE", 128),
 		RemoteQueueSize: envInt("MEDIA_ADAPTER_REMOTE_RTSP_QUEUE", 256),
-		RemoteTimeout:   time.Duration(envInt("MEDIA_ADAPTER_REMOTE_RTSP_TIMEOUT_MS", 1500)) * time.Millisecond,
+		RemoteTimeout:   time.Duration(envInt("MEDIA_ADAPTER_REMOTE_RTSP_TIMEOUT_MS", 5000)) * time.Millisecond,
 		IDRMinInterval:  time.Duration(envInt("MEDIA_ADAPTER_IDR_MIN_INTERVAL_MS", 3000)) * time.Millisecond,
 		LaneIdle:        time.Duration(envInt("MEDIA_ADAPTER_LANE_IDLE_S", 120)) * time.Second,
 	}

@@ -1,7 +1,9 @@
 package rtspserver
 
 import (
+	"hash/fnv"
 	"log/slog"
+	"net/url"
 	"sync"
 	"time"
 
@@ -42,10 +44,11 @@ type NewRemoteSinkFunc func(serial string, url string, onKeyframeNeeded func()) 
 // publisher it lost the picture, so onKeyframeNeeded is unused here. That gap is
 // the whole reason the WHIP sink exists.
 type rtspSink struct {
-	url     string
-	timeout time.Duration
-	format  *format.H264
-	logger  *slog.Logger
+	url         string
+	timeout     time.Duration
+	format      *format.H264
+	logger      *slog.Logger
+	writePacket func(*gortsplib.Client, *description.Media, *rtp.Packet) error
 
 	mu     sync.Mutex
 	client *gortsplib.Client
@@ -56,10 +59,83 @@ type rtspSink struct {
 	media    *description.Media
 	nextDial time.Time
 	nextLog  time.Time
+	// retryAttempt is reset only after a complete ANNOUNCE/SETUP/RECORD
+	// handshake. Keeping it per stream prevents one broken phone from delaying
+	// another; deterministic jitter from retrySeed keeps a whole fleet from
+	// reconnecting in lockstep after the same network outage.
+	retryAttempt int
+	retrySeed    uint32
 }
 
 func newRTSPSink(url string, timeout time.Duration, forma *format.H264, logger *slog.Logger) *rtspSink {
-	return &rtspSink{url: url, timeout: timeout, format: forma, logger: logger}
+	return &rtspSink{
+		url:       url,
+		timeout:   timeout,
+		format:    forma,
+		logger:    logger,
+		retrySeed: remoteRetrySeed(url),
+		writePacket: func(client *gortsplib.Client, media *description.Media, packet *rtp.Packet) error {
+			return client.WritePacketRTP(media, packet)
+		},
+	}
+}
+
+const (
+	remoteRetryBase = time.Second
+	remoteRetryMax  = 15 * time.Second
+)
+
+func remoteRetrySeed(rawURL string) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(remoteURLForLog(rawURL)))
+	return h.Sum32()
+}
+
+func remoteRetryDelay(attempt int, seed uint32) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+	exponent := attempt
+	if exponent > 4 {
+		exponent = 4
+	}
+	delay := remoteRetryBase << exponent
+	// Keep the unjittered ceiling low enough that the +20% edge remains inside
+	// remoteRetryMax. Capping after jitter would collapse most streams onto the
+	// exact same 15-second retry and recreate the herd this backoff prevents.
+	maxBase := remoteRetryMax * 100 / 120
+	if delay > maxBase {
+		delay = maxBase
+	}
+
+	// A small deterministic xorshift gives each stream and attempt a stable
+	// value in [80, 120]. Stable jitter keeps tests deterministic while still
+	// spreading reconnects across the fleet.
+	mixed := seed + uint32(attempt)*0x9e3779b9
+	mixed ^= mixed << 13
+	mixed ^= mixed >> 17
+	mixed ^= mixed << 5
+	delay = delay * time.Duration(80+mixed%41) / 100
+	if delay > remoteRetryMax {
+		return remoteRetryMax
+	}
+	return delay
+}
+
+func remoteURLForLog(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "[invalid remote URL]"
+	}
+	parsed.User = nil
+	return parsed.String()
+}
+
+func (s *rtspSink) scheduleRetryLocked(now time.Time) {
+	s.nextDial = now.Add(remoteRetryDelay(s.retryAttempt, s.retrySeed))
+	if s.retryAttempt < 30 {
+		s.retryAttempt++
+	}
 }
 
 func (s *rtspSink) ensure() bool {
@@ -86,16 +162,18 @@ func (s *rtspSink) ensure() bool {
 	}
 	if err := client.StartRecording(s.url, desc); err != nil {
 		client.Close()
-		s.nextDial = now.Add(1 * time.Second)
+		s.scheduleRetryLocked(time.Now())
 		s.logConnectErrorLocked(err, now)
 		return false
 	}
 	s.client = client
+	s.retryAttempt = 0
+	s.nextDial = time.Time{}
 	// Keep the announced media: writes must reference this pointer, not the
 	// local server's, or gortsplib dereferences nil and panics.
 	s.media = media
 	if s.logger != nil {
-		s.logger.Info("media adapter remote RTSP publishing", "url", s.url)
+		s.logger.Info("media adapter remote RTSP publishing", "url", remoteURLForLog(s.url))
 	}
 	return true
 }
@@ -111,13 +189,14 @@ func (s *rtspSink) WriteRTP(packet *rtp.Packet) error {
 	if client == nil || media == nil {
 		return nil
 	}
-	if err := client.WritePacketRTP(media, packet); err != nil {
+	if err := s.writePacket(client, media, packet); err != nil {
 		s.mu.Lock()
 		if s.client != nil {
 			s.client.Close()
 			s.client = nil
 		}
 		s.media = nil
+		s.scheduleRetryLocked(time.Now())
 		s.mu.Unlock()
 		return err
 	}
@@ -139,5 +218,5 @@ func (s *rtspSink) logConnectErrorLocked(err error, now time.Time) {
 		return
 	}
 	s.nextLog = now.Add(5 * time.Second)
-	s.logger.Warn("media adapter remote RTSP publish not ready", "url", s.url, "error", err)
+	s.logger.Warn("media adapter remote RTSP publish not ready", "url", remoteURLForLog(s.url), "error", err)
 }

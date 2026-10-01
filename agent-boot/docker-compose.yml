@@ -106,7 +106,7 @@ services:
       # Overflow drains the backlog rather than sitting full, so depth costs
       # burst memory, not steady-state latency. rtspserver.New clamps below 256.
       MEDIA_ADAPTER_REMOTE_RTSP_QUEUE: "${MEDIA_ADAPTER_REMOTE_RTSP_QUEUE:-256}"
-      MEDIA_ADAPTER_REMOTE_RTSP_TIMEOUT_MS: "${MEDIA_ADAPTER_REMOTE_RTSP_TIMEOUT_MS:-1500}"
+      MEDIA_ADAPTER_REMOTE_RTSP_TIMEOUT_MS: "${MEDIA_ADAPTER_REMOTE_RTSP_TIMEOUT_MS:-5000}"
       MEDIA_ADAPTER_INPUT_FPS: "${MEDIA_ADAPTER_INPUT_FPS:-15}"
       MEDIA_ADAPTER_OWNS_SCRCPY: "${MEDIA_ADAPTER_OWNS_SCRCPY:-1}"
       MEDIA_ADAPTER_SCRCPY_SERVER_PATH: "${MEDIA_ADAPTER_SCRCPY_SERVER_PATH:-/app/media-adapter/assets/scrcpy-server}"

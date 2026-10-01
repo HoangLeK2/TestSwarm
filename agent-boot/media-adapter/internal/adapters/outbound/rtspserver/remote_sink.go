@@ -30,12 +30,11 @@ type RemoteSink interface {
 
 // NewRemoteSinkFunc builds the sink for one device.
 //
-// onKeyframeNeeded is how a sink reports that the receiver has lost the picture
-// — an RTCP PLI or FIR on the WHIP path. It routes into the same rate-limited
-// gate as a local drop (Publisher.requestIDR), which is not optional: go2rtc
-// sends PLI on an unconditional two-second ticker rather than on actual loss
-// (pkg/webrtc/conn.go), and honouring each one would reconfigure MediaCodec
-// every two seconds on every phone.
+// onKeyframeNeeded reports an explicit RTCP FIR from the WHIP receiver. It
+// routes into the same rate-limited gate as a local drop
+// (Publisher.requestIDR). Periodic go2rtc PLI is filtered by the WHIP sink
+// because go2rtc emits it on an unconditional two-second ticker rather than in
+// response to actual loss.
 type NewRemoteSinkFunc func(serial string, url string, onKeyframeNeeded func()) RemoteSink
 
 // rtspSink publishes over RTSP ANNOUNCE/RECORD, the default transport.

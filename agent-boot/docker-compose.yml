@@ -99,6 +99,7 @@ services:
       MEDIA_ADAPTER_WHIP_ICE_SERVERS: "${MEDIA_ADAPTER_WHIP_ICE_SERVERS:-stun:stun.l.google.com:19302}"
       MEDIA_ADAPTER_WHIP_TIMEOUT_MS: "${MEDIA_ADAPTER_WHIP_TIMEOUT_MS:-5000}"
       MEDIA_ADAPTER_WHIP_REDIAL_MS: "${MEDIA_ADAPTER_WHIP_REDIAL_MS:-2000}"
+      MEDIA_ADAPTER_WHIP_REDIAL_MAX_MS: "${MEDIA_ADAPTER_WHIP_REDIAL_MAX_MS:-30000}"
       MEDIA_ADAPTER_RTSP_WRITE_QUEUE: "${MEDIA_ADAPTER_RTSP_WRITE_QUEUE:-128}"
       # Must hold one access unit. A keyframe packetises to ~85 RTP packets, so
       # the 32 this used to default to discarded every keyframe and then asked

@@ -14,8 +14,8 @@
 // two seconds on an unconditional ticker (pkg/webrtc/conn.go), not on real loss,
 // so it carries no information. Honouring each one would reset MediaCodec on
 // every phone every two seconds, and MediaCodec.configure() is exactly where
-// Exynos encoders abort. PLI is therefore reported through the publisher's
-// shared rate-limit gate, same as a local drop, and nothing else.
+// Exynos encoders abort. Periodic PLI is ignored; an explicit FIR can still ask
+// for a gated encoder refresh.
 //
 // Cost of this path: RTSP publishing needs one outbound TCP connection and so
 // survives any NAT. WHIP needs UDP to go2rtc's media port plus STUN, so a
@@ -26,9 +26,11 @@ package whip
 import (
 	"bytes"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -50,7 +52,15 @@ type Config struct {
 	Timeout time.Duration
 	// RedialBackoff is the wait after a failed connect before trying again.
 	RedialBackoff time.Duration
+	// RedialMax caps exponential reconnect delay during a shared outage.
+	RedialMax time.Duration
 }
+
+// Two simultaneous ICE/signalling handshakes are enough to recover quickly
+// without letting a shared outage turn every device into a concurrent dialer.
+// A sink that cannot acquire a slot drops the current packet and tries again on
+// a later packet; media lanes therefore never queue behind a fleet-wide dial.
+var dialSlots = make(chan struct{}, 2)
 
 func ConfigFromEnv() Config {
 	servers := strings.Split(envDefault("MEDIA_ADAPTER_WHIP_ICE_SERVERS", "stun:stun.l.google.com:19302"), ",")
@@ -64,6 +74,7 @@ func ConfigFromEnv() Config {
 		ICEServers:    cleaned,
 		Timeout:       time.Duration(envInt("MEDIA_ADAPTER_WHIP_TIMEOUT_MS", 5000)) * time.Millisecond,
 		RedialBackoff: time.Duration(envInt("MEDIA_ADAPTER_WHIP_REDIAL_MS", 2000)) * time.Millisecond,
+		RedialMax:     time.Duration(envInt("MEDIA_ADAPTER_WHIP_REDIAL_MAX_MS", 30000)) * time.Millisecond,
 	}
 }
 
@@ -83,11 +94,22 @@ type Sink struct {
 	onKeyframeNeeded func()
 	client           *http.Client
 
-	mu       sync.Mutex
-	pc       *webrtc.PeerConnection
-	track    *webrtc.TrackLocalStaticRTP
-	nextDial time.Time
-	closed   bool
+	mu           sync.Mutex
+	pc           *webrtc.PeerConnection
+	track        *webrtc.TrackLocalStaticRTP
+	sessionURL   string
+	connecting   bool
+	nextDial     time.Time
+	retryAttempt int
+	retrySeed    uint32
+	closed       bool
+}
+
+type peerConnection struct {
+	pc         *webrtc.PeerConnection
+	track      *webrtc.TrackLocalStaticRTP
+	sessionURL string
+	states     <-chan webrtc.PeerConnectionState
 }
 
 func NewSink(cfg Config, serial string, url string, onKeyframeNeeded func(), logger *slog.Logger) *Sink {
@@ -97,6 +119,12 @@ func NewSink(cfg Config, serial string, url string, onKeyframeNeeded func(), log
 	if cfg.RedialBackoff <= 0 {
 		cfg.RedialBackoff = 2 * time.Second
 	}
+	if cfg.RedialMax <= 0 {
+		cfg.RedialMax = 30 * time.Second
+	}
+	if cfg.RedialMax < cfg.RedialBackoff {
+		cfg.RedialMax = cfg.RedialBackoff
+	}
 	return &Sink{
 		cfg:              cfg,
 		serial:           serial,
@@ -104,6 +132,49 @@ func NewSink(cfg Config, serial string, url string, onKeyframeNeeded func(), log
 		logger:           logger,
 		onKeyframeNeeded: onKeyframeNeeded,
 		client:           &http.Client{Timeout: cfg.Timeout},
+		retrySeed:        whipRetrySeed(serial, url),
+	}
+}
+
+func whipRetrySeed(serial string, rawURL string) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(serial))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(whipURLForLog(rawURL)))
+	return h.Sum32()
+}
+
+func whipRetryDelay(base time.Duration, maximum time.Duration, attempt int, seed uint32) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+	if maximum < base {
+		maximum = base
+	}
+	exponent := attempt
+	if exponent > 6 {
+		exponent = 6
+	}
+	delay := base << exponent
+	maxBase := maximum * 100 / 120
+	if delay > maxBase {
+		delay = maxBase
+	}
+	mixed := seed + uint32(attempt)*0x9e3779b9
+	mixed ^= mixed << 13
+	mixed ^= mixed >> 17
+	mixed ^= mixed << 5
+	delay = delay * time.Duration(80+mixed%41) / 100
+	if delay > maximum {
+		return maximum
+	}
+	return delay
+}
+
+func (s *Sink) scheduleRetryLocked(now time.Time) {
+	s.nextDial = now.Add(whipRetryDelay(s.cfg.RedialBackoff, s.cfg.RedialMax, s.retryAttempt, s.retrySeed))
+	if s.retryAttempt < 30 {
+		s.retryAttempt++
 	}
 }
 
@@ -118,7 +189,7 @@ func (s *Sink) WriteRTP(packet *rtp.Packet) error {
 		return nil
 	}
 	if err := track.WriteRTP(packet); err != nil {
-		s.reset(err)
+		s.reset(track, err)
 		return err
 	}
 	return nil
@@ -128,11 +199,38 @@ func (s *Sink) Close() {
 	s.mu.Lock()
 	s.closed = true
 	pc := s.pc
+	sessionURL := s.sessionURL
 	s.pc = nil
 	s.track = nil
+	s.sessionURL = ""
 	s.mu.Unlock()
 	if pc != nil {
 		_ = pc.Close()
+	}
+	s.deleteSession(sessionURL)
+}
+
+func (s *Sink) deleteSession(sessionURL string) {
+	if sessionURL == "" {
+		return
+	}
+	request, err := http.NewRequest(http.MethodDelete, sessionURL, nil)
+	if err != nil {
+		return
+	}
+	response, err := s.client.Do(request)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("media adapter WHIP session cleanup failed",
+				"serial", s.serial, "url", whipURLForLog(sessionURL), "error", err)
+		}
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
+	_ = response.Body.Close()
+	if response.StatusCode >= 400 && s.logger != nil {
+		s.logger.Warn("media adapter WHIP session cleanup rejected",
+			"serial", s.serial, "url", whipURLForLog(sessionURL), "status", response.StatusCode)
 	}
 }
 
@@ -147,113 +245,217 @@ func (s *Sink) ensure() *webrtc.TrackLocalStaticRTP {
 		s.mu.Unlock()
 		return track
 	}
+	if s.connecting {
+		s.mu.Unlock()
+		return nil
+	}
 	if now := time.Now(); now.Before(s.nextDial) {
 		s.mu.Unlock()
 		return nil
 	}
+	select {
+	case dialSlots <- struct{}{}:
+	default:
+		s.mu.Unlock()
+		return nil
+	}
+	s.connecting = true
 	s.mu.Unlock()
 
-	pc, track, err := s.connect()
+	connection, err := s.connect()
+	<-dialSlots
 	if err != nil {
 		s.mu.Lock()
-		s.nextDial = time.Now().Add(s.cfg.RedialBackoff)
+		s.connecting = false
+		s.scheduleRetryLocked(time.Now())
 		s.mu.Unlock()
 		if s.logger != nil {
 			s.logger.Warn("media adapter WHIP publish not ready",
-				"serial", s.serial, "url", s.url, "error", err)
+				"serial", s.serial, "url", whipURLForLog(s.url), "error", err)
 		}
 		return nil
 	}
 
 	s.mu.Lock()
+	s.connecting = false
 	if s.closed {
 		s.mu.Unlock()
-		_ = pc.Close()
+		_ = connection.pc.Close()
+		s.deleteSession(connection.sessionURL)
 		return nil
 	}
-	s.pc = pc
-	s.track = track
+	s.pc = connection.pc
+	s.track = connection.track
+	s.sessionURL = connection.sessionURL
+	s.retryAttempt = 0
+	s.nextDial = time.Time{}
 	s.mu.Unlock()
+	go s.watchConnection(connection.pc, connection.states)
 	if s.logger != nil {
-		s.logger.Info("media adapter WHIP publishing", "serial", s.serial, "url", s.url)
+		s.logger.Info("media adapter WHIP publishing", "serial", s.serial, "url", whipURLForLog(s.url))
 	}
-	return track
+	return connection.track
 }
 
-func (s *Sink) reset(cause error) {
+func (s *Sink) reset(expected *webrtc.TrackLocalStaticRTP, cause error) {
 	s.mu.Lock()
+	// A delayed failure from an old track must not tear down a replacement
+	// connection that another packet has already established.
+	if s.track != expected {
+		s.mu.Unlock()
+		return
+	}
 	pc := s.pc
+	sessionURL := s.sessionURL
 	s.pc = nil
 	s.track = nil
-	s.nextDial = time.Now().Add(s.cfg.RedialBackoff)
+	s.sessionURL = ""
+	s.scheduleRetryLocked(time.Now())
 	s.mu.Unlock()
 	if pc != nil {
 		_ = pc.Close()
 	}
+	s.deleteSession(sessionURL)
 	if s.logger != nil && cause != nil {
 		s.logger.Warn("media adapter WHIP write failed, will redial",
-			"serial", s.serial, "url", s.url, "error", cause)
+			"serial", s.serial, "url", whipURLForLog(s.url), "error", cause)
 	}
 }
 
-func (s *Sink) connect() (*webrtc.PeerConnection, *webrtc.TrackLocalStaticRTP, error) {
+func (s *Sink) watchConnection(pc *webrtc.PeerConnection, states <-chan webrtc.PeerConnectionState) {
+	for state := range states {
+		switch state {
+		case webrtc.PeerConnectionStateDisconnected, webrtc.PeerConnectionStateFailed:
+			s.resetConnection(pc, fmt.Errorf("peer connection became %s", state.String()))
+			return
+		case webrtc.PeerConnectionStateClosed:
+			return
+		}
+	}
+}
+
+func (s *Sink) resetConnection(expected *webrtc.PeerConnection, cause error) {
+	s.mu.Lock()
+	if s.pc != expected {
+		s.mu.Unlock()
+		return
+	}
+	pc := s.pc
+	sessionURL := s.sessionURL
+	s.pc = nil
+	s.track = nil
+	s.sessionURL = ""
+	s.scheduleRetryLocked(time.Now())
+	s.mu.Unlock()
+	if pc != nil {
+		_ = pc.Close()
+	}
+	s.deleteSession(sessionURL)
+	if s.logger != nil {
+		s.logger.Warn("media adapter WHIP connection lost, will redial",
+			"serial", s.serial, "url", whipURLForLog(s.url), "error", cause)
+	}
+}
+
+func whipURLForLog(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "[invalid WHIP URL]"
+	}
+	parsed.User = nil
+	return parsed.String()
+}
+
+func (s *Sink) connect() (*peerConnection, error) {
 	api, err := newAPI()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	pc, err := api.NewPeerConnection(webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{{URLs: s.cfg.ICEServers}},
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
+	states := make(chan webrtc.PeerConnectionState, 8)
+	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
+		select {
+		case states <- state:
+		default:
+		}
+	})
 	track, err := webrtc.NewTrackLocalStaticRTP(
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000},
 		"video", "device-"+s.serial,
 	)
 	if err != nil {
 		_ = pc.Close()
-		return nil, nil, err
+		return nil, err
 	}
 	sender, err := pc.AddTrack(track)
 	if err != nil {
 		_ = pc.Close()
-		return nil, nil, err
+		return nil, err
 	}
 	go s.readRTCP(sender)
 
 	offer, err := pc.CreateOffer(nil)
 	if err != nil {
 		_ = pc.Close()
-		return nil, nil, err
+		return nil, err
 	}
 	// WHIP has no trickle: the single POST must carry every candidate, so wait
 	// for gathering to finish before reading the local description back.
 	gathered := webrtc.GatheringCompletePromise(pc)
 	if err := pc.SetLocalDescription(offer); err != nil {
 		_ = pc.Close()
-		return nil, nil, err
+		return nil, err
 	}
 	select {
 	case <-gathered:
 	case <-time.After(s.cfg.Timeout):
 		_ = pc.Close()
-		return nil, nil, fmt.Errorf("ICE gathering timed out after %s", s.cfg.Timeout)
+		return nil, fmt.Errorf("ICE gathering timed out after %s", s.cfg.Timeout)
 	}
 
-	answer, err := s.exchange(pc.LocalDescription().SDP)
+	answer, sessionURL, err := s.exchange(pc.LocalDescription().SDP)
 	if err != nil {
 		_ = pc.Close()
-		return nil, nil, err
+		return nil, err
 	}
 	if err := pc.SetRemoteDescription(webrtc.SessionDescription{
 		Type: webrtc.SDPTypeAnswer,
 		SDP:  answer,
 	}); err != nil {
 		_ = pc.Close()
-		return nil, nil, err
+		s.deleteSession(sessionURL)
+		return nil, err
 	}
-	return pc, track, nil
+
+	timer := time.NewTimer(s.cfg.Timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case state := <-states:
+			switch state {
+			case webrtc.PeerConnectionStateConnected:
+				return &peerConnection{
+					pc:         pc,
+					track:      track,
+					sessionURL: sessionURL,
+					states:     states,
+				}, nil
+			case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed:
+				_ = pc.Close()
+				s.deleteSession(sessionURL)
+				return nil, fmt.Errorf("peer connection became %s before publishing", state.String())
+			}
+		case <-timer.C:
+			_ = pc.Close()
+			s.deleteSession(sessionURL)
+			return nil, fmt.Errorf("peer connection timed out after %s", s.cfg.Timeout)
+		}
+	}
 }
 
 // readRTCP turns receiver feedback into keyframe requests.
@@ -272,9 +474,10 @@ func (s *Sink) readRTCP(sender *webrtc.RTPSender) {
 	}
 }
 
-// handleRTCP reports receiver-side picture loss. NACKs are absent here by
+// handleRTCP reports explicit full-refresh requests. NACKs are absent here by
 // design: the interceptor chain answers those with a retransmission before they
-// reach this point, which is the repair that costs the device nothing.
+// reach this point, which is the repair that costs the device nothing. PLI is
+// ignored because go2rtc emits it on an unconditional two-second ticker.
 func (s *Sink) handleRTCP(raw []byte) {
 	packets, err := rtcp.Unmarshal(raw)
 	if err != nil {
@@ -282,7 +485,7 @@ func (s *Sink) handleRTCP(raw []byte) {
 	}
 	for _, packet := range packets {
 		switch packet.(type) {
-		case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
+		case *rtcp.FullIntraRequest:
 			if s.onKeyframeNeeded != nil {
 				s.onKeyframeNeeded()
 			}
@@ -290,27 +493,47 @@ func (s *Sink) handleRTCP(raw []byte) {
 	}
 }
 
-func (s *Sink) exchange(offer string) (string, error) {
+func (s *Sink) exchange(offer string) (string, string, error) {
 	request, err := http.NewRequest(http.MethodPost, s.url, bytes.NewReader([]byte(offer)))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	request.Header.Set("Content-Type", "application/sdp")
 	response, err := s.client.Do(request)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer response.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		return "", "", fmt.Errorf("read WHIP response: %w", err)
+	}
 	if response.StatusCode >= 400 {
-		return "", fmt.Errorf("WHIP endpoint returned %d: %s",
+		return "", "", fmt.Errorf("WHIP endpoint returned %d: %s",
 			response.StatusCode, strings.TrimSpace(string(body)))
 	}
-	answer := strings.TrimSpace(string(body))
-	if answer == "" {
-		return "", fmt.Errorf("WHIP endpoint returned an empty answer")
+	answer := string(body)
+	if strings.TrimSpace(answer) == "" {
+		return "", "", fmt.Errorf("WHIP endpoint returned an empty answer")
 	}
-	return answer, nil
+	sessionURL := ""
+	if location := strings.TrimSpace(response.Header.Get("Location")); location != "" {
+		base, baseErr := url.Parse(s.url)
+		reference, locationErr := url.Parse(location)
+		if baseErr != nil || locationErr != nil {
+			return "", "", fmt.Errorf("WHIP endpoint returned an invalid session location")
+		}
+		resolved := base.ResolveReference(reference)
+		// WHIP authentication applies to both the endpoint and the session
+		// resource. Preserve URL userinfo only for a same-origin Location; never
+		// forward credentials to a different host returned by the server.
+		if resolved.User == nil && base.User != nil &&
+			resolved.Scheme == base.Scheme && resolved.Host == base.Host {
+			resolved.User = base.User
+		}
+		sessionURL = resolved.String()
+	}
+	return answer, sessionURL, nil
 }
 
 // newAPI builds the media engine.

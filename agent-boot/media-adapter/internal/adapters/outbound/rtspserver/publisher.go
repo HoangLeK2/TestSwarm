@@ -202,8 +202,8 @@ const (
 	dropQueue          dropReason = "queue"
 	dropStale          dropReason = "stale"
 	dropRemoteOverflow dropReason = "remote_overflow"
-	// dropRemoteFeedback is an RTCP PLI/FIR from the peer we publish to: the
-	// receiver telling us it has already lost the picture.
+	// dropRemoteFeedback is an explicit RTCP FIR from the peer we publish to:
+	// the receiver asking for a full encoder refresh.
 	dropRemoteFeedback dropReason = "remote_feedback"
 )
 

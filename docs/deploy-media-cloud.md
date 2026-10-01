@@ -204,8 +204,8 @@ Basic auth lấy từ userinfo, Go `net/http` tự gắn header. Backend không 
 docker compose logs media-adapter | grep "publishing over WHIP"
 curl -s http://127.0.0.1:8878/v1/rtsp/publisher/status | jq '.per_serial'
 # rtp_written tăng, write_errors không tăng.
-# idr_requests tăng ~20/phút = go2rtc đang bắn PLI trên ticker 2s; khi đó gate
-# PLI lại (nack đã sửa mất gói rồi) thay vì để nó reset MediaCodec mỗi 3 giây.
+# idr_requests phải gần như đứng yên khi chỉ có PLI ticker 2s của go2rtc;
+# WHIP sink chỉ chuyển FIR rõ ràng qua gate, còn nack tự retransmit gói đã mất.
 
 # Proxy phải chặn đúng — dòng này PHẢI trả 403, không phải 200:
 curl -u farm:<WHIP_PASS> -X PUT "https://whip-device-farm.tommadethis.app/api/streams?name=x"

@@ -697,11 +697,9 @@ func TestPerSerialStatsIsolateDevices(t *testing.T) {
 	}
 }
 
-// go2rtc sends PLI on an unconditional two-second ticker, not on real loss
-// (pkg/webrtc/conn.go). scrcpy's RESET_VIDEO is a full MediaCodec reconfigure,
-// and MediaCodec.configure() is where Exynos encoders abort — so honouring every
-// PLI would reset the encoder on every phone every two seconds. Remote feedback
-// must pass through the same gate as a local drop.
+// An explicit FIR asks for a full MediaCodec refresh. Even explicit remote
+// feedback must pass through the same gate as a local drop so a noisy receiver
+// cannot reconfigure the phone encoder continuously.
 func TestRemoteFeedbackGoesThroughTheKeyframeRateLimit(t *testing.T) {
 	publisher, recorder := newTestPublisher(Config{
 		QueueMax: 2, StalePacketAge: time.Second, InputFPS: 15, IDRMinInterval: time.Hour,
@@ -715,7 +713,7 @@ func TestRemoteFeedbackGoesThroughTheKeyframeRateLimit(t *testing.T) {
 	recorder.waitFor(t, 1)
 	time.Sleep(50 * time.Millisecond)
 	if got := recorder.count(); got != 1 {
-		t.Fatalf("keyframe requests=%d, want exactly 1 — go2rtc's PLI ticker reaches the encoder", got)
+		t.Fatalf("keyframe requests=%d, want exactly 1", got)
 	}
 	// Nothing was dropped on this side, so no drop counter should move: the
 	// peer reported its own loss.

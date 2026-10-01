@@ -34,7 +34,9 @@ func main() {
 		publisherCfg.NewRemoteSink = func(serial string, url string, onKeyframeNeeded func()) rtspserver.RemoteSink {
 			return whip.NewSink(whipCfg, serial, url, onKeyframeNeeded, logger)
 		}
-		logger.Info("media adapter publishing over WHIP", "template", publisherCfg.PublishTemplate)
+		// The template can contain WHIP credentials in URL userinfo. The sink logs
+		// a redacted endpoint after connecting; never print the template here.
+		logger.Info("media adapter publishing over WHIP")
 	}
 	publisher := rtspserver.New(publisherCfg, logger)
 	scrcpyManager := scrcpy.NewManager(publisher, logger)

@@ -46,20 +46,18 @@ export function AdminContentPage() {
   const t = useTranslations('adminConsole.content');
   const scope = useAdminWorkspaceScope();
   const [search, setSearch] = useState('');
-  const [contentType, setContentType] = useState(ALL);
   const [platform, setPlatform] = useState(ALL);
   const [offset, setOffset] = useState(0);
 
   const params = useMemo(
     () => ({
       search: search || undefined,
-      content_type: contentType === ALL ? undefined : contentType,
       platform: platform === ALL ? undefined : platform,
       workspaceId: scope.scopedWorkspaceId,
       offset,
       limit: ADMIN_PAGE_SIZE
     }),
-    [contentType, offset, platform, scope.scopedWorkspaceId, search]
+    [offset, platform, scope.scopedWorkspaceId, search]
   );
 
   const content = useQuery({
@@ -72,7 +70,7 @@ export function AdminContentPage() {
     <div className='min-h-full bg-muted/20'>
       <AdminPageHeader title={t('title')} description={t('description')} />
       <div className='space-y-4 p-4 md:p-6'>
-        <div className='grid gap-3 rounded-md border bg-background p-3 lg:grid-cols-[minmax(220px,1fr)_260px_170px_170px]'>
+        <div className='grid gap-3 rounded-md border bg-background p-3 lg:grid-cols-[minmax(220px,1fr)_260px_170px]'>
           <SearchField
             value={search}
             onChange={(value) => {
@@ -93,22 +91,6 @@ export function AdminContentPage() {
             allWorkspacesLabel={t('filters.allWorkspaces')}
           />
           <Select
-            value={contentType}
-            onValueChange={(value) => {
-              setContentType(value);
-              setOffset(0);
-            }}
-          >
-            <SelectTrigger className='w-full'>
-              <SelectValue placeholder={t('filters.type')} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL}>{t('filters.allTypes')}</SelectItem>
-              <SelectItem value='fb_post'>{t('types.posts')}</SelectItem>
-              <SelectItem value='fb_comment'>{t('types.comments')}</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select
             value={platform}
             onValueChange={(value) => {
               setPlatform(value);
@@ -120,7 +102,6 @@ export function AdminContentPage() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={ALL}>{t('filters.allPlatforms')}</SelectItem>
-              <SelectItem value='facebook'>Facebook</SelectItem>
               <SelectItem value='tiktok'>TikTok</SelectItem>
               <SelectItem value='instagram'>Instagram</SelectItem>
               <SelectItem value='youtube'>YouTube</SelectItem>

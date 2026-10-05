@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Braces, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -19,14 +19,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
 import { mergeCampaignScenarioVariables as mergeCampaignScenarioVariablesModel } from './device-vars-json-model';
-import { DeviceVarsFacebookTargetForm } from './device-vars-facebook-target-form';
-import {
-  DEVICE_TARGET_FORM_KEY,
-  emptyDeviceTargetFormState,
-  applyDeviceTargetFormState,
-  isDeviceTargetFormControlledKey,
-  removeDeviceTargetFormState
-} from './device-vars-target-form-model';
+import { isDeviceTargetFormControlledKey } from './device-vars-target-form-model';
 
 export const DEFAULT_DEVICE_VARIABLES = {
   group_name: '',
@@ -299,11 +292,8 @@ export function DeviceVarsJsonPanel({
 }: DeviceVarsJsonPanelProps) {
   const t = useTranslations('components.deviceVarsJson');
   const [editorMode, setEditorMode] = useState<'form' | 'json'>('form');
-  const [assignmentTab, setAssignmentTab] = useState<
-    'targets' | 'advanced' | 'json'
-  >('targets');
-  const [specialForm, setSpecialForm] = useState<'none' | 'facebookTargets'>(
-    'none'
+  const [assignmentTab, setAssignmentTab] = useState<'advanced' | 'json'>(
+    'advanced'
   );
   const parseMsgs = useMemo(
     () => ({
@@ -319,16 +309,6 @@ export function DeviceVarsJsonPanel({
   } catch {
     parsedDraft = null;
   }
-  const hasTargetFormDraft =
-    parsedDraft !== null &&
-    Object.prototype.hasOwnProperty.call(parsedDraft, DEVICE_TARGET_FORM_KEY);
-
-  useEffect(() => {
-    if (!enabled || !hasTargetFormDraft) return;
-    setEditorMode('form');
-    setSpecialForm('facebookTargets');
-  }, [draft, enabled, hasTargetFormDraft]);
-
   const globalPreview = globalVariablesPreview ?? {};
   const effectiveDeviceVarsForTemplate = useMemo(() => {
     if (!enabled) return {} as Record<string, unknown>;
@@ -369,38 +349,6 @@ export function DeviceVarsJsonPanel({
       }
     },
     [enabled, onDraftChange, parseMsgs]
-  );
-
-  const handleTargetFormChange = useCallback(
-    (nextVars: Record<string, unknown>) => {
-      if (!enabled) return;
-      onDraftChange(formatDeviceVarsJson(nextVars));
-    },
-    [enabled, onDraftChange]
-  );
-
-  const handleSpecialFormChange = useCallback(
-    (value: 'none' | 'facebookTargets') => {
-      if (!enabled || parsedDraft === null) return;
-      setSpecialForm(value);
-      if (value === 'none') {
-        onDraftChange(
-          formatDeviceVarsJson(removeDeviceTargetFormState(parsedDraft))
-        );
-        return;
-      }
-      onDraftChange(
-        formatDeviceVarsJson(
-          hasTargetFormDraft
-            ? parsedDraft
-            : applyDeviceTargetFormState(
-                parsedDraft,
-                emptyDeviceTargetFormState()
-              )
-        )
-      );
-    },
-    [enabled, hasTargetFormDraft, onDraftChange, parsedDraft]
   );
 
   const formVariableEntries = useMemo(() => {
@@ -522,14 +470,11 @@ export function DeviceVarsJsonPanel({
             <Tabs
               value={assignmentTab}
               onValueChange={(value) =>
-                setAssignmentTab(value as 'targets' | 'advanced' | 'json')
+                setAssignmentTab(value as 'advanced' | 'json')
               }
               className='min-h-0 flex-1 gap-3 overflow-hidden'
             >
-              <TabsList className='grid h-9 w-full grid-cols-3 sm:w-[27rem]'>
-                <TabsTrigger value='targets' className='text-xs'>
-                  {t('targetFormTitle')}
-                </TabsTrigger>
+              <TabsList className='grid h-9 w-full grid-cols-2 sm:w-[18rem]'>
                 <TabsTrigger value='advanced' className='text-xs'>
                   {t('otherVariablesTitle')}
                 </TabsTrigger>
@@ -537,28 +482,6 @@ export function DeviceVarsJsonPanel({
                   {t('jsonMode')}
                 </TabsTrigger>
               </TabsList>
-
-              <TabsContent
-                value='targets'
-                className='mt-0 min-h-0 overflow-hidden'
-              >
-                <section className='flex min-h-0 flex-col gap-4 rounded-md border bg-background p-4'>
-                  <div className='min-w-0'>
-                    <p className='text-sm font-medium'>
-                      {t('targetFormTitle')}
-                    </p>
-                    <p className='mt-1 text-xs text-muted-foreground'>
-                      {t('specialFormFacebookHint')}
-                    </p>
-                  </div>
-                  <DeviceVarsFacebookTargetForm
-                    vars={parsedDraft}
-                    disabled={loading}
-                    size='large'
-                    onChange={handleTargetFormChange}
-                  />
-                </section>
-              </TabsContent>
 
               <TabsContent
                 value='advanced'
@@ -737,49 +660,6 @@ export function DeviceVarsJsonPanel({
                         {t('otherVariablesEmpty')}
                       </p>
                     )}
-                  </section>
-
-                  <section className='min-w-0 space-y-4 overflow-hidden rounded-md border bg-background p-4'>
-                    <div className='grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,14rem)] sm:items-end'>
-                      <div className='min-w-0'>
-                        <p className='text-sm font-medium'>
-                          {t('targetFormTitle')}
-                        </p>
-                        <p className='mt-1 text-xs text-muted-foreground'>
-                          {specialForm === 'facebookTargets'
-                            ? t('specialFormFacebookHint')
-                            : t('specialFormNoneHint')}
-                        </p>
-                      </div>
-                      <Select
-                        value={specialForm}
-                        disabled={loading}
-                        onValueChange={(value) =>
-                          handleSpecialFormChange(
-                            value as 'none' | 'facebookTargets'
-                          )
-                        }
-                      >
-                        <SelectTrigger className='h-9 w-full min-w-0 text-sm [&_[data-slot=select-value]]:truncate'>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value='none'>
-                            {t('specialFormNone')}
-                          </SelectItem>
-                          <SelectItem value='facebookTargets'>
-                            {t('specialFormFacebook')}
-                          </SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    {specialForm === 'facebookTargets' ? (
-                      <DeviceVarsFacebookTargetForm
-                        vars={parsedDraft}
-                        disabled={loading}
-                        onChange={handleTargetFormChange}
-                      />
-                    ) : null}
                   </section>
                 </div>
               </ScrollArea>

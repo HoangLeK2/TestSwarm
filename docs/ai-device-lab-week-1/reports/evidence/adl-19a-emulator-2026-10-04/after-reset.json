@@ -1,0 +1,15 @@
+{
+  "abi": "arm64-v8a",
+  "atx_agent_version": "0.10.1",
+  "avd": "galaxy_note10_plus",
+  "boot_completed": true,
+  "bootstrap_packages_installed": true,
+  "canary_path": "/sdcard/Download/adl19a-canary.txt",
+  "canary_present": false,
+  "observation": "post_reset_clean_profile",
+  "readback_clean": true,
+  "reset_command": "emulator -avd galaxy_note10_plus -wipe-data -no-snapshot",
+  "sdk": 35,
+  "serial": "emulator-5580",
+  "target_type": "emulator"
+}

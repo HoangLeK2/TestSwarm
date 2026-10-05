@@ -313,7 +313,7 @@ test('comment extract warns when comment filter did not run earlier', () => {
       steps([
         {
           type: 'extract',
-          platform: 'facebook',
+          platform: 'instagram',
           entity: 'comments',
           dedupe_field: 'comment_key'
         }
@@ -337,7 +337,7 @@ test('comment flow accepts the split comment sequence in order', () => {
         { type: 'social_apply_comment_filter' },
         {
           type: 'extract',
-          platform: 'facebook',
+          platform: 'instagram',
           entity: 'comments',
           dedupe_field: 'comment_key'
         }

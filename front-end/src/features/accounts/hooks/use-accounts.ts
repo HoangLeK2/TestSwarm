@@ -42,10 +42,6 @@ const KEYS = {
   availableDevicesBase: (id: string) =>
     ['accounts', id, 'available-devices'] as const,
   deviceAccounts: (id: string) => ['devices', id, 'accounts'] as const,
-  facebookSession: (id: string) =>
-    ['devices', id, 'platform-sessions', 'facebook'] as const,
-  facebookLoginAttempts: (id: string) =>
-    ['devices', id, 'platform-sessions', 'facebook', 'login-attempts'] as const,
   events: (id: string, cursor?: string) =>
     ['accounts', id, 'events', cursor] as const,
   actions: (id: string, cursor?: string) =>
@@ -56,7 +52,6 @@ const KEYS = {
     ['executions', executionId, 'steps'] as const,
   runTaskLog: (executionId: string) =>
     ['executions', executionId, 'task-log'] as const,
-  candidateSettings: ['accounts', 'candidate-settings'] as const,
   importFormats: ['accounts', 'import-formats'] as const
 };
 
@@ -164,36 +159,6 @@ export function useAccountActionSummary(
     queryKey: KEYS.actionSummary(accountId),
     queryFn: () => accountsApi.getActionSummary(accountId),
     enabled: !!accountId && (opts?.enabled ?? true)
-  });
-}
-
-export function useFacebookCandidateSettings() {
-  const { currentOrg } = useOrganization();
-  return useQuery({
-    queryKey: [...KEYS.candidateSettings, currentOrg?.id],
-    queryFn: () => accountsApi.getFacebookCandidateSettings(),
-    enabled: Boolean(currentOrg?.id)
-  });
-}
-
-export function useUpdateFacebookCandidateSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async (
-      settings: Parameters<
-        typeof accountsApi.updateFacebookCandidateSettings
-      >[0]
-    ) => {
-      const updated =
-        await accountsApi.updateFacebookCandidateSettings(settings);
-      let cursor: string | undefined;
-      do {
-        const result = await accountsApi.recomputeFacebookCandidates(cursor);
-        cursor = result.next_cursor ?? undefined;
-      } while (cursor);
-      return updated;
-    },
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.candidateSettings })
   });
 }
 
@@ -325,10 +290,9 @@ export function useAssignDeviceToAccount() {
       deviceId: string;
       isPrimary?: boolean;
     }) => accountsApi.assignDevice(accountId, deviceId, isPrimary),
-    onSuccess: (_, { accountId, deviceId }) => {
+    onSuccess: (_, { accountId }) => {
       qc.invalidateQueries({ queryKey: KEYS.devices(accountId) });
       qc.invalidateQueries({ queryKey: KEYS.availableDevicesBase(accountId) });
-      qc.invalidateQueries({ queryKey: KEYS.facebookSession(deviceId) });
       qc.invalidateQueries({ queryKey: KEYS.list });
     }
   });
@@ -348,7 +312,6 @@ export function useUnassignDeviceFromAccount() {
       qc.invalidateQueries({ queryKey: KEYS.devices(accountId) });
       qc.invalidateQueries({ queryKey: KEYS.availableDevicesBase(accountId) });
       qc.invalidateQueries({ queryKey: KEYS.deviceAccounts(deviceId) });
-      qc.invalidateQueries({ queryKey: KEYS.facebookSession(deviceId) });
       qc.invalidateQueries({ queryKey: KEYS.list });
     }
   });
@@ -379,7 +342,6 @@ export function useAssignAccountsToDevice() {
       ),
     onSuccess: (_, { deviceId, accountIds }) => {
       qc.invalidateQueries({ queryKey: KEYS.deviceAccounts(deviceId) });
-      qc.invalidateQueries({ queryKey: KEYS.facebookSession(deviceId) });
       qc.invalidateQueries({ queryKey: KEYS.list });
       accountIds.forEach((accountId) =>
         qc.invalidateQueries({ queryKey: KEYS.devices(accountId) })
@@ -400,7 +362,6 @@ export function useSetPrimaryDeviceAccount() {
     }) => accountsApi.setPrimaryAccount(deviceId, accountId),
     onSuccess: (_, { deviceId, accountId }) => {
       qc.invalidateQueries({ queryKey: KEYS.deviceAccounts(deviceId) });
-      qc.invalidateQueries({ queryKey: KEYS.facebookSession(deviceId) });
       qc.invalidateQueries({ queryKey: KEYS.devices(accountId) });
     }
   });
@@ -418,118 +379,5 @@ export function useVerifyDeviceAccount() {
     }) => accountsApi.verifyDeviceAccount(deviceId, accountId),
     onSuccess: (_, { deviceId }) =>
       qc.invalidateQueries({ queryKey: KEYS.deviceAccounts(deviceId) })
-  });
-}
-
-export function useFacebookPlatformSession(deviceId: string) {
-  return useQuery({
-    queryKey: KEYS.facebookSession(deviceId),
-    queryFn: () => accountsApi.getFacebookPlatformSession(deviceId),
-    enabled: !!deviceId
-  });
-}
-
-export function useInvalidateFacebookPlatformSession() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      deviceId,
-      expectedVersion
-    }: {
-      deviceId: string;
-      expectedVersion?: number;
-    }) =>
-      accountsApi.invalidateFacebookPlatformSession(deviceId, {
-        reason: 'operator_deleted_session',
-        expected_version: expectedVersion,
-        evidence: { source: 'account_devices_dialog' }
-      }),
-    onSuccess: (_, { deviceId }) =>
-      qc.invalidateQueries({ queryKey: KEYS.facebookSession(deviceId) })
-  });
-}
-
-export function useFacebookLoginAttempts(
-  deviceId: string,
-  opts?: { limit?: number }
-) {
-  return useQuery({
-    queryKey: [
-      ...KEYS.facebookLoginAttempts(deviceId),
-      opts?.limit ?? 20
-    ] as const,
-    queryFn: () =>
-      accountsApi.listFacebookLoginAttempts(deviceId, {
-        limit: opts?.limit ?? 20
-      }),
-    enabled: !!deviceId
-  });
-}
-
-export function useStartFacebookLoginAttempt() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      deviceId,
-      accountId,
-      evidence
-    }: {
-      deviceId: string;
-      accountId: string;
-      evidence?: Record<string, unknown>;
-    }) =>
-      accountsApi.startFacebookLoginAttempt(deviceId, {
-        account_id: accountId,
-        evidence
-      }),
-    onSuccess: (_, { deviceId }) => {
-      qc.invalidateQueries({ queryKey: KEYS.facebookSession(deviceId) });
-      qc.invalidateQueries({ queryKey: KEYS.facebookLoginAttempts(deviceId) });
-    }
-  });
-}
-
-export function useCompleteFacebookLoginAttempt() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      deviceId,
-      attemptId,
-      operatorConfirmed,
-      evidence
-    }: {
-      deviceId: string;
-      attemptId: string;
-      operatorConfirmed?: boolean;
-      evidence?: Record<string, unknown>;
-    }) =>
-      accountsApi.completeFacebookLoginAttempt(deviceId, attemptId, {
-        operator_confirmed: operatorConfirmed,
-        evidence
-      }),
-    onSuccess: (_, { deviceId }) => {
-      qc.invalidateQueries({ queryKey: KEYS.facebookSession(deviceId) });
-      qc.invalidateQueries({ queryKey: KEYS.facebookLoginAttempts(deviceId) });
-    }
-  });
-}
-
-export function useCancelFacebookLoginAttempt() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      deviceId,
-      attemptId,
-      reason
-    }: {
-      deviceId: string;
-      attemptId: string;
-      reason?: string;
-    }) =>
-      accountsApi.cancelFacebookLoginAttempt(deviceId, attemptId, { reason }),
-    onSuccess: (_, { deviceId }) => {
-      qc.invalidateQueries({ queryKey: KEYS.facebookSession(deviceId) });
-      qc.invalidateQueries({ queryKey: KEYS.facebookLoginAttempts(deviceId) });
-    }
   });
 }

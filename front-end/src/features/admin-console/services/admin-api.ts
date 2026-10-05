@@ -363,39 +363,6 @@ export type AdminDeviceListOut = {
   limit: number;
 };
 
-export type PlatformAppReleaseOut = {
-  id: string;
-  platform: string;
-  package_name: string;
-  version_name: string;
-  version_code?: string | null;
-  sha256: string;
-  size_bytes: number;
-  object_key: string;
-  original_filename?: string | null;
-  content_type_mime: string;
-  status: string;
-  notes?: string | null;
-  uploaded_by_user_id?: string | null;
-  published_at?: string | null;
-  archived_at?: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-export type PlatformAppReleaseListOut = {
-  items: PlatformAppReleaseOut[];
-  total: number;
-  offset: number;
-  limit: number;
-};
-
-export type PlatformAppDownloadOut = {
-  release: PlatformAppReleaseOut;
-  download_url: string;
-  expires_seconds: number;
-};
-
 export type AccountImportFormatOut = {
   id: string;
   slug: string;
@@ -810,57 +777,6 @@ export const adminApi = {
   deleteDevice: (deviceId: string) =>
     farmApi
       .delete(`/admin/devices/${encodeURIComponent(deviceId)}`)
-      .then((r) => r.data),
-  listFacebookAppReleases: (params: PageParams & { status?: string } = {}) =>
-    farmApi
-      .get<PlatformAppReleaseListOut>(
-        '/admin/platform-apps/facebook/releases',
-        {
-          params
-        }
-      )
-      .then((r) => r.data),
-  uploadFacebookAppRelease: (file: File, notes?: string) => {
-    const form = new FormData();
-    form.append('file', file, file.name);
-    if (notes?.trim()) form.append('notes', notes.trim());
-    return farmApi
-      .post<PlatformAppReleaseOut>(
-        '/admin/platform-apps/facebook/releases',
-        form,
-        { headers: { 'Content-Type': 'multipart/form-data' } }
-      )
-      .then((r) => r.data);
-  },
-  publishFacebookAppRelease: (releaseId: string) =>
-    farmApi
-      .post<{
-        release: PlatformAppReleaseOut;
-      }>(
-        `/admin/platform-apps/facebook/releases/${encodeURIComponent(releaseId)}/publish`
-      )
-      .then((r) => r.data.release),
-  archiveFacebookAppRelease: (releaseId: string) =>
-    farmApi
-      .post<{
-        release: PlatformAppReleaseOut;
-      }>(
-        `/admin/platform-apps/facebook/releases/${encodeURIComponent(releaseId)}/archive`
-      )
-      .then((r) => r.data.release),
-  deleteFacebookAppRelease: (releaseId: string) =>
-    farmApi
-      .delete<{
-        release: PlatformAppReleaseOut;
-      }>(
-        `/admin/platform-apps/facebook/releases/${encodeURIComponent(releaseId)}`
-      )
-      .then((r) => r.data.release),
-  getFacebookAppReleaseDownloadUrl: (releaseId: string) =>
-    farmApi
-      .get<PlatformAppDownloadOut>(
-        `/admin/platform-apps/facebook/releases/${encodeURIComponent(releaseId)}/download-url`
-      )
       .then((r) => r.data),
   listAccountImportFormats: (includeInactive = true) =>
     farmApi

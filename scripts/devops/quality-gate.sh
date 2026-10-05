@@ -17,7 +17,7 @@ require_cmd() {
 
 run_backend_quick() {
   require_cmd uv
-  cd "$ROOT_DIR/device_farm"
+  cd "$ROOT_DIR/backend"
   log "Backend compile check"
   uv run python -m compileall \
     api/routes/scenarios.py \
@@ -34,7 +34,7 @@ run_backend_quick() {
 
 run_backend_campaign() {
   require_cmd uv
-  cd "$ROOT_DIR/device_farm"
+  cd "$ROOT_DIR/backend"
   log "Account, group, source, page, device, campaign workflow regression"
   uv run --extra dev pytest -q \
     tests/test_account_import.py \
@@ -48,8 +48,6 @@ run_backend_campaign() {
     tests/test_account_events.py \
     tests/test_campaign_scenario_sources.py \
     tests/test_source_pool_step.py \
-    tests/test_fb_group_extraction.py \
-    tests/test_graph_compiler_facebook.py \
     tests/test_epic04_campaign_device_binding.py \
     tests/test_epic04_campaign_account_binding.py \
     tests/test_campaign_dispatch_n2n.py

@@ -1130,13 +1130,13 @@ export function createDefaultStep(
       return {
         ...base,
         type: 'use_source_pool',
-        platform: 'facebook',
+        platform: 'auto',
         entity_type: 'group',
         output_prefix: 'GROUP',
         statuses: ['candidate', 'active', 'available'],
         allocation_policy: 'one_per_device'
       };
-    // Shortcut for the Facebook comments adapter. Mirrors the split comment
+    // Shortcut for the generic comments adapter. Mirrors the split comment
     // templates; users can still tweak fields later.
     case 'extract_comments':
       return {
@@ -1162,14 +1162,14 @@ export function createDefaultStep(
         no_new_threshold: 3,
         open_post_press_back_after_extract: true,
         collection: '${SAVE_COLLECTION}',
-        platform: 'facebook',
-        content_type: 'fb_comment',
+        platform: 'auto',
+        content_type: 'comment',
         dedupe_field: 'comment_key',
         tags: 'group,comment,${GROUP_NAME}',
         save_parent_id_var: '_active_comment_parent_hash',
         item_level: 1
       };
-    // Shortcut for the Facebook post adapter used by the legacy group feed preset.
+    // Shortcut for the generic post adapter.
     case 'extract_posts':
       return {
         ...base,
@@ -1189,8 +1189,8 @@ export function createDefaultStep(
         max_items: 50,
         stop_if_no_new: false,
         collection: '${SAVE_COLLECTION}',
-        platform: 'facebook',
-        content_type: 'fb_post',
+        platform: 'auto',
+        content_type: 'post',
         dedupe_field: 'post_key',
         tags: 'group,crawl,${GROUP_NAME}'
       };
@@ -1200,8 +1200,8 @@ export function createDefaultStep(
         type: 'save_extraction',
         data_var: 'posts',
         collection: 'default',
-        platform: 'facebook',
-        content_type: 'fb_post',
+        platform: 'auto',
+        content_type: 'post',
         dedupe_field: 'text',
         tags: '',
         item_level: 0

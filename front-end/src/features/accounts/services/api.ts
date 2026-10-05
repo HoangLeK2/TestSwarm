@@ -160,69 +160,6 @@ export type AccountRunTaskLogOut = {
   has_more_events: boolean;
 };
 
-export type DevicePlatformSessionOut = {
-  id: string;
-  org_id: string;
-  device_id: string;
-  platform: string;
-  account_id: string | null;
-  state: string;
-  state_reason: string | null;
-  established_at: string | null;
-  last_ready_at: string | null;
-  last_checked_at: string | null;
-  invalidated_at: string | null;
-  login_attempt_id: string | null;
-  establishment_method: string | null;
-  app_package: string;
-  app_version: string | null;
-  display_name_observed: string | null;
-  evidence: Record<string, unknown>;
-  version: number;
-  created_at: string;
-  updated_at: string;
-};
-
-export type DevicePlatformLoginAttemptOut = {
-  id: string;
-  org_id: string;
-  device_id: string;
-  platform: string;
-  account_id: string;
-  state: string;
-  reason: string | null;
-  reserve_session_id: string | null;
-  created_by_user_id: string | null;
-  started_at: string | null;
-  completed_at: string | null;
-  cancelled_at: string | null;
-  evidence: Record<string, unknown>;
-  version: number;
-  created_at: string;
-  updated_at: string;
-};
-
-export type FacebookCandidateSettings = {
-  org_id?: string;
-  relationship_weight: number;
-  keyword_weight: number;
-  semantic_weight: number;
-  review_threshold: number;
-  auto_ready_enabled: boolean;
-  auto_ready_threshold: number;
-  auto_ready_min_evidence: number;
-  positive_keywords: string[];
-  negative_keywords: string[];
-  embedding_model: string;
-  embedding_dimensions: number;
-  updated_at?: string | null;
-};
-
-export type FacebookCandidateRecomputeOut = {
-  recomputed_count: number;
-  next_cursor: string | null;
-};
-
 export type {
   AccountCreate,
   AccountUpdate,
@@ -352,64 +289,6 @@ export const accountsApi = {
         `/devices/${deviceId}/accounts/${accountId}/verify`
       )
       .then((r) => r.data),
-  getFacebookPlatformSession: (deviceId: string) =>
-    farmApi
-      .get<DevicePlatformSessionOut>(
-        `/devices/${deviceId}/platform-sessions/facebook`
-      )
-      .then((r) => r.data),
-  invalidateFacebookPlatformSession: (
-    deviceId: string,
-    body: {
-      reason: string;
-      expected_version?: number;
-      evidence?: Record<string, unknown>;
-    }
-  ) =>
-    farmApi
-      .post<DevicePlatformSessionOut>(
-        `/devices/${deviceId}/platform-sessions/facebook/invalidate`,
-        body
-      )
-      .then((r) => r.data),
-  listFacebookLoginAttempts: (deviceId: string, query?: { limit?: number }) =>
-    farmApi
-      .get<
-        DevicePlatformLoginAttemptOut[]
-      >(`/devices/${deviceId}/platform-sessions/facebook/login-attempts`, { params: query })
-      .then((r) => r.data),
-  startFacebookLoginAttempt: (
-    deviceId: string,
-    body: { account_id: string; evidence?: Record<string, unknown> }
-  ) =>
-    farmApi
-      .post<DevicePlatformLoginAttemptOut>(
-        `/devices/${deviceId}/platform-sessions/facebook/login-attempts`,
-        body
-      )
-      .then((r) => r.data),
-  completeFacebookLoginAttempt: (
-    deviceId: string,
-    attemptId: string,
-    body: { operator_confirmed?: boolean; evidence?: Record<string, unknown> }
-  ) =>
-    farmApi
-      .post<DevicePlatformLoginAttemptOut>(
-        `/devices/${deviceId}/platform-sessions/facebook/login-attempts/${attemptId}/complete`,
-        body
-      )
-      .then((r) => r.data),
-  cancelFacebookLoginAttempt: (
-    deviceId: string,
-    attemptId: string,
-    body: { reason?: string }
-  ) =>
-    farmApi
-      .post<DevicePlatformLoginAttemptOut>(
-        `/devices/${deviceId}/platform-sessions/facebook/login-attempts/${attemptId}/cancel`,
-        body
-      )
-      .then((r) => r.data),
   listEvents: (
     accountId: string,
     query?: { limit?: number; cursor?: string; event_type?: string }
@@ -455,21 +334,6 @@ export const accountsApi = {
     farmApi
       .get<AccountRunTaskLogOut>(`/executions/${executionId}/task-log`, {
         params: { event_limit: eventLimit }
-      })
-      .then((r) => r.data),
-  getFacebookCandidateSettings: () =>
-    farmApi
-      .get<FacebookCandidateSettings>('/facebook-candidate-settings')
-      .then((r) => r.data),
-  updateFacebookCandidateSettings: (data: FacebookCandidateSettings) =>
-    farmApi
-      .put<FacebookCandidateSettings>('/facebook-candidate-settings', data)
-      .then((r) => r.data),
-  recomputeFacebookCandidates: (afterId?: string) =>
-    farmApi
-      .post<FacebookCandidateRecomputeOut>('/facebook-candidates/recompute', {
-        limit: 500,
-        after_id: afterId
       })
       .then((r) => r.data)
 };

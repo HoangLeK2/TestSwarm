@@ -24,7 +24,6 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog';
-import { DeviceVarsFacebookTargetForm } from '@/components/device-vars-facebook-target-form';
 import { DeviceVarsJsonPanel } from '@/components/device-vars-json-panel';
 import { TargetBindingOverview } from '@/components/target-binding-overview';
 import type { TargetBindingOverviewLabels } from '@/components/target-binding-overview';
@@ -318,16 +317,6 @@ export function ControlRecordVariablesDialog({
                       ) : null}
                     </div>
                   </ScrollArea>
-
-                  <section className='min-w-0 rounded-lg border bg-background p-3 lg:min-h-0 lg:overflow-hidden'>
-                    <DeviceVarsFacebookTargetForm
-                      vars={draftVariables}
-                      disabled={isSaving}
-                      size='default'
-                      fillHeight
-                      onChange={setDraftVariables}
-                    />
-                  </section>
                 </div>
               </TabsContent>
             </Tabs>

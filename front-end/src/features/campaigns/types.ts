@@ -106,7 +106,6 @@ export type CampaignScenarioRefOut = {
 
 export type RecoveryIncidentType =
   | 'app_popup'
-  | 'facebook_popup'
   | 'profile_page'
   | 'lost_post_detail'
   | 'comment_panel_closed'

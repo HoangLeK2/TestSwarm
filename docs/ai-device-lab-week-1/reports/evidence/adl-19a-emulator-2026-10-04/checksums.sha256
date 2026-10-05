@@ -1,0 +1,16 @@
+b0ddd3defc49f3c866d467031f54e1d810c98fb507d5339d08920f554344f7e3  docs/ai-device-lab-week-1/reports/evidence/adl-19a-emulator-2026-10-04/after-reset-screen.png
+c9b1ce100435f218a5f9f8e967cb7512a45ab08d823ff562b521b72577745355  docs/ai-device-lab-week-1/reports/evidence/adl-19a-emulator-2026-10-04/after-reset.json
+2b580a521d54d4fdb24210e624f0b4b4d7dd1df96667c2818231914761343ed6  docs/ai-device-lab-week-1/reports/evidence/adl-19a-emulator-2026-10-04/agent-boot-reconnect.txt
+4cae3a656ddede0995c592126b4b5fc02e465e0dbecc8af0dbb48baadb313dca  docs/ai-device-lab-week-1/reports/evidence/adl-19a-emulator-2026-10-04/api-active-response.json
+f06d10e71bfa3aa6d1807eb28e59aab91a1bcec53fec474ecf0f11232c76ed34  docs/ai-device-lab-week-1/reports/evidence/adl-19a-emulator-2026-10-04/api-clean-response.json
+4f738823efcc88f7800d206108037665fc0196dbf0f475f43ea683eb7a004d9c  docs/ai-device-lab-week-1/reports/evidence/adl-19a-emulator-2026-10-04/api-dirty-response.json
+213b2b490b28876b039b331e5a3e1a2aa48ab5d78b5b2971ab44195acf93fe47  docs/ai-device-lab-week-1/reports/evidence/adl-19a-emulator-2026-10-04/backend-regression.txt
+031fc5463d09357ff522955823feb0db31b339d4314e327e26cee9975c65d422  docs/ai-device-lab-week-1/reports/evidence/adl-19a-emulator-2026-10-04/before-reset.json
+7aef33496c107c7363722a46ad34bfb462487a6229b5bf89bc63c8dee327ea33  docs/ai-device-lab-week-1/reports/evidence/adl-19a-emulator-2026-10-04/bootstrap-packages-after.txt
+905c3ba8d2a8235c203ff2f19f8fd3bfc2d223127198a917a38b8b5639419e3c  docs/ai-device-lab-week-1/reports/evidence/adl-19a-emulator-2026-10-04/canary-readback-before.txt
+fe6d43d5dbac1dae2935686a01cdffa93d366dd504995edab6ee5e47f353de4a  docs/ai-device-lab-week-1/reports/evidence/adl-19a-emulator-2026-10-04/database-hygiene-audit.json
+5492e887bfca2bb1f174a7eaf892c11e509f6c7f5ed601731e027fded0bcafdd  docs/ai-device-lab-week-1/reports/evidence/adl-19a-emulator-2026-10-04/device-registration.json
+ced18895b42317b6dce95ba1244bc27ec153a0361c36b4d24b793e4f05b6ae19  docs/ai-device-lab-week-1/reports/evidence/adl-19a-emulator-2026-10-04/frontend-e2e.txt
+8b6dbd759f83200dbaff08d1516b1f6470e1ecea41e028d6c4bd0095dfeb6d3c  docs/ai-device-lab-week-1/reports/evidence/adl-19a-emulator-2026-10-04/frontend-typecheck.txt
+335df7c72912b5340ab55697e2f3b203abe1ca1cc4369c41f7c1c2dd1708bd51  docs/ai-device-lab-week-1/reports/evidence/adl-19a-emulator-2026-10-04/hygiene-api-burst.json
+030c94d7a4a8b7f6445b2fc8a03a2b683ed69507014c41747197f3cb3a3e7cf9  docs/ai-device-lab-week-1/reports/evidence/adl-19a-emulator-2026-10-04/hygiene-first-write-race.json

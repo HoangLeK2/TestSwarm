@@ -1,0 +1,372 @@
+{
+  "schemaVersion": "android-platform-tester.execution.v1",
+  "taskId": "ADL-16",
+  "actor": "coding-agent",
+  "objective": "ADL-16 — Farm adapter production: durable delivery và correlation",
+  "outcome": "READY_FOR_REVIEW",
+  "environment": "local source backend 127.0.0.1:18081 + isolated PostgreSQL + Android 15 emulator-5580; WVR-12 observed_device_count=1",
+  "revision": "1a50ede6311f2c9c7196f175174014720e7df43a + scoped dirty worktree; ADL-16 review fixes verified",
+  "contextReferences": [
+    {
+      "sourcePath": "jev-setup/brain/project.md",
+      "sha256": "feb3effeef85c1c1d67f1eb5ce4878e51abb62cb56fba0cb9b7b8226055b94f3"
+    },
+    {
+      "sourcePath": "jev-setup/brain/direction.md",
+      "sha256": "cfe8ab62a916102824561bec586919cd0b773d2d09d9ac878f74f84552e4ff69"
+    },
+    {
+      "sourcePath": "jev-setup/brain/current-state.md",
+      "sha256": "7ade39c2aaeea8bffee5af92cadb4508775c662a7cc761b95f84edf112a3127b"
+    },
+    {
+      "sourcePath": "jev-setup/brain/domain.md",
+      "sha256": "b764c6ab281daea5d168eb95fb85e04e3ef30a541488a15c792d78778d5c1578"
+    },
+    {
+      "sourcePath": "jev-setup/brain/source-map.md",
+      "sha256": "dbb8d61e1ed2ad97b0d45b784ef5c802b4b52911c6bc457362d5e86cb87fe466"
+    },
+    {
+      "sourcePath": "docs/ai-device-lab-week-1/PRODUCTION-CONTRACT.md",
+      "sha256": "c5a933f281e98d48e612e78465975d884ee83864106e451757071ee56cdbedcc"
+    },
+    {
+      "sourcePath": "docs/ai-device-lab-week-1/DELIVERY-REGISTER.md",
+      "sha256": "639c4b903d1e75e360562065c1beb8e049a8f40f6d5094ab2dcd2c25ca53570b"
+    },
+    {
+      "sourcePath": "jev-setup/rules/operating-rules.md",
+      "sha256": "8e68abfb61e85e2ad75b6c959e69391829b289ddc3934dfce47b512ecc8aeff3"
+    },
+    {
+      "sourcePath": "jev-setup/rules/execution-contract.md",
+      "sha256": "0ac936883ab9fd1bab95e48ede930768ac230e0db30b0904249886875316f2d7"
+    },
+    {
+      "sourcePath": "docs/ai-device-lab-week-1/README.md",
+      "sha256": "4bd26860953cf41e6c9d1422c709953c619ea5d6ec10e2bb468f6d4ef6a3af39"
+    },
+    {
+      "sourcePath": "docs/ai-device-lab-week-1/ADL-16-farm-adapter.md",
+      "sha256": "c6460552481673811b95213d99de14513fe0bf7b82c17f9aafcbbc763f991395"
+    },
+    {
+      "sourcePath": "docs/ai-device-lab-week-1/ADL-01-real-run-proof.md",
+      "sha256": "8d53095df6022c19a79d89e9dd06a270d7d35c3d7459db7fd0e58941b1ccec6a"
+    },
+    {
+      "sourcePath": "docs/ai-device-lab-week-1/ADL-04-service-campaign-one-slot.md",
+      "sha256": "37b7290f6289c8118f2cdfad39525732776d6f54821dfd5934a0cc6d1d03885b"
+    },
+    {
+      "sourcePath": "docs/ai-device-lab-week-1/ADL-05-twelve-device-reservation.md",
+      "sha256": "a4ebbe47f54893649c592c0834da5b008fe3d2800ad2765427c7c4b00e00b7b9"
+    },
+    {
+      "sourcePath": "docs/ai-device-lab-week-1/ADL-18a-fail-closed-foundation.md",
+      "sha256": "825faa1dcc90b4e2e8c8a97afdc8436e873eb4a185c746922d22ba9fa63f3cf2"
+    },
+    {
+      "sourcePath": "docs/ai-device-lab-week-1/ADL-18b-secret-reference.md",
+      "sha256": "00b23731c99b348e031b0520f3fa764887c9f049f6e6b23511a26f1c0b6ad235"
+    }
+  ],
+  "dependencyAssessment": {
+    "sourceText": "01, 04, 18a; reservation 05; secret resolution 18b trước credential job",
+    "assessed": true,
+    "rationale": "ADL-01/04/05/18a contracts apply to this non-credential emulator run and have mapped runtime or test evidence. ADL-18b is conditional and is not applicable because the approved Settings scenario used no customer credential or secret reference.",
+    "items": [
+      {
+        "reference": "ADL-01",
+        "phase": "integration",
+        "applicable": true,
+        "status": "PASS",
+        "reason": "Approved Emulator Target contract and simulator baseline are present.",
+        "evidenceRefs": [
+          "docs/ai-device-lab-week-1/reports/ADL-01-simulator-e2e-2026-10-04.md"
+        ]
+      },
+      {
+        "reference": "ADL-04",
+        "phase": "contract",
+        "applicable": true,
+        "status": "PASS",
+        "reason": "ServiceCampaign/Lane/RunSlot/RunAttempt identity is persisted in the live chain.",
+        "evidenceRefs": [
+          "docs/ai-device-lab-week-1/reports/evidence/adl-16-emulator-2026-10-04/db-identity-chain.json"
+        ]
+      },
+      {
+        "reference": "ADL-05",
+        "phase": "integration",
+        "applicable": true,
+        "status": "PASS",
+        "reason": "The active reservation is pinned to the exact campaign, lane and emulator; WVR-12 waives only the 12-target runtime count.",
+        "evidenceRefs": [
+          "docs/ai-device-lab-week-1/reports/evidence/adl-16-emulator-2026-10-04/db-identity-chain.json",
+          "docs/ai-device-lab-week-1/CAPACITY-WAIVER.md"
+        ]
+      },
+      {
+        "reference": "ADL-18a",
+        "phase": "contract",
+        "applicable": true,
+        "status": "PASS",
+        "reason": "Server-owned operation policy and fail-closed allowed action/target validation are exercised by farm adapter tests.",
+        "evidenceRefs": [
+          "docs/ai-device-lab-week-1/reports/evidence/adl-16-emulator-2026-10-04/backend-focused-tests.txt"
+        ]
+      },
+      {
+        "reference": "ADL-18b",
+        "phase": "conditional",
+        "applicable": false,
+        "status": "NOT_RUN",
+        "reason": "The approved emulator scenario has no credential step or secret capability reference.",
+        "evidenceRefs": []
+      }
+    ]
+  },
+  "acceptance": [
+    {
+      "id": "AC1",
+      "expectation": "trace slot→run attempt→job/execution→step retry→artifact đủ IDs.",
+      "status": "PASS",
+      "requiredEvidenceKinds": [
+        "live-device",
+        "database",
+        "api"
+      ],
+      "testIds": [
+        "16-T1"
+      ],
+      "evidenceIds": [
+        "ev-live-emulator",
+        "ev-db-chain",
+        "ev-api-chain"
+      ]
+    },
+    {
+      "id": "AC2",
+      "expectation": "crash/replay/delivery duplicate không tạo job mới ngoài policy.",
+      "status": "PASS",
+      "requiredEvidenceKinds": [
+        "unit-test",
+        "database"
+      ],
+      "testIds": [
+        "16-T2"
+      ],
+      "evidenceIds": [
+        "ev-fault-tests",
+        "ev-db-chain"
+      ]
+    },
+    {
+      "id": "AC3",
+      "expectation": "out-of-order terminal events xử lý deterministic, no false pass.",
+      "status": "PASS",
+      "requiredEvidenceKinds": [
+        "unit-test",
+        "database"
+      ],
+      "testIds": [
+        "16-T3"
+      ],
+      "evidenceIds": [
+        "ev-fault-tests",
+        "ev-db-chain"
+      ]
+    },
+    {
+      "id": "AC4",
+      "expectation": "cancellation/deadline/release/recovery có observation và audit.",
+      "status": "PASS",
+      "requiredEvidenceKinds": [
+        "unit-test",
+        "live-device"
+      ],
+      "testIds": [
+        "16-T4",
+        "16-T5"
+      ],
+      "evidenceIds": [
+        "ev-fault-tests",
+        "ev-live-emulator"
+      ]
+    },
+    {
+      "id": "AC5",
+      "expectation": "payload bounded/no secret bytes, Temporal/fallback cùng dùng pinned snapshot, policy và terminal reducer.",
+      "status": "PASS",
+      "requiredEvidenceKinds": [
+        "unit-test",
+        "api",
+        "static-check"
+      ],
+      "testIds": [
+        "16-T6"
+      ],
+      "evidenceIds": [
+        "ev-fault-tests",
+        "ev-scale-api",
+        "ev-openapi"
+      ]
+    }
+  ],
+  "tests": [
+    {
+      "id": "16-T1",
+      "status": "PASS",
+      "command": "Approved Emulator protocol: create run, observe build via dumpsys, dispatch fallback, poll terminal, query PostgreSQL identity chain",
+      "evidenceIds": [
+        "ev-live-emulator",
+        "ev-db-chain",
+        "ev-api-chain"
+      ],
+      "method": "manual",
+      "executedAt": "2026-10-04T10:49:02.780853+00:00"
+    },
+    {
+      "id": "16-T2",
+      "status": "PASS",
+      "command": "backend/.venv/bin/pytest -q backend/tests/test_ai_lab_delivery_outbox.py -k 'expired_lease or reclaimed or retry or exhaustion'",
+      "evidenceIds": [
+        "ev-fault-tests",
+        "ev-db-chain"
+      ],
+      "method": "command",
+      "executedAt": "2026-10-04T10:49:02.780853+00:00",
+      "exitCode": 0
+    },
+    {
+      "id": "16-T3",
+      "status": "PASS",
+      "command": "backend/.venv/bin/pytest -q backend/tests/test_ai_lab_delivery_reducer.py",
+      "evidenceIds": [
+        "ev-fault-tests",
+        "ev-db-chain"
+      ],
+      "method": "command",
+      "executedAt": "2026-10-04T10:49:02.780853+00:00",
+      "exitCode": 0
+    },
+    {
+      "id": "16-T4",
+      "status": "PASS",
+      "command": "backend/.venv/bin/pytest -q backend/tests/test_ai_lab_farm_runtime.py backend/tests/test_ai_lab_delivery_outbox.py -k 'uncertain'",
+      "evidenceIds": [
+        "ev-fault-tests"
+      ],
+      "method": "command",
+      "executedAt": "2026-10-04T10:49:02.780853+00:00",
+      "exitCode": 0
+    },
+    {
+      "id": "16-T5",
+      "status": "PASS",
+      "command": "backend/.venv/bin/pytest -q tests/test_ai_lab_farm_runtime.py -k 'deadline or cancel_drain'",
+      "evidenceIds": [
+        "ev-fault-tests",
+        "ev-live-emulator"
+      ],
+      "method": "command",
+      "executedAt": "2026-10-04T10:49:02.780853+00:00",
+      "exitCode": 0
+    },
+    {
+      "id": "16-T6",
+      "status": "PASS",
+      "command": "backend AI Lab + shared runtime regression (120 passed, 1 skipped) && front-end typecheck && Playwright AI Device Lab (11 passed)",
+      "evidenceIds": [
+        "ev-fault-tests",
+        "ev-scale-api",
+        "ev-openapi"
+      ],
+      "method": "command",
+      "executedAt": "2026-10-04T10:49:02.780853+00:00",
+      "exitCode": 0
+    }
+  ],
+  "evidence": [
+    {
+      "id": "ev-live-emulator",
+      "kind": "live-device",
+      "environment": "local source backend 127.0.0.1:18081 + isolated PostgreSQL + Android 15 emulator-5580; WVR-12 observed_device_count=1",
+      "observedAt": "2026-10-04T10:49:02.780853+00:00",
+      "expected": "Approved target executes the exact approved Settings scenario and remains healthy past the watchdog threshold.",
+      "observed": "emulator-5580 executed launch/wait/assert/Home successfully after local ADB control fix; observed Settings build was 15/35; hierarchy remained available after 2286.115 seconds.",
+      "refs": [
+        "docs/ai-device-lab-week-1/reports/evidence/adl-16-emulator-2026-10-04/before-settings.png",
+        "docs/ai-device-lab-week-1/reports/evidence/adl-16-emulator-2026-10-04/after-home.png",
+        "docs/ai-device-lab-week-1/reports/evidence/adl-16-emulator-2026-10-04/api-emulator-health-after-watchdog.json"
+      ]
+    },
+    {
+      "id": "ev-db-chain",
+      "kind": "database",
+      "environment": "local source backend 127.0.0.1:18081 + isolated PostgreSQL + Android 15 emulator-5580; WVR-12 observed_device_count=1",
+      "observedAt": "2026-10-04T10:49:02.780853+00:00",
+      "expected": "One correlated slot-attempt-job-execution-step-artifact chain reaches a consistent terminal state.",
+      "observed": "job succeeded/pass, attempt passed with observed build 15/35, execution completed, four steps passed, outbox delivered, event v1 bound to the exact execution.",
+      "refs": [
+        "docs/ai-device-lab-week-1/reports/evidence/adl-16-emulator-2026-10-04/db-identity-review-fixes.json"
+      ]
+    },
+    {
+      "id": "ev-api-chain",
+      "kind": "api",
+      "environment": "local source backend 127.0.0.1:18081 + isolated PostgreSQL + Android 15 emulator-5580; WVR-12 observed_device_count=1",
+      "observedAt": "2026-10-04T10:49:02.780853+00:00",
+      "expected": "Farm API is idempotent, tenant scoped and exposes durable terminal state without secret bytes.",
+      "observed": "Create/poll/readback returned one pinned job; public terminal forge is forbidden and runtime-internal event reduced to succeeded/pass.",
+      "refs": [
+        "docs/ai-device-lab-week-1/reports/evidence/adl-16-emulator-2026-10-04/api-farm-run-review-fixes.json",
+        "docs/ai-device-lab-week-1/reports/evidence/adl-16-emulator-2026-10-04/api-job-review-fixes-final.json"
+      ]
+    },
+    {
+      "id": "ev-fault-tests",
+      "kind": "unit-test",
+      "environment": "local source backend 127.0.0.1:18081 + isolated PostgreSQL + Android 15 emulator-5580; WVR-12 observed_device_count=1",
+      "observedAt": "2026-10-04T10:49:02.780853+00:00",
+      "expected": "Crash/replay, fencing, duplicate/reordered terminal, uncertain side effect, deadline/cancel and engine contract tests pass.",
+      "observed": "Focused review suite passed 16 tests; AI Lab plus shared campaign/runtime/watchdog regression passed 120 tests with 1 skip.",
+      "refs": [
+        "docs/ai-device-lab-week-1/reports/evidence/adl-16-emulator-2026-10-04/backend-focused-tests.txt",
+        "docs/ai-device-lab-week-1/reports/evidence/adl-16-emulator-2026-10-04/runtime-regression-tests.txt"
+      ]
+    },
+    {
+      "id": "ev-scale-api",
+      "kind": "api",
+      "environment": "local source backend 127.0.0.1:18081 + isolated PostgreSQL + Android 15 emulator-5580; WVR-12 observed_device_count=1",
+      "observedAt": "2026-10-04T10:49:02.780853+00:00",
+      "expected": "Control plane remains bounded under the 12 lane by 14 day request shape.",
+      "observed": "168/168 HTTP 200 at concurrency 12; p95 112.716 ms and 367.713 requests per second locally.",
+      "refs": [
+        "docs/ai-device-lab-week-1/reports/evidence/adl-16-emulator-2026-10-04/control-plane-benchmark.json"
+      ]
+    },
+    {
+      "id": "ev-openapi",
+      "kind": "static-check",
+      "environment": "local source backend 127.0.0.1:18081 + isolated PostgreSQL + Android 15 emulator-5580; WVR-12 observed_device_count=1",
+      "observedAt": "2026-10-04T10:49:02.780853+00:00",
+      "expected": "Public API schema and generated TypeScript client include the farm and emulator contracts.",
+      "observed": "OpenAPI export, client generation and TypeScript typecheck passed.",
+      "refs": [
+        "backend/swagger/openapi.json",
+        "front-end/generate/openapi.json",
+        "front-end/src/features/device-farm/services/generated/DeviceFarmApi.ts"
+      ]
+    }
+  ],
+  "blockers": [],
+  "independentReview": {
+    "status": "PENDING",
+    "reviewer": "distributed-systems-security-qa-reviewers",
+    "refs": []
+  }
+}

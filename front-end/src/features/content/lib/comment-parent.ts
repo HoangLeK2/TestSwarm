@@ -66,7 +66,6 @@ export function commentParentSummary(
   const postId =
     textValue(raw?.parent_post_id) ||
     textValue(anchor?.pid) ||
-    textValue(anchor?.fb_post_id) ||
     textValue(anchor?.stable_post_id) ||
     textValue(anchor?.post_key) ||
     null;

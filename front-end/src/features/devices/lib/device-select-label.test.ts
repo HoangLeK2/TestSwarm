@@ -19,10 +19,7 @@ test('device select labels prefer the configured device name', () => {
     formatDeviceSelectLabel(device),
     'Máy Vivo mới — 10AE7S00HD002JK'
   );
-  assert.equal(
-    deviceSelectFullTitle(device),
-    'Máy Vivo mới — 10AE7S00HD002JK'
-  );
+  assert.equal(deviceSelectFullTitle(device), 'Máy Vivo mới — 10AE7S00HD002JK');
 });
 
 test('device select labels fall back to display name before model', () => {

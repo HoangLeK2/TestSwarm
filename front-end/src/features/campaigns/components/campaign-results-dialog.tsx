@@ -6,13 +6,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import {
-  BarChart3,
-  Database,
-  FileText,
-  MessageSquare,
-  RefreshCw
-} from 'lucide-react';
+import { BarChart3, Database, RefreshCw } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -33,8 +27,6 @@ import type { CampaignOut } from '../types';
 // ── Quick stats ───────────────────────────────────────────────────────────────
 
 interface QuickStats {
-  posts: number;
-  comments: number;
   total: number;
 }
 
@@ -46,26 +38,9 @@ function useQuickStats(campaignId: string, enabled: boolean) {
     if (!enabled || !campaignId) return;
     setLoading(true);
 
-    Promise.all([
-      contentApi.list({
-        campaign_id: campaignId,
-        content_type: 'fb_post',
-        limit: 1
-      }),
-      contentApi.list({
-        campaign_id: campaignId,
-        content_type: 'fb_comment',
-        limit: 1
-      }),
-      contentApi.list({ campaign_id: campaignId, limit: 1 })
-    ])
-      .then(([posts, comments, all]) => {
-        setStats({
-          posts: posts.total,
-          comments: comments.total,
-          total: all.total
-        });
-      })
+    contentApi
+      .list({ campaign_id: campaignId, limit: 1 })
+      .then((all) => setStats({ total: all.total }))
       .catch(() => setStats(null))
       .finally(() => setLoading(false));
   }, [campaignId, enabled]);
@@ -149,23 +124,11 @@ export function CampaignResultsDialog({ campaign, children }: Props) {
         <div className='max-h-[82vh] overflow-y-auto'>
           {/* Quick stats */}
           <div className='border-b px-5 py-4'>
-            <div className='grid grid-cols-3 gap-3'>
+            <div className='grid grid-cols-1 gap-3 sm:max-w-xs'>
               <StatCard
                 icon={<Database className='size-4 text-primary' />}
                 label='Tổng bản ghi'
                 value={stats?.total ?? null}
-                loading={loading}
-              />
-              <StatCard
-                icon={<FileText className='size-4 text-emerald-500' />}
-                label='Bài viết'
-                value={stats?.posts ?? null}
-                loading={loading}
-              />
-              <StatCard
-                icon={<MessageSquare className='size-4 text-blue-500' />}
-                label='Bình luận'
-                value={stats?.comments ?? null}
                 loading={loading}
               />
             </div>

@@ -70,7 +70,7 @@ export function CreateGroupDialog() {
     resolver: zodResolver(schema),
     defaultValues: {
       name: '',
-      platform: 'facebook',
+      platform: ACCOUNT_PLATFORM_OPTIONS[0],
       rotation_strategy: 'round_robin',
       description: ''
     }

@@ -213,7 +213,7 @@ def _parse_adb_devices_output(out: str) -> list[str]:
 # agent-boot/relay/adb.py lives here; assets are looked up in this order:
 #   1. AGENT_BOOT_ASSETS env var (explicit override)
 #   2. <agent-boot>/assets/          (production: binaries bundled with agent-boot)
-#   3. <repo-root>/device_farm/bundle/ (dev: both repos side by side)
+#   3. <repo-root>/backend/bundle/ (dev: both repos side by side)
 
 _HERE = Path(__file__).parent
 
@@ -224,7 +224,7 @@ def gts_dir() -> Path:
     local = _HERE.parent / "assets"
     if local.is_dir():
         return local
-    dev_bundle = _HERE.parent.parent / "device_farm" / "bundle"
+    dev_bundle = _HERE.parent.parent / "backend" / "bundle"
     if dev_bundle.is_dir():
         return dev_bundle
     return local  # may not exist — callers check

@@ -10,7 +10,6 @@ import { CampaignRunStats } from './CampaignRunStats';
 import { CampaignEngineBadge } from './CampaignEngineBadge';
 import { CampaignStatusBadge } from './CampaignStatusBadge';
 import type { CampaignStatus } from '../../types';
-import { AutomationBadge } from './AutomationBadge';
 
 export function CampaignMobileCard({
   campaign,
@@ -51,7 +50,6 @@ export function CampaignMobileCard({
             statusLabels={statusLabel as Record<CampaignStatus, string>}
             className='text-[10px]'
           />
-          <AutomationBadge campaign={campaign} />
         </div>
       </div>
 

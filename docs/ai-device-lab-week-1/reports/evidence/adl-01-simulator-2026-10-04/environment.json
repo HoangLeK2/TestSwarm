@@ -1,0 +1,41 @@
+{
+  "evidence_class": "SIMULATOR_ONLY",
+  "production_acceptance": true,
+  "avd": "galaxy_note10_plus",
+  "serial": "emulator-5580",
+  "model": "sdk_gphone64_arm64",
+  "android_version": "15",
+  "sdk": 35,
+  "abi": "arm64-v8a",
+  "boot_completed": true,
+  "emulator_flags": [
+    "-no-window",
+    "-no-audio",
+    "-no-snapshot-load",
+    "-read-only",
+    "-gpu host"
+  ],
+  "automation_packages": [
+    "package:com.github.uiautomator",
+    "package:com.github.uiautomator.test",
+    "package:jp.co.cyberagent.stf"
+  ],
+  "bootstrap": {
+    "stf_installed": true,
+    "u2_ready": true,
+    "atx_ready": true,
+    "permissions_ok": true,
+    "u2_ime_ready": true,
+    "errors": []
+  },
+  "backend_health": "healthy",
+  "relay_container": "agent-boot",
+  "observed_at_utc": "2026-10-04T09:06:59Z",
+  "observed_package": {
+    "package": "com.android.settings",
+    "version_code": 35
+  },
+  "device_target_type": "emulator",
+  "approved_device_target": true,
+  "acceptance_contract": "Approved Device Target"
+}

@@ -20,10 +20,6 @@ import {
   type NodeCapabilityRegistry
 } from '../../lib/node-capabilities';
 import type { StepTreeInsertLocation } from '../../lib/step-tree-intelligence';
-import {
-  CONTENT_LIKE_COMMENT_RECIPE,
-  createContentLikeCommentFlow
-} from './social-action-recipes';
 
 const RECENT_STORAGE_KEY = 'device-farm.flow-insert-recent';
 const MAX_RECENT = 3;
@@ -204,27 +200,7 @@ export function InsertStepPicker({
 
   const listedItems = useMemo((): ListedItem[] => {
     const q = query.trim().toLowerCase();
-    const recipeLabel = tInsert('recipes.contentLikeComment.label');
-    const recipeDescription = tInsert('recipes.contentLikeComment.description');
-    const recipeMatches =
-      !q ||
-      CONTENT_LIKE_COMMENT_RECIPE.includes(q) ||
-      recipeLabel.toLowerCase().includes(q) ||
-      recipeDescription.toLowerCase().includes(q);
-    const recipeItems: ListedItem[] =
-      onInsertMany && recipeMatches
-        ? [
-            {
-              type: CONTENT_LIKE_COMMENT_RECIPE,
-              label: recipeLabel,
-              description: recipeDescription,
-              groupLabel: q
-                ? tInsert('groups.social.title' as 'groups.actions.title')
-                : undefined,
-              recipe: true
-            }
-          ]
-        : [];
+    const recipeItems: ListedItem[] = [];
     if (q) {
       const out: ListedItem[] = [...recipeItems];
       for (const group of insertMenu) {
@@ -257,12 +233,6 @@ export function InsertStepPicker({
 
   const handleSelect = useCallback(
     (type: string) => {
-      if (type === CONTENT_LIKE_COMMENT_RECIPE && onInsertMany) {
-        onInsertMany(createContentLikeCommentFlow());
-        setOpen(false);
-        setQuery('');
-        return;
-      }
       pushRecentType(type);
       setRecentVersion((v) => v + 1);
       onInsert(createDefaultStep(type));

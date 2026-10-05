@@ -1,0 +1,3 @@
+package:com.github.uiautomator
+package:jp.co.cyberagent.stf
+package:com.github.uiautomator.test

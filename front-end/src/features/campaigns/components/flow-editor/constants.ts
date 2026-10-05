@@ -631,28 +631,28 @@ export function getStepSummary(step: FlowStep, t?: FlowStepTranslator): string {
       return td('socialOpenAuthor', {
         source: step.source_var ?? '_post_scan',
         index: step.action_index ?? 0,
-        platform: step.platform ?? 'facebook'
+        platform: step.platform ?? 'auto'
       });
     case 'social_open_commenter_from_post_match':
       return td('socialOpenCommenter', {
         source: step.source_var ?? '_post_scan',
         index: step.action_index ?? 0,
-        platform: step.platform ?? 'facebook'
+        platform: step.platform ?? 'auto'
       });
     case 'social_sync_connections':
       return td('socialSyncConnections', {
         metric: step.metric ?? 'friends',
-        platform: step.platform ?? 'facebook'
+        platform: step.platform ?? 'auto'
       });
     case 'content_interaction':
-      return `${step.platform ?? 'facebook'} · ${step.action ?? 'like'}`;
+      return `${step.platform ?? 'auto'} · ${step.action ?? 'like'}`;
     case 'connection_request':
       return td('connectionRequestSend', {
-        platform: step.platform ?? 'facebook'
+        platform: step.platform ?? 'auto'
       });
     case 'community_membership':
       return td('communityMembershipJoin', {
-        platform: step.platform ?? 'facebook'
+        platform: step.platform ?? 'auto'
       });
     case 'extract': {
       const base = localizeExtractEntity(step.entity, t);
@@ -867,14 +867,14 @@ export function getStepDisplay(
       return { target: step.scenario_name || step.scenario_id || '' };
     case 'use_source_pool':
       return {
-        target: `${step.platform ?? 'facebook'} / ${step.entity_type ?? 'group'}`
+        target: `${step.platform ?? 'auto'} / ${step.entity_type ?? 'group'}`
       };
     case 'lease_source_target':
       return {
-        target: `${step.platform ?? 'facebook'} / ${step.entity_type ?? 'post'} / ${step.action ?? 'like'}`
+        target: `${step.platform ?? 'auto'} / ${step.entity_type ?? 'post'} / ${step.action ?? 'like'}`
       };
     case 'lease_connection_candidate':
-      return { target: `${step.platform ?? 'facebook'} / ready_to_connect` };
+      return { target: `${step.platform ?? 'auto'} / ready_to_connect` };
     case 'if':
       return {
         target: Object.keys(step.condition ?? {}).join(', ') || 'condition'
@@ -955,26 +955,26 @@ export function getStepDisplay(
     case 'social_open_author_from_post_match':
     case 'social_open_commenter_from_post_match':
       return {
-        target: `${step.platform ?? 'facebook'} · ${step.source_var ?? '_post_scan'}[${step.action_index ?? 0}]`
+        target: `${step.platform ?? 'auto'} · ${step.source_var ?? '_post_scan'}[${step.action_index ?? 0}]`
       };
     case 'social_sync_connections':
       return {
-        target: `${step.platform ?? 'facebook'} · ${step.metric ?? 'friends'}`
+        target: `${step.platform ?? 'auto'} · ${step.metric ?? 'friends'}`
       };
     case 'content_interaction':
       return {
-        target: `${step.platform ?? 'facebook'} · ${step.action ?? 'like'}`
+        target: `${step.platform ?? 'auto'} · ${step.action ?? 'like'}`
       };
     case 'connection_request':
-      return { target: `${step.platform ?? 'facebook'} · request` };
+      return { target: `${step.platform ?? 'auto'} · request` };
     case 'lease_source_target':
       return {
-        target: `${step.platform ?? 'facebook'} · ${step.entity_type ?? 'post'} · ${step.action ?? 'like'}`
+        target: `${step.platform ?? 'auto'} · ${step.entity_type ?? 'post'} · ${step.action ?? 'like'}`
       };
     case 'lease_connection_candidate':
-      return { target: `${step.platform ?? 'facebook'} · ready_to_connect` };
+      return { target: `${step.platform ?? 'auto'} · ready_to_connect` };
     case 'community_membership':
-      return { target: `${step.platform ?? 'facebook'} · join` };
+      return { target: `${step.platform ?? 'auto'} · join` };
     case 'extract': {
       const base = localizeExtractEntity(step.entity);
       return {

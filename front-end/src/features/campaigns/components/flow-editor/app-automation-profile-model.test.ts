@@ -152,7 +152,7 @@ test('login setup status only reports ready from persisted valid config', () => 
     ...emptyStep,
     profile: {
       ...emptyStep.profile,
-      package: 'com.facebook.katana',
+      package: 'com.instagram.android',
       login_recipe: {
         ...emptyStep.profile.login_recipe,
         detect_logged_in: { any_text: ['Trang chủ'] }

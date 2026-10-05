@@ -63,8 +63,6 @@ type LoginTargetField =
   | (typeof POST_SUBMIT_LOGIN_FIELD_NAMES)[number];
 
 const KNOWN_LOGIN_APPS = [
-  { package: 'com.facebook.katana', label: 'Facebook' },
-  { package: 'com.facebook.lite', label: 'Facebook Lite' },
   { package: 'com.android.chrome', label: 'Chrome' },
   { package: 'com.google.android.youtube', label: 'YouTube' },
   { package: 'com.zhiliaoapp.musically', label: 'TikTok' },

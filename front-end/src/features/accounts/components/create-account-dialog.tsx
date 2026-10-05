@@ -96,7 +96,7 @@ export function CreateAccountDialog() {
               <Label>{t('platformLabel')}</Label>
               <select
                 className='h-9 w-full rounded-md border border-input bg-background px-2 text-sm shadow-sm'
-                defaultValue='facebook'
+                defaultValue={ACCOUNT_PLATFORM_OPTIONS[0]}
                 {...register('platform')}
               >
                 {ACCOUNT_PLATFORM_OPTIONS.map((p) => (

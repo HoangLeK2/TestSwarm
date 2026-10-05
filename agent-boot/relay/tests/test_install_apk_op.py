@@ -35,7 +35,7 @@ def test_install_apk_fails_when_verify_package_is_absent(monkeypatch):
         u2_executor._op_install_apk(
             _fake_dev(),
             {"op": "install_apk", "url": "https://cdn/fb.apk",
-             "verify_package": "com.facebook.katana", "_serial": "abc"},
+             "verify_package": "com.example.app", "_serial": "abc"},
         )
 
 
@@ -46,5 +46,5 @@ def test_install_apk_passes_when_verify_package_is_present(monkeypatch):
     u2_executor._op_install_apk(
         _fake_dev(),
         {"op": "install_apk", "url": "https://cdn/fb.apk",
-         "verify_package": "com.facebook.katana", "_serial": "abc"},
+         "verify_package": "com.example.app", "_serial": "abc"},
     )

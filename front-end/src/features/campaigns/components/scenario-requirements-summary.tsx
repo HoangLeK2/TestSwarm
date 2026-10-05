@@ -73,7 +73,7 @@ export function withPlatformSessionRequirement(
     ...current,
     platform_session: {
       required: true,
-      platform: next.platform || 'facebook',
+      platform: next.platform || 'auto',
       account_source: next.account_source || 'device_primary'
     }
   };
@@ -159,7 +159,7 @@ export function ScenarioRequirementsSettingsDialog({
   const t = useTranslations('campaignsFeature.stepEditor.requirements');
   const session = normalizePlatformSessionRequirement(requirements);
   const enabled = session?.required !== false && Boolean(session);
-  const platform = session?.platform || 'facebook';
+  const platform = session?.platform || 'auto';
   const accountSource = session?.account_source || 'device_primary';
 
   const update = (patch: Partial<PlatformSessionRequirement> | null) => {
@@ -218,9 +218,7 @@ export function ScenarioRequirementsSettingsDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value='facebook'>
-                      {t('platformFacebook')}
-                    </SelectItem>
+                    <SelectItem value='auto'>Auto</SelectItem>
                     <SelectItem value='tiktok'>
                       {t('platformTiktok')}
                     </SelectItem>

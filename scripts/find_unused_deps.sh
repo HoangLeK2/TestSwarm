@@ -55,9 +55,9 @@ const unused = Object.keys(deps).filter((name) => {
 console.log(unused.length ? unused.join("\n") : "(none)");
 '
 
-# ── device_farm (Python) ──────────────────────────────────────────────────────
-hr "device_farm (pyproject.toml)"
-cd "$ROOT/device_farm" || exit 1
+# ── backend (Python) ──────────────────────────────────────────────────────────
+hr "backend (pyproject.toml)"
+cd "$ROOT/backend" || exit 1
 # deptry understands import names vs package names (e.g. pillow -> PIL).
 uvx deptry . --ignore DEP002,DEP003 2>/dev/null \
   || echo "deptry unavailable; run: uvx deptry ."

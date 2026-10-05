@@ -21,12 +21,12 @@ function mockNode(attrs: Record<string, string>): Element {
 
 test('isGenericHierarchyResourceId flags FB obfuscated ids', () => {
   assert.equal(
-    isGenericHierarchyResourceId('com.facebook.katana:id/(name removed)'),
+    isGenericHierarchyResourceId('com.instagram.android:id/(name removed)'),
     true
   );
   assert.equal(isGenericHierarchyResourceId('android:id/list'), true);
   assert.equal(
-    isGenericHierarchyResourceId('com.facebook.katana:id/primary_button'),
+    isGenericHierarchyResourceId('com.instagram.android:id/primary_button'),
     false
   );
 });
@@ -35,17 +35,17 @@ test('isSystemUiPackage flags platform chrome but not app packages', () => {
   assert.equal(isSystemUiPackage('com.android.systemui'), true);
   assert.equal(isSystemUiPackage('android'), true);
   assert.equal(isSystemUiPackage(''), true);
-  assert.equal(isSystemUiPackage('com.facebook.katana'), false);
+  assert.equal(isSystemUiPackage('com.instagram.android'), false);
 });
 
 test('inferForegroundPackage ignores system UI chrome and picks largest app', () => {
   const nodes = [
     mockNode({ package: 'com.android.systemui', bounds: '[0,0][1080,80]' }),
     mockNode({ package: 'android', bounds: '[0,0][1080,1920]' }),
-    mockNode({ package: 'com.facebook.katana', bounds: '[0,80][1080,1800]' }),
-    mockNode({ package: 'com.facebook.katana', bounds: '[0,80][540,400]' })
+    mockNode({ package: 'com.instagram.android', bounds: '[0,80][1080,1800]' }),
+    mockNode({ package: 'com.instagram.android', bounds: '[0,80][540,400]' })
   ];
-  assert.equal(inferForegroundPackage(nodes), 'com.facebook.katana');
+  assert.equal(inferForegroundPackage(nodes), 'com.instagram.android');
 });
 
 test('inferForegroundPackage returns empty when only system UI present', () => {
@@ -61,7 +61,7 @@ test('parseHierarchyScreenDims ignores early status-bar bounds', () => {
     mockNode({ package: 'com.android.systemui', bounds: '[0,0][1080,80]' }),
     mockNode({ package: 'android', bounds: '[0,0][1080,1920]' }),
     mockNode({
-      package: 'com.facebook.katana',
+      package: 'com.instagram.android',
       bounds: '[0,80][1080,1800]'
     })
   ];
@@ -72,7 +72,7 @@ test('parseHierarchyScreenDims falls back to max extents without a full root', (
   const nodes = [
     mockNode({ package: 'com.android.systemui', bounds: '[0,0][1260,133]' }),
     mockNode({
-      package: 'com.facebook.katana',
+      package: 'com.instagram.android',
       bounds: '[0,133][1260,2737]'
     }),
     mockNode({ package: 'com.vivo.upslide', bounds: '[0,2737][1260,2800]' })
@@ -112,7 +112,7 @@ test('hierarchyRatioToPoint prefers device screenDims over taller hierarchy boun
   const nodes = [
     mockNode({ package: 'com.android.systemui', bounds: '[0,0][1260,133]' }),
     mockNode({
-      package: 'com.facebook.katana',
+      package: 'com.instagram.android',
       bounds: '[0,133][1260,2737]'
     }),
     mockNode({ package: 'com.vivo.upslide', bounds: '[0,2737][1260,2800]' })
@@ -211,9 +211,9 @@ test('pickStableHierarchySelector avoids generic resource-id even when currently
   assert.deepEqual(
     pickStableHierarchySelector(
       {
-        resourceId: 'com.facebook.katana:id/(name removed)',
+        resourceId: 'com.instagram.android:id/(name removed)',
         text: 'Theo dõi',
-        pkg: 'com.facebook.katana',
+        pkg: 'com.instagram.android',
         bounds: '[100,200][500,260]'
       },
       { resourceIdCount: 1, textCount: 1 },
@@ -260,7 +260,7 @@ test('pickStableHierarchySelector never picks duplicate launcher icon resource-i
     pickStableHierarchySelector(
       {
         resourceId: 'com.sec.android.app.launcher:id/icon',
-        text: 'Facebook',
+        text: 'Instagram',
         pkg: 'com.sec.android.app.launcher',
         bounds: '[100,200][220,340]'
       },
@@ -269,7 +269,7 @@ test('pickStableHierarchySelector never picks duplicate launcher icon resource-i
     ),
     {
       by: 'text',
-      value: 'Facebook',
+      value: 'Instagram',
       selectorReason: 'unique text',
       selectorVolatile: false,
       resourceIdDuplicateCount: 20,
@@ -310,7 +310,7 @@ test('scoreHierarchyHit prefers content-desc over duplicate generic resource-id 
     clickable: true,
     text: '',
     contentDesc: '',
-    resourceId: 'com.facebook.katana:id/(name removed)',
+    resourceId: 'com.instagram.android:id/(name removed)',
     className: 'android.view.ViewGroup',
     resourceIdCount: 40
   });

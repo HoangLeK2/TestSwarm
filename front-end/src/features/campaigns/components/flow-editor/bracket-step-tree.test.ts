@@ -16,7 +16,7 @@ const fbTapWithExtract: FlowStep = {
     {
       type: 'extract',
       entity: 'comments',
-      platform: 'facebook',
+      platform: 'instagram',
       max_items: 500,
       comment_scroll_passes: 48
     },

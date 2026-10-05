@@ -21,8 +21,7 @@ import {
 } from '../hooks/use-campaigns';
 import {
   useAccount,
-  useDeviceAccounts,
-  useFacebookPlatformSession
+  useDeviceAccounts
 } from '@/features/accounts/hooks/use-accounts';
 import type { CampaignOut, ScenarioOut } from '../types';
 import { Button } from '@/components/ui/button';
@@ -1925,14 +1924,6 @@ export function ScenarioDialog({
   const { data: primaryAccount, isLoading: primaryAccountLoading } = useAccount(
     primaryLink?.account_id ?? ''
   );
-  const {
-    data: platformSession,
-    isLoading: sessionLoading,
-    isError: sessionError
-  } = useFacebookPlatformSession(
-    primaryAccount?.platform === 'facebook' ? (runtimeDevice?.id ?? '') : ''
-  );
-
   const content = (
     <Dialog open={open} onOpenChange={setOpen} modal={!childStepEditorOpen}>
       <DialogTrigger asChild>
@@ -2144,7 +2135,7 @@ export function ScenarioDialog({
                     className='h-7 text-[11px]'
                     value={browserApp}
                     onChange={(e) => setBrowserApp(e.target.value)}
-                    placeholder='Chrome, Facebook…'
+                    placeholder='Chrome, Calculator…'
                   />
                 </div>
                 <div className='space-y-1'>
@@ -2541,16 +2532,9 @@ export function ScenarioDialog({
                       accountLabel: primaryAccount
                         ? primaryAccount.display_name || primaryAccount.username
                         : null,
-                      sessionState:
-                        primaryAccount?.platform === 'facebook'
-                          ? (platformSession?.state ?? null)
-                          : null,
-                      loading:
-                        accountsLoading ||
-                        primaryAccountLoading ||
-                        (primaryAccount?.platform === 'facebook' &&
-                          sessionLoading),
-                      error: sessionError
+                      sessionState: null,
+                      loading: accountsLoading || primaryAccountLoading,
+                      error: false
                     }}
                   />
                 </div>

@@ -100,7 +100,6 @@ export function AdminAccountsPage() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={ALL}>{t('filters.allPlatforms')}</SelectItem>
-              <SelectItem value='facebook'>Facebook</SelectItem>
               <SelectItem value='tiktok'>TikTok</SelectItem>
               <SelectItem value='instagram'>Instagram</SelectItem>
               <SelectItem value='youtube'>YouTube</SelectItem>

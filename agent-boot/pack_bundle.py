@@ -6,14 +6,14 @@ Inspired by LAMDA: instead of pushing many files separately, pack everything
 into one tar.gz with a launch.sh — push one file, extract, run launch.sh.
 
 Flow:
-    # Step 1: download binaries into device_farm/bundle/ (if not present)
-    python ../device_farm/download_bundle.py
+    # Step 1: download binaries into backend/bundle/ (if not present)
+    python ../backend/download_bundle.py
 
     # Step 2: pack into archive
     python pack_bundle.py
 
     # Step 3: push to device (single file)
-    adb push ../device_farm/bundle/device_bundle.tar.gz /data/local/tmp/
+    adb push ../backend/bundle/device_bundle.tar.gz /data/local/tmp/
 
     # Step 4: extract + launch on device (one command)
     adb shell "cd /data/local/tmp && tar -xzf device_bundle.tar.gz && sh launch.sh"
@@ -32,15 +32,15 @@ from pathlib import Path
 
 
 _ROOT      = Path(__file__).resolve().parent   # agent-boot/
-_FARM_ROOT = _ROOT.parent / "device_farm"      # device_farm/
+_FARM_ROOT = _ROOT.parent / "backend"      # backend/
 
-# Binaries downloaded by device_farm/download_bundle.py
+# Binaries downloaded by backend/download_bundle.py
 BUNDLE_DIR = _FARM_ROOT / "bundle"
 
 # Output archive placed alongside other bundle files
 OUTPUT_DIR = BUNDLE_DIR
 
-# scrcpy-server JAR — owned by the media adapter, fall back to device_farm/runtime/
+# scrcpy-server JAR — owned by the media adapter, fall back to backend/runtime/
 _SCRCPY_CANDIDATES = [
     _ROOT / "media-adapter" / "assets" / "scrcpy-server",
     _FARM_ROOT / "runtime" / "scrcpy-server",
@@ -135,7 +135,7 @@ def pack_bundle(force: bool = False) -> Path | None:
         return out
 
     if not _has_apks():
-        print("  WARN: APKs missing from bundle/apks/ — run: python ../device_farm/download_bundle.py")
+        print("  WARN: APKs missing from bundle/apks/ — run: python ../backend/download_bundle.py")
         return None
 
     print(f"  Packing -> {out.name} ...")
@@ -162,7 +162,7 @@ def pack_bundle(force: bool = False) -> Path | None:
         if scrcpy_src:
             tar.add(scrcpy_src, arcname="scrcpy-server")
         else:
-            print("  WARN: scrcpy-server not found — run: python ../device_farm/download_bundle.py --scrcpy-only")
+            print("  WARN: scrcpy-server not found — run: python ../backend/download_bundle.py --scrcpy-only")
 
     size_kb = out.stat().st_size // 1024
     print(f"  OK: {out.name} ({size_kb:,} KB)")
@@ -186,14 +186,14 @@ def print_deploy_guide(arc: Path) -> None:
     print("\n" + "=" * 60)
     print("Deploy to device")
     print("=" * 60)
-    print(f"\n  adb push ../device_farm/bundle/{arc.name} /data/local/tmp/")
+    print(f"\n  adb push ../backend/bundle/{arc.name} /data/local/tmp/")
     print(f"  adb shell 'cd /data/local/tmp && tar -xzf {arc.name} && sh launch.sh'")
     print()
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="Pack device_farm/bundle/ into device_bundle.tar.gz"
+        description="Pack backend/bundle/ into device_bundle.tar.gz"
     )
     ap.add_argument("--force", action="store_true", help="Rebuild even if archive exists")
     ap.add_argument("--list",  action="store_true", help="Show archive contents")

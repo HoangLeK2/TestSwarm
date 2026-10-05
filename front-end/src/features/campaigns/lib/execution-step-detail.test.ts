@@ -11,7 +11,7 @@ test('uses scenario name instead of a run_scenario UUID', () => {
     step_index: 1,
     step_type: 'run_scenario',
     step_id: '3ed0fe60-e854-48f3-8f61-78cd1b9b6995',
-    trace: { scenario_name: 'Kiểm tra phiên Facebook' },
+    trace: { scenario_name: 'Kiểm tra phiên Instagram' },
     effective_config_json: {},
     id: 'step-1',
     execution_id: 'execution-1',
@@ -24,7 +24,7 @@ test('uses scenario name instead of a run_scenario UUID', () => {
     updated_at: ''
   });
 
-  assert.equal(detail.label, 'Kiểm tra phiên Facebook');
+  assert.equal(detail.label, 'Kiểm tra phiên Instagram');
   assert.equal(detail.reference, 'run_scenario');
 });
 

@@ -1,7 +1,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **device-farm** (52170 symbols, 111335 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **device-farm** (43057 symbols, 96049 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 
@@ -79,32 +79,3 @@ component translate.
 
 Guards: `execution-event-utils.test.ts`, `step-log-tree.test.ts`,
 `scripts/check-i18n-keys.mjs`.
-
-## Facebook flows (`agent-boot/relay/`)
-
-Two classes of defect keep coming back here. Both pass unit tests and fail on a
-real device, and both fail silently. Full evidence and reasoning:
-`docs/adr-facebook-ui-reasoning.md`.
-
-- **Verify by identity, not by position.** Ask what state *this person* is in,
-  not what sits near where you tapped. The screen moves between the dump and
-  the tap. Use `_fb_person_row_scope` (row from the card subtree),
-  `_fb_profile_owner_connection` (anchored to the owner's name),
-  `_fb_still_offering_add_friend` (re-reads the target after the tap). Position
-  may order candidates identity has already chosen; it may not choose them.
-- **Never count controls on screen** to decide which one is the target. A
-  profile page carries suggestion cards with their own Add Friend buttons.
-- **Declare every label token in a `LabelSet`** (`relay/fb_labels.py`) with an
-  explicit mode. Labels are folded before matching, so `gỡ` becomes `go` and
-  sits inside `Ngọc` — that one token discarded 107 real people. Short
-  syllables take `exact`; two-word wording takes `word`; only sentence-length
-  wording takes `phrase`. Same rule for keyword lists in scenario templates.
-- **When the screen is ambiguous, refuse the action.** A skipped candidate
-  costs one friend request. A wrong tap can unfollow, report, or permanently
-  destroy the account's suggestion source.
-
-Three tests enforce this and will fail the build:
-`test_fb_label_guard.py`, `test_fb_geometry_guard.py` (agent-boot),
-`test_template_label_guard.py` (device_farm). If one of them blocks you, the
-fix is to narrow the match or to declare the exception with a reason — not to
-widen the guard.

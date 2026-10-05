@@ -94,7 +94,7 @@ function XmlTreeViewerInner({
   }, [xml, hideSystemUi]);
 
   // Auto-expand all nodes when hierarchy changes. Schedule via idle callback so
-  // the first paint is not blocked on large XML (Facebook feed).
+  // the first paint is not blocked on large mobile hierarchy XML.
   useEffect(() => {
     if (!root) {
       setExpanded(new Set());

@@ -44,11 +44,11 @@ test('searches organization scenarios and system templates by visible fields', (
     id: 'org',
     name: 'Crawl bài viết',
     description: 'Tìm bài trong nhóm',
-    tags: ['facebook']
+    tags: ['instagram']
   });
   const systemTemplate = item({
     id: 'template',
-    name: 'Khám phá nguồn từ Facebook',
+    name: 'Khám phá nguồn từ Instagram',
     source: 'template',
     is_system_template: true,
     tags: ['discovery']
@@ -63,29 +63,29 @@ test('searches organization scenarios and system templates by visible fields', (
 test('keeps library status and role filters while searching', () => {
   const archived = item({
     id: 'archived',
-    name: 'Facebook',
+    name: 'Instagram',
     status: 'archived'
   });
   const recovery = item({
     id: 'recovery',
-    name: 'Facebook recovery',
+    name: 'Instagram recovery',
     is_recovery_scenario: true
   });
-  const regular = item({ id: 'regular', name: 'Facebook regular' });
+  const regular = item({ id: 'regular', name: 'Instagram regular' });
 
   assert.deepEqual(
-    filter([archived, recovery, regular], 'facebook', 'regular'),
+    filter([archived, recovery, regular], 'instagram', 'regular'),
     [regular]
   );
 });
 
 test('filters system templates by category', () => {
-  const facebook = item({
-    id: 'facebook',
-    name: 'Facebook template',
+  const instagram = item({
+    id: 'instagram',
+    name: 'Instagram template',
     source: 'template',
     is_system_template: true,
-    category: 'facebook'
+    category: 'instagram'
   });
   const utility = item({
     id: 'utility',
@@ -95,7 +95,7 @@ test('filters system templates by category', () => {
     category: 'utility'
   });
 
-  assert.deepEqual(filter([facebook, utility], '', 'all', 'facebook'), [
-    facebook
+  assert.deepEqual(filter([instagram, utility], '', 'all', 'instagram'), [
+    instagram
   ]);
 });

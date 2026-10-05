@@ -116,10 +116,6 @@ export function getStfApkDownloadUrl(): string {
   return `${API_BASE_URL}/devices/stf-apk`;
 }
 
-export function getFacebookApkDownloadUrl(): string {
-  return `${API_BASE_URL}/platform-apps/facebook/current/download`;
-}
-
 /** WS origin (scheme + host[:port]) — same base used for QR / link in connect dialogs. */
 export function getDeviceAgentWsBase(): string {
   return getDeviceBackendBase()

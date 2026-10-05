@@ -30,7 +30,7 @@ Target flow:
 
 ## Non-goals
 
-- Do not tune scenario waits, selectors, Facebook comment budgets, or device actions until step timing proves they dominate.
+- Do not tune scenario waits, selectors, platform-specific comment budgets, or device actions until step timing proves they dominate.
 - Do not increase worker concurrency, batch size, or PostgreSQL limits blindly.
 - Do not change frontend behavior or campaign business semantics.
 - Do not run production write-load tests without operator approval.

@@ -35,7 +35,6 @@ export class AutocompleteNode extends DecoratorNode<React.ReactNode | null> {
    * - Ensures max one Autocomplete node per session.
    * - Ensure that when collaboration is enabled, this node is not shown in
    *   other sessions.
-   * See https://github.com/facebook/lexical/blob/master/packages/lexical-playground/src/plugins/AutocompletePlugin/index.tsx#L39
    */
   __uuid: string;
 

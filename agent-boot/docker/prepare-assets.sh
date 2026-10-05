@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Stage device bootstrap assets into agent-boot/assets/ before docker build.
 # Sources (first match wins):
-#   1. device_farm/bundle/  (monorepo dev build)
+#   1. backend/bundle/  (monorepo dev build)
 #   2. agent-boot/STFService.apk + existing assets/
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ASSETS="$ROOT/assets"
-BUNDLE="$ROOT/../device_farm/bundle"
+BUNDLE="$ROOT/../backend/bundle"
 
 mkdir -p "$ASSETS/apks" "$ASSETS/atx-agent"
 
@@ -41,7 +41,7 @@ done
 
 if [[ ${#missing[@]} -gt 0 ]]; then
   echo "warning: missing APK(s) in $ASSETS/apks/: ${missing[*]}" >&2
-  echo "  run: python ../device_farm/download_bundle.py" >&2
+  echo "  run: python ../backend/download_bundle.py" >&2
   echo "  or place APKs under agent-boot/assets/apks/" >&2
 else
   du -sh "$ASSETS"

@@ -52,7 +52,7 @@ test('social action dropdown labels are platform-neutral', () => {
   );
 });
 
-test('generic extract default does not force Facebook', () => {
+test('generic extract default does not force Instagram', () => {
   const step = createDefaultStep('extract');
 
   assert.equal(step.type, 'extract');

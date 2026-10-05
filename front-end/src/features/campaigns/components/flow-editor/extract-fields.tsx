@@ -343,7 +343,6 @@ function applyExtractEntitySwitch(
 
 function labelPlatform(platform: string | undefined, t: (k: string) => string) {
   if (!platform || platform === 'auto') return t('savePlatformAuto');
-  if (platform === 'facebook') return t('savePlatformFacebook');
   if (platform === 'ui') return t('savePlatformUi');
   return platform;
 }
@@ -356,8 +355,6 @@ function labelContentType(
   const ct = contentType ?? saveDefaultsForEntity(entity).content_type;
   if (ct === 'comment') return t('saveContentTypeGenericComment');
   if (ct === 'post') return t('saveContentTypeGenericPost');
-  if (ct === 'fb_comment') return t('saveContentTypeComment');
-  if (ct === 'fb_post') return t('saveContentTypeGroupPost');
   if (ct === 'text') return t('saveContentTypeText');
   return ct;
 }
@@ -641,10 +638,10 @@ export function ExtractStepFields({
           entity === 'groups' ||
           entity === 'text_nodes' ? (
             <StepPanelSection
-              title={t('facebookExtraTitle')}
+              title={t('adapterExtraTitle')}
               badge={
                 <Badge variant='outline' className='text-[10px] font-normal'>
-                  {t('facebookExtraBadge')}
+                  {t('adapterExtraBadge')}
                 </Badge>
               }
             >
@@ -1113,7 +1110,7 @@ export function ExtractStepFields({
                 if (checked) {
                   update({
                     collection: '${SAVE_COLLECTION}',
-                    platform: entity === 'text_nodes' ? 'ui' : 'facebook',
+                    platform: entity === 'text_nodes' ? 'ui' : 'auto',
                     ...saveDefaultsForEntity(entity)
                   });
                 } else {
@@ -1212,12 +1209,6 @@ export function ExtractStepFields({
                         </option>
                         <option value='comment'>
                           {t('saveContentTypeGenericComment')}
-                        </option>
-                        <option value='fb_post'>
-                          {t('saveContentTypeGroupPost')}
-                        </option>
-                        <option value='fb_comment'>
-                          {t('saveContentTypeComment')}
                         </option>
                         <option value='text'>{t('saveContentTypeText')}</option>
                       </select>

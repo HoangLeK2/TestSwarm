@@ -1,0 +1,62 @@
+{
+  "scenario": {
+    "body": {
+      "steps": [
+        { "type": "launch_app", "package": "com.example.platform" },
+        { "type": "wait_stable", "timeout": 5 },
+        {
+          "type": "loop",
+          "count": 10,
+          "steps": [
+            { "type": "wait", "seconds": 0.2 },
+            {
+              "type": "if_element",
+              "by": "text",
+              "value": "Items",
+              "then": [
+                { "type": "tap_selector", "by": "text", "value": "Items" },
+                { "type": "wait_stable", "timeout": 2 }
+              ],
+              "else": [{ "type": "key", "key": "back" }]
+            },
+            {
+              "type": "extract",
+              "entity": "posts",
+              "platform": "instagram",
+              "content_type": "ig_media",
+              "collection": "platform_items",
+              "max_items": 20
+            },
+            { "type": "scroll_down", "repeats": 1 },
+            {
+              "type": "if_element",
+              "by": "text",
+              "value": "Comments",
+              "then": [
+                { "type": "tap_selector", "by": "text", "value": "Comments" },
+                { "type": "wait", "seconds": 0.1 }
+              ],
+              "else": [{ "type": "wait", "seconds": 0.1 }]
+            },
+            {
+              "type": "extract",
+              "entity": "comments",
+              "platform": "instagram",
+              "content_type": "ig_comment",
+              "collection": "platform_items",
+              "item_level": 1,
+              "max_items": 50
+            },
+            { "type": "screenshot", "name": "iteration-result" },
+            { "type": "dismiss_popup", "retries": 1 },
+            { "type": "key", "key": "back" },
+            { "type": "wait_stable", "timeout": 2 },
+            { "type": "scroll_down", "repeats": 1 },
+            { "type": "wait", "seconds": 0.1 }
+          ]
+        },
+        { "type": "key", "key": "home" }
+      ]
+    }
+  }
+}

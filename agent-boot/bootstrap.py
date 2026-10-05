@@ -34,7 +34,7 @@ from rich.table import Table
 
 _ROOT        = Path(__file__).resolve().parent          # agent-boot/
 _FARM_ROOT   = _ROOT.parent                             # deviceFarmer/
-_DEVICE_FARM = _FARM_ROOT / "device_farm"
+_DEVICE_FARM = _FARM_ROOT / "backend"
 
 _U2_APK_SEARCH_DIRS = [
     _ROOT / "assets" / "apks",
@@ -46,7 +46,7 @@ _U2_APK_SEARCH_DIRS = [
 
 _STF_APK_CANDIDATES = [
     _ROOT / "STFService.apk",
-    _FARM_ROOT / "device_farm" / "bundle" / "apks" / "STFService.apk",
+    _FARM_ROOT / "backend" / "bundle" / "apks" / "STFService.apk",
     _FARM_ROOT / "STFService.apk" / "app" / "build" / "outputs" / "apk" / "full" / "release" / "app-release.apk",
     _FARM_ROOT / "STFService.apk" / "app" / "build" / "outputs" / "apk" / "full" / "debug" / "app-debug.apk",
     _FARM_ROOT / "STFService.apk" / "app" / "build" / "outputs" / "apk" / "lite" / "debug" / "app-debug.apk",
@@ -395,7 +395,7 @@ def step_install_u2(serial: str, skip: bool, force: bool = False) -> bool:
         missing = [n for n, p in [("app-uiautomator.apk", main_apk), ("app-uiautomator-test.apk", test_apk)] if p is None]
         console.print(f"    [red]✗[/red] APKs not found: {', '.join(missing)}")
         console.print(f"      Search dirs: {[str(d) for d in _U2_APK_SEARCH_DIRS]}")
-        console.print("      Run: python ../device_farm/download_bundle.py --no-minitouch --no-stf --no-scrcpy")
+        console.print("      Run: python ../backend/download_bundle.py --no-minitouch --no-stf --no-scrcpy")
         return False
 
     ok = True

@@ -138,7 +138,6 @@ JSON_OFFLOAD_BYTES  = _env_int("RELAY_JSON_OFFLOAD_BYTES", 8 * 1024, hi=16 * 102
 # Campaign extraction is per-phone work. Keeping this at 4–8 makes 40–100
 # phone crawls queue behind a tiny global lane even when ADB admission is
 # healthy. ADB pressure is still bounded separately by relay.adb_admission.
-EXTRA_DATA_CONCURRENCY = _env_int("RELAY_EXTRA_DATA_CONCURRENCY", 64, lo=1, hi=128)
 U2_BATCH_CONCURRENCY   = _env_int("RELAY_U2_BATCH_CONCURRENCY", 64, lo=1, hi=128)
 U2_FLOW_CONCURRENCY    = _env_int("RELAY_U2_FLOW_CONCURRENCY", 64, lo=1, hi=128)
 # Vision admission (OCR + template match). Deliberately far below the others:
@@ -265,7 +264,7 @@ def cv_executor() -> ThreadPoolExecutor:
 
 # ── JSON serialisation helpers ────────────────────────────────────────────────
 #
-# Serialising a 1–8 MB dump_hierarchy / extra_data payload takes 50–500 ms of
+# Serialising a 1–8 MB hierarchy payload takes 50–500 ms of
 # pure CPU on the event loop thread, which is *the* easiest way to make the
 # relay look "frozen". `dumps_maybe_offload` runs small payloads inline
 # (avoiding the executor round-trip) and offloads large ones to the CPU pool.
@@ -313,7 +312,6 @@ async def dumps_maybe_offload(payload: Any) -> str:
 
 @dataclass
 class _Semaphores:
-    extra_data: Optional[asyncio.Semaphore] = None
     u2_batch:   Optional[asyncio.Semaphore] = None
     u2_flow:    Optional[asyncio.Semaphore] = None
     cv:         Optional[asyncio.Semaphore] = None
@@ -323,8 +321,6 @@ _SEMS = _Semaphores()
 
 
 def init_semaphores() -> None:
-    if _SEMS.extra_data is None:
-        _SEMS.extra_data = asyncio.Semaphore(EXTRA_DATA_CONCURRENCY)
     if _SEMS.u2_batch is None:
         _SEMS.u2_batch = asyncio.Semaphore(U2_BATCH_CONCURRENCY)
     if _SEMS.u2_flow is None:
@@ -332,16 +328,9 @@ def init_semaphores() -> None:
     if _SEMS.cv is None:
         _SEMS.cv = asyncio.Semaphore(CV_CONCURRENCY)
     logger.info(
-        "runtime: semaphores ready extra_data=%d u2_batch=%d u2_flow=%d cv=%d",
-        EXTRA_DATA_CONCURRENCY, U2_BATCH_CONCURRENCY, U2_FLOW_CONCURRENCY, CV_CONCURRENCY,
+        "runtime: semaphores ready u2_batch=%d u2_flow=%d cv=%d",
+        U2_BATCH_CONCURRENCY, U2_FLOW_CONCURRENCY, CV_CONCURRENCY,
     )
-
-
-def extra_data_sem() -> asyncio.Semaphore:
-    if _SEMS.extra_data is None:
-        init_semaphores()
-    assert _SEMS.extra_data is not None
-    return _SEMS.extra_data
 
 
 def u2_batch_sem() -> asyncio.Semaphore:
@@ -450,7 +439,7 @@ def bounded_put_nowait(
 
 # ── FairSendQueue: per-device fairness + control plane priority ──────────────
 #
-# A single transport-bound queue (one phone with a chatty extra_data stream
+# A single transport-bound queue (one phone with a chatty control stream
 # or a stuck IDR loop) was creating cross-device head-of-line blocking: a
 # slow phone's 32 backed-up frames would starve every other phone's results
 # until the sender drained them. FairSendQueue splits the single queue into:
@@ -620,7 +609,7 @@ class TaskRegistry:
     Tracks `asyncio.Task`s spawned by the agent so a transport reconnect
     or shutdown can cancel them.
 
-    Without this, every `asyncio.create_task(handle_extra_data(...))` outlives
+    Without this, background request tasks can outlive
     its parent stream; after N reconnects the loop has hundreds of orphan
     tasks doing redundant work against stale send_queues.
     """
@@ -803,7 +792,6 @@ class RuntimeStats:
                 parts.append(f"{label}_q={q}")
 
         for label, sem in (
-            ("extra", _SEMS.extra_data),
             ("u2b", _SEMS.u2_batch),
             ("u2f", _SEMS.u2_flow),
         ):

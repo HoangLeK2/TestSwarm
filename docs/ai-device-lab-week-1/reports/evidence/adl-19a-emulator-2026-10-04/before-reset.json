@@ -1,0 +1,12 @@
+{
+  "abi": "arm64-v8a",
+  "avd": "galaxy_note10_plus",
+  "boot_completed": true,
+  "canary_path": "/sdcard/Download/adl19a-canary.txt",
+  "canary_present": true,
+  "canary_sha256": "905c3ba8d2a8235c203ff2f19f8fd3bfc2d223127198a917a38b8b5639419e3c",
+  "observation": "pre_reset_dirty_profile",
+  "sdk": 35,
+  "serial": "emulator-5580",
+  "target_type": "emulator"
+}

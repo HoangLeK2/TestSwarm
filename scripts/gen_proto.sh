@@ -1,12 +1,12 @@
 #!/bin/bash
-# gen_proto.sh — Compile relay.proto for both device_farm and agent-boot.
+# gen_proto.sh — Compile relay.proto for both backend and agent-boot.
 # Run from the deviceFarmer/ root directory:
 #   bash scripts/gen_proto.sh
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-PROTO_DIR="$ROOT_DIR/device_farm/proto"
+PROTO_DIR="$ROOT_DIR/backend/proto"
 
 echo "Proto source: $PROTO_DIR/relay.proto"
 
@@ -20,12 +20,12 @@ if ! command -v uv &>/dev/null; then
   fi
 fi
 
-# ── device_farm ───────────────────────────────────────────────────────────────
-DF_OUT="$ROOT_DIR/device_farm/runtime/transports/grpc_gen"
+# ── backend ───────────────────────────────────────────────────────────────────
+DF_OUT="$ROOT_DIR/backend/runtime/transports/grpc_gen"
 mkdir -p "$DF_OUT"
 touch "$DF_OUT/__init__.py"
 
-cd "$ROOT_DIR/device_farm"
+cd "$ROOT_DIR/backend"
 "${UV_RUN[@]}" -m grpc_tools.protoc \
   --python_out="$DF_OUT" \
   --grpc_python_out="$DF_OUT" \
@@ -36,7 +36,7 @@ cd "$ROOT_DIR/device_farm"
 sed -i '' 's/^import relay_pb2/from . import relay_pb2/' "$DF_OUT/relay_pb2_grpc.py" 2>/dev/null || \
 sed -i 's/^import relay_pb2/from . import relay_pb2/' "$DF_OUT/relay_pb2_grpc.py"
 
-echo "  device_farm: $DF_OUT"
+echo "  backend: $DF_OUT"
 
 # ── agent-boot ────────────────────────────────────────────────────────────────
 AB_OUT="$ROOT_DIR/agent-boot/relay/grpc_gen"

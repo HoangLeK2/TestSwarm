@@ -5,8 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   useAccount,
-  useDeviceAccounts,
-  useFacebookPlatformSession
+  useDeviceAccounts
 } from '@/features/accounts/hooks/use-accounts';
 import { ScenarioPlayer } from './control-record/scenario-player';
 import { packageFromCurrentApp, type DeviceOpsConfig } from './device-ops-rail';
@@ -87,7 +86,6 @@ import {
 } from '@/components/ui/dialog';
 import { ROUTES } from '@/config/routes';
 import { toast } from 'sonner';
-import { farmApi } from '@/lib/farm-api';
 import {
   ScenarioRequirementsSettingsDialog,
   scenarioRequiresPlatformSession
@@ -409,7 +407,7 @@ export function ControlRecordView({
   const [selectorPickTarget, setSelectorPickTarget] =
     useState<SelectorPickTarget | null>(null);
   // Candidate cycling: when several elements overlap the same tap point
-  // (common on Facebook), re-tapping the spot or using prev/next cycles them.
+  // re-tapping the spot or using prev/next cycles overlapping elements.
   const pickCandidatesRef = useRef<XmlSelectorPick[]>([]);
   const pickCycleIndexRef = useRef(0);
   const lastPickSpotRef = useRef<{ rx: number; ry: number } | null>(null);
@@ -1464,15 +1462,6 @@ export function ControlRecordView({
   );
   const { data: selectedPrimaryAccount, isLoading: primaryAccountLoading } =
     useAccount(selectedPrimaryLink?.account_id ?? '');
-  const {
-    data: selectedPlatformSession,
-    isLoading: platformSessionLoading,
-    isError: platformSessionError
-  } = useFacebookPlatformSession(
-    selectedPrimaryAccount?.platform === 'facebook'
-      ? (selectedDeviceId ?? '')
-      : ''
-  );
   const sessionGateRuntimeContext = {
     deviceLabel: selectedDeviceLabel || selectedDeviceForControl?.serial || '',
     deviceId: selectedDeviceId ?? null,
@@ -1480,16 +1469,9 @@ export function ControlRecordView({
     accountLabel: selectedPrimaryAccount
       ? selectedPrimaryAccount.display_name || selectedPrimaryAccount.username
       : null,
-    sessionState:
-      selectedPrimaryAccount?.platform === 'facebook'
-        ? (selectedPlatformSession?.state ?? null)
-        : null,
-    loading:
-      accountLinksLoading ||
-      primaryAccountLoading ||
-      (selectedPrimaryAccount?.platform === 'facebook' &&
-        platformSessionLoading),
-    error: platformSessionError
+    sessionState: null,
+    loading: accountLinksLoading || primaryAccountLoading,
+    error: false
   };
   const currentDeviceVarJsonDraft = selectedScenarioDeviceId
     ? (deviceVarJsonDrafts[selectedScenarioDeviceId] ??
@@ -2694,7 +2676,7 @@ export function ControlRecordView({
 
   // Apply the candidate at `index` to the active selector-pick step. With >1
   // candidate we keep pick mode open so the user can keep cycling overlapping
-  // elements (Facebook-style nested layouts).
+  // elements in deeply nested mobile layouts.
   const applyCandidateAtIndex = useCallback(
     (index: number) => {
       const cands = pickCandidatesRef.current;
@@ -3094,22 +3076,7 @@ export function ControlRecordView({
       disabled: mirrorInputLocked.readOnlyPreview,
       defaultPackage: packageFromCurrentApp(d.current_app),
       onRunStep: runDeviceOpStep,
-      onRunShell: (cmd) => runAgentShell(d.serial, cmd),
-      // Chạy qua preview-stream như mọi device op khác: REST đồng bộ giữ request
-      // mở suốt lúc tải + cài (tới 600s) và bị Cloudflare cắt ở ~100s -> 502.
-      // download_url là presigned R2 nên máy tải thẳng, không qua origin.
-      onInstallStandardFacebookApk: async () => {
-        const { data } = await farmApi.get(
-          '/platform-apps/facebook/current/download-url'
-        );
-        await runDeviceOpStep({
-          type: 'install_apk',
-          url: data.download_url,
-          timeout: 600,
-          verify_package: 'com.facebook.katana'
-        });
-        return data;
-      }
+      onRunShell: (cmd) => runAgentShell(d.serial, cmd)
     };
   }, [
     selectedDeviceForControl,

@@ -39,7 +39,7 @@ logger = logging.getLogger("relay.http_pool")
 
 # Max idle connections kept per (host, port). 4 covers the realistic fan-out
 # from the adb thread pool to one device — most devices are touched by one
-# worker at a time, but bursts (extra_data dump + a11y tap) can use 2-3.
+# worker at a time, but bursts (hierarchy dump + a11y tap) can use 2-3.
 _POOL_PER_HOST = max(1, int(os.getenv("RELAY_HTTP_POOL_PER_HOST", "4")))
 
 # How long a connection may sit idle before we discard it on next checkout.

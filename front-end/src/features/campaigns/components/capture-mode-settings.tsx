@@ -15,7 +15,7 @@ import {
   readCaptureMode,
   writeCaptureMode,
   type CaptureMode
-} from '../lib/continuous-crawl-monitor';
+} from '../lib/campaign-editor-variables';
 
 export function CaptureModeSettings({
   variables,

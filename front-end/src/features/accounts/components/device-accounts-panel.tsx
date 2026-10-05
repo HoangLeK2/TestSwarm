@@ -18,7 +18,6 @@ import {
   ACCOUNTS_PAGE_LIMIT,
   useAssignAccountsToDevice,
   useDeviceAccounts,
-  useFacebookPlatformSession,
   useSetPrimaryDeviceAccount,
   useUnassignDeviceFromAccount,
   useVerifyDeviceAccount
@@ -42,7 +41,6 @@ export function DeviceAccountsPanel({ deviceId }: { deviceId: string }) {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
   const { data: links = [], isLoading } = useDeviceAccounts(deviceId);
-  const { data: facebookSession } = useFacebookPlatformSession(deviceId);
   const { data: accounts = [], isLoading: accountsLoading } = useAccounts({
     limit: ACCOUNTS_PAGE_LIMIT
   });
@@ -70,35 +68,6 @@ export function DeviceAccountsPanel({ deviceId }: { deviceId: string }) {
     )
   ).sort(([a], [b]) => a.localeCompare(b));
   const busy = remove.isPending || setPrimary.isPending || verify.isPending;
-  const facebookAccount = facebookSession?.account_id
-    ? accountById.get(facebookSession.account_id)
-    : null;
-  const facebookExpectedAccountId =
-    typeof facebookSession?.evidence?.expected_account_id === 'string'
-      ? facebookSession.evidence.expected_account_id
-      : null;
-  const facebookExpectedAccount = facebookExpectedAccountId
-    ? accountById.get(facebookExpectedAccountId)
-    : null;
-  const facebookSessionLabel =
-    facebookAccount?.display_name ||
-    facebookAccount?.username ||
-    facebookExpectedAccount?.display_name ||
-    facebookExpectedAccount?.username ||
-    facebookSession?.account_id ||
-    facebookExpectedAccountId ||
-    '';
-  const facebookSessionReason = facebookSession?.state_reason
-    ? {
-        primary_account_changed: t('sessionReason.primary_account_changed'),
-        provenance_account_unassigned: t(
-          'sessionReason.provenance_account_unassigned'
-        ),
-        migration_operator_confirmed: t(
-          'sessionReason.migration_operator_confirmed'
-        )
-      }[facebookSession.state_reason] || facebookSession.state_reason
-    : '';
 
   async function handleAssign() {
     try {
@@ -228,34 +197,6 @@ export function DeviceAccountsPanel({ deviceId }: { deviceId: string }) {
                 {t('assign', { count: selected.length })}
               </Button>
             </div>
-          </div>
-        ) : null}
-
-        {facebookSession ? (
-          <div className='rounded-lg border bg-muted/20 px-3 py-2'>
-            <div className='flex flex-wrap items-center gap-1.5'>
-              <Badge variant='outline' className='text-[10px]'>
-                Facebook
-              </Badge>
-              <Badge
-                variant={
-                  facebookSession.state === 'active' ? 'secondary' : 'outline'
-                }
-                className='text-[10px]'
-              >
-                {t(`session.${facebookSession.state}`)}
-              </Badge>
-              {facebookSessionLabel ? (
-                <span className='min-w-0 truncate text-xs text-muted-foreground'>
-                  {facebookSessionLabel}
-                </span>
-              ) : null}
-            </div>
-            {facebookSessionReason ? (
-              <p className='mt-1 text-[11px] text-muted-foreground'>
-                {facebookSessionReason}
-              </p>
-            ) : null}
           </div>
         ) : null}
 

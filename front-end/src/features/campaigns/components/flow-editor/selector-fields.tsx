@@ -187,8 +187,6 @@ function SelectorBySelect({
 }
 
 const KNOWN_PACKAGES: Record<string, string> = {
-  'com.facebook.katana': 'Facebook',
-  'com.facebook.lite': 'Facebook Lite',
   'com.android.chrome': 'Chrome',
   'com.google.android.youtube': 'YouTube',
   'com.zhiliaoapp.musically': 'TikTok',

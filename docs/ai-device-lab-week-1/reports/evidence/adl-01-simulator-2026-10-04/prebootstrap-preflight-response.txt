@@ -1,0 +1,2 @@
+{"error":"node_capability_preflight_failed","message":"node capability preflight failed at steps[1] (assert_element): missing has_u2","preflight":{"ok":false,"issues":[{"path":"steps[1]","index":1,"step_type":"assert_element","missing":["has_u2"],"risk":"low"}],"warnings":[]}}
+400

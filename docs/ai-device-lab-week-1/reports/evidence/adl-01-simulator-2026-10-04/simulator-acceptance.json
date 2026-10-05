@@ -1,0 +1,67 @@
+{
+  "profile": "ADL-01-SIMULATOR",
+  "status": "PASS",
+  "production_dod_status": "PASS_APPROVED_EMULATOR_TARGET",
+  "observed_at_utc": "2026-10-04T09:06:59Z",
+  "serial": "emulator-5580",
+  "package": "com.android.settings",
+  "version_code": 35,
+  "trace_ids": {
+    "positive": "scn-0f762b5023",
+    "negative_assertion": "scn-ea36aee66c",
+    "offline": "scn-db65d86c12",
+    "recovery": "scn-b51370b06d"
+  },
+  "criteria": [
+    {
+      "id": "SIM-AC1",
+      "status": "PASS",
+      "summary": "Observed serial, Android version, package version, timestamp and trace correlation persisted.",
+      "evidence": [
+        "environment.json",
+        "pass-response.json",
+        "recovery-response.json"
+      ]
+    },
+    {
+      "id": "SIM-AC2",
+      "status": "PASS",
+      "summary": "Positive assertion passes; missing element, missing capability and disconnected relay never pass.",
+      "evidence": [
+        "pass-response.json",
+        "fail-response.json",
+        "prebootstrap-preflight-response.txt",
+        "offline-response.json"
+      ]
+    },
+    {
+      "id": "SIM-AC3",
+      "status": "PASS",
+      "summary": "Retry preserves absolute step index and failed-attempt evidence; failure captures bypass stale cache.",
+      "evidence": [
+        "regression-tests.txt"
+      ]
+    },
+    {
+      "id": "SIM-AC4",
+      "status": "PASS",
+      "summary": "Artifact URL is re-signed from stable object key and cross-org execution access returns 404.",
+      "evidence": [
+        "regression-tests.txt"
+      ]
+    },
+    {
+      "id": "SIM-AC5",
+      "status": "PASS",
+      "summary": "Missing capture is recorded explicitly; screenshot and hierarchy evidence are checksummed.",
+      "evidence": [
+        "regression-tests.txt",
+        "settings-screen.png",
+        "settings-hierarchy.xml",
+        "checksums.sha256"
+      ]
+    }
+  ],
+  "contract": "Approved Device Target",
+  "physical_phone_required": false
+}

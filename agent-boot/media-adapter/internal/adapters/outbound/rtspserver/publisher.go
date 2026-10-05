@@ -54,9 +54,10 @@ type Publisher struct {
 	idr    func(serial string) bool
 	// Last keyframe request per serial, the rate-limit gate shared by every
 	// source that can ask for one. See requestIDR.
-	lastIDR map[string]time.Time
-	stats   publisherCounters
-	err     error
+	lastIDR           map[string]time.Time
+	pendingConnectIDR map[string]*time.Timer
+	stats             publisherCounters
+	err               error
 }
 
 type PublisherStats struct {
@@ -118,6 +119,15 @@ type publisherCounters struct {
 // has no resolution at config time. ~3x the measured keyframe; raise it if a
 // larger panel still reports remote_resyncs.
 const minRemoteQueueSize = 256
+
+// rtpPayloadMaxSize keeps every RTP packet under real-world path MTUs.
+// gortsplib's default of 1450 fills a 1500-byte IP packet exactly once SRTP adds
+// its auth tag, so any PPPoE, VPN or Docker hop on the way fragments or drops it.
+// Over RTSP/TCP that is invisible; over WHIP/UDP one lost fragment is a lost
+// slice and a corrupted picture until the next IDR. 1200 is libwebrtc's own
+// limit. A keyframe grows from ~85 to ~105 packets, still well inside
+// minRemoteQueueSize.
+const rtpPayloadMaxSize = 1200
 
 func New(cfg Config, logger *slog.Logger) *Publisher {
 	if cfg.RTSPAddress == "" {
@@ -202,9 +212,6 @@ const (
 	dropQueue          dropReason = "queue"
 	dropStale          dropReason = "stale"
 	dropRemoteOverflow dropReason = "remote_overflow"
-	// dropRemoteFeedback is an explicit RTCP FIR from the peer we publish to:
-	// the receiver asking for a full encoder refresh.
-	dropRemoteFeedback dropReason = "remote_feedback"
 )
 
 // requestIDR asks a device for a fresh IDR, at most once per IDRMinInterval.
@@ -240,6 +247,55 @@ func (p *Publisher) requestIDR(lane *serialLane) {
 	if !p.allowIDR(serial) {
 		return
 	}
+	p.dispatchIDR(lane)
+}
+
+// requestIDRAfterRemoteConnect guarantees one encoder refresh after the remote
+// peer is ready to receive it. An earlier startup/drop request may have spent
+// the budget before WHIP finished ICE; in that case keep one delayed repair
+// instead of swallowing the event. Repeated reconnects share that pending slot,
+// so a flapping connection cannot reset an Exynos encoder every few seconds.
+//
+// Loss the remote peer reports (WHIP NACK/FIR) takes the same path, not
+// requestIDR: go2rtc cannot use a retransmission, so a reported loss is a
+// corrupted picture that only an IDR repairs. Swallowing it because a refresh
+// ran a second ago would leave the viewer on a broken frame indefinitely.
+func (p *Publisher) requestIDRAfterRemoteConnect(serial string) {
+	if serial == "" {
+		return
+	}
+	now := time.Now()
+	p.mu.Lock()
+	lane := p.lanes[serial]
+	if lane == nil {
+		p.mu.Unlock()
+		return
+	}
+	if last, seen := p.lastIDR[serial]; seen {
+		if wait := p.cfg.IDRMinInterval - now.Sub(last); wait > 0 {
+			if p.pendingConnectIDR == nil {
+				p.pendingConnectIDR = make(map[string]*time.Timer)
+			}
+			if p.pendingConnectIDR[serial] == nil {
+				p.pendingConnectIDR[serial] = time.AfterFunc(wait, func() {
+					p.mu.Lock()
+					delete(p.pendingConnectIDR, serial)
+					p.mu.Unlock()
+					p.requestIDRAfterRemoteConnect(serial)
+				})
+			}
+			p.mu.Unlock()
+			return
+		}
+	}
+	p.lastIDR[serial] = now
+	delete(p.pendingConnectIDR, serial)
+	p.mu.Unlock()
+	p.dispatchIDR(lane)
+}
+
+func (p *Publisher) dispatchIDR(lane *serialLane) {
+	serial := lane.serial
 	go func() {
 		if p.requestKeyframe(serial) {
 			lane.counters.idrRequests.Add(1)
@@ -261,6 +317,10 @@ func (p *Publisher) allowIDR(serial string) bool {
 		return false
 	}
 	p.lastIDR[serial] = now
+	if timer := p.pendingConnectIDR[serial]; timer != nil {
+		timer.Stop()
+		delete(p.pendingConnectIDR, serial)
+	}
 	return true
 }
 
@@ -311,6 +371,10 @@ func (p *Publisher) closeLane(serial string, lane *serialLane) {
 		delete(p.lanes, serial)
 	}
 	delete(p.lastIDR, serial)
+	if timer := p.pendingConnectIDR[serial]; timer != nil {
+		timer.Stop()
+		delete(p.pendingConnectIDR, serial)
+	}
 	p.mu.Unlock()
 	lane.close()
 }
@@ -375,6 +439,10 @@ func (p *Publisher) Close(ctx context.Context) error {
 		lanes = append(lanes, lane)
 		delete(p.lanes, serial)
 	}
+	for serial, timer := range p.pendingConnectIDR {
+		timer.Stop()
+		delete(p.pendingConnectIDR, serial)
+	}
 	p.mu.Unlock()
 	for _, lane := range lanes {
 		lane.close()
@@ -428,12 +496,17 @@ func (p *Publisher) ensureRTSPStream(serial string, sps []byte, pps []byte) (*st
 	}
 	if remoteURL != "" {
 		if p.cfg.NewRemoteSink != nil {
-			state.remote = p.cfg.NewRemoteSink(serial, remoteURL, func() {
-				p.laneDrop(serial, dropRemoteFeedback)
-			})
+			state.remote = p.cfg.NewRemoteSink(
+				serial,
+				remoteURL,
+				func() { p.requestIDRAfterRemoteConnect(serial) },
+				func() { p.requestIDRAfterRemoteConnect(serial) },
+			)
 		} else {
-			state.remote = newRTSPSink(remoteURL, p.cfg.RemoteTimeout, forma,
+			sink := newRTSPSink(remoteURL, p.cfg.RemoteTimeout, forma,
 				p.logger.With("serial", serial))
+			sink.onReconnected = func() { p.requestIDRAfterRemoteConnect(serial) }
+			state.remote = sink
 		}
 	}
 	state.startRemote(p.logger)
@@ -537,6 +610,11 @@ func (s *streamState) remoteLoop(logger *slog.Logger) {
 			if err := s.writeRemote(packet); err != nil {
 				if s.stats != nil {
 					s.stats.writeErrors.Add(1)
+				}
+				// A packet that never left is a hole in the reference chain,
+				// the same corruption as a queue overflow, so the same repair.
+				if s.onOverflow != nil {
+					s.onOverflow()
 				}
 				s.logRemoteWriteError(logger, err)
 			}
@@ -776,9 +854,6 @@ func (l *serialLane) countDrop(reason dropReason) {
 		}
 	case dropRemoteOverflow:
 		l.counters.remoteResyncs.Add(1)
-	case dropRemoteFeedback:
-		// Nothing was dropped on this side — the peer is reporting its own
-		// loss. It shows up as the IDR request it causes and nowhere else.
 	}
 }
 
@@ -892,8 +967,12 @@ func (l *serialLane) setParams(sps []byte, pps []byte) error {
 	if err != nil {
 		return err
 	}
-	encoder, err := state.format.CreateEncoder()
-	if err != nil {
+	encoder := &rtph264.Encoder{
+		PayloadType:       state.format.PayloadTyp,
+		PacketizationMode: state.format.PacketizationMode,
+		PayloadMaxSize:    rtpPayloadMaxSize,
+	}
+	if err := encoder.Init(); err != nil {
 		return err
 	}
 	l.mu.Lock()

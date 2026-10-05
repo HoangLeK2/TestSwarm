@@ -1,0 +1,2 @@
+command: pnpm typecheck
+result: PASS

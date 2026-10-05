@@ -17,7 +17,7 @@ test('commentParentSummary hides secondary when it duplicates comment body', () 
     'Minh Hoang Mn cho mình hỏi là có bên thứ 3 nào bán API không nhỉ?';
   const summary = commentParentSummary({
     parent_id: 'scoped-parent-hash',
-    content_type: 'fb_comment',
+    content_type: 'ig_comment',
     body: commentText,
     title: null,
     raw_data: {
@@ -72,7 +72,7 @@ test('commentParentSummary can identify a linked parent from hash only', () => {
   const summary = commentParentSummary(
     {
       parent_id: 'scoped-parent-hash',
-      content_type: 'fb_comment',
+      content_type: 'ig_comment',
       body: 'x',
       title: null,
       raw_data: { text: 'x' }

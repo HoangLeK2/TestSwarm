@@ -8,11 +8,11 @@ import {
 
 test('normalizeRecoveryRuleForEditor always makes recovery campaign-wide', () => {
   const rule = normalizeRecoveryRuleForEditor({
-    incident_type: 'facebook_popup',
+    incident_type: 'app_popup',
     scope: {
-      step_type_any: ['fb_comment'],
+      step_type_any: ['ig_comment'],
       step_id_any: ['comment-step'],
-      strategy_any: ['fb_comments'],
+      strategy_any: ['comments'],
       step_index_any: [3]
     },
     scenario_id: 'recover-popup',
@@ -31,17 +31,17 @@ test('normalizeRecoveryRuleForEditor strips hidden step-scoped match filters', (
     incident_type: 'unknown',
     scenario_id: 'recover-any',
     match: {
-      step_type_any: ['fb_comment'],
-      strategy_any: ['fb_comments'],
+      step_type_any: ['ig_comment'],
+      strategy_any: ['comments'],
       text_any: ['try again'],
-      package_any: ['com.facebook.katana']
+      package_any: ['com.instagram.android']
     }
   });
 
   assert.deepEqual(rule.scope, {});
   assert.deepEqual(rule.match, {
     text_any: ['try again'],
-    package_any: ['com.facebook.katana']
+    package_any: ['com.instagram.android']
   });
 });
 
@@ -49,8 +49,8 @@ test('normalizeRecoveryRuleForEditor removes empty match after stripping step fi
   const rule = normalizeRecoveryRuleForEditor({
     scenario_id: 'recover-any',
     match: {
-      step_type_any: ['fb_comment'],
-      strategy_any: ['fb_comments']
+      step_type_any: ['ig_comment'],
+      strategy_any: ['comments']
     }
   });
 
@@ -112,7 +112,7 @@ test('normalizeRecoveryPolicyForEditor normalizes every rule and keeps disabled 
       },
       {
         incident_types: ['login_or_checkpoint'],
-        scope: { strategy_any: ['fb_comments'] },
+        scope: { strategy_any: ['comments'] },
         scenario_id: 'recover-login',
         outcome: 'pause_for_takeover'
       }

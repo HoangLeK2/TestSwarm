@@ -250,15 +250,6 @@ def _run_relay(args: argparse.Namespace) -> None:
     print("  Ctrl+C to stop.\n", file=sys.stderr)
 
     async def _run() -> None:
-        extra_enabled = os.environ.get("AGENT_BOOT_EXTRA_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
-        from relay.extra_data.ingest import ExtraDataIngestServer
-
-        # Relay-initiated extraction always needs the parser, even though the
-        # default uplink no longer opens a database connection on this host.
-        ingest = ExtraDataIngestServer()
-        if extra_enabled:
-            await ingest.start()
-
         agent = RelayAgent(
             server_url=args.relay_server,
             api_key=args.relay_api_key or None,
@@ -267,12 +258,8 @@ def _run_relay(args: argparse.Namespace) -> None:
             relay_mode=relay_mode,
             grpc_tls=bool(args.relay_grpc_tls),
             grpc_root_cert_file=args.relay_grpc_root_cert_file or "",
-            extra_ingest=ingest,
         )
-        try:
-            await agent.run()
-        finally:
-            await ingest.stop()
+        await agent.run()
 
     # uvloop is ~2x faster than the stdlib selector loop for I/O-bound work
     # (ADB sockets, scrcpy stream, gRPC, atx-agent HTTP). Install it before

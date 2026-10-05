@@ -1,4 +1,4 @@
-/** Shared hit-test heuristics for mirror pick + XML tree highlight (FB-safe). */
+/** Shared hit-test heuristics for mirror pick + XML tree highlight. */
 
 export const HIERARCHY_CONTAINER_CLASSES = new Set([
   'android.widget.FrameLayout',

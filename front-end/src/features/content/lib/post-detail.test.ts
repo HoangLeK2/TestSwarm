@@ -3,12 +3,12 @@ import test from 'node:test';
 
 import { shouldShowPostComments } from './post-detail.ts';
 
-test('shouldShowPostComments for fb_group_posts collection', () => {
+test('shouldShowPostComments for platform_items collection', () => {
   assert.equal(
     shouldShowPostComments({
       item_level: 0,
-      content_type: 'fb_post',
-      collection: 'fb_group_posts'
+      content_type: 'ig_media',
+      collection: 'platform_items'
     }),
     true
   );
@@ -18,8 +18,8 @@ test('shouldShowPostComments false for comments', () => {
   assert.equal(
     shouldShowPostComments({
       item_level: 1,
-      content_type: 'fb_comment',
-      collection: 'fb_group_posts'
+      content_type: 'ig_comment',
+      collection: 'platform_items'
     }),
     false
   );

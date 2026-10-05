@@ -12,7 +12,7 @@ const LIBRARY = [
   { id: 'org-sc-2', name: 'Đọc hồ sơ' }
 ];
 const TEMPLATES = [
-  { id: 'tpl-1', name: 'Đăng nhập Facebook', category: 'facebook' }
+  { id: 'tpl-1', name: 'Đăng nhập Instagram', category: 'instagram' }
 ];
 
 test('workspace library scenarios are offered, between campaign and templates', () => {
@@ -50,7 +50,7 @@ test('library and campaign picks write scenario_id; templates write scenario_nam
     scenario_name: undefined
   });
   assert.deepEqual(runScenarioPatchFor(template), {
-    scenario_name: 'Đăng nhập Facebook',
+    scenario_name: 'Đăng nhập Instagram',
     scenario_id: undefined
   });
 });
@@ -73,7 +73,7 @@ test('a template categorised "campaign" is still addressed by name', () => {
 test('selection matches by id before name when both could hit', () => {
   const options = buildRunScenarioOptions({
     libraryScenarios: [{ id: 'org-sc-1', name: 'Kết bạn' }],
-    templates: [{ id: 'tpl-1', name: 'Kết bạn', category: 'facebook' }]
+    templates: [{ id: 'tpl-1', name: 'Kết bạn', category: 'instagram' }]
   });
 
   assert.equal(

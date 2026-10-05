@@ -90,17 +90,6 @@ class U2FlowMessage(TaggedMessage, tag="u2_flow"):
     timeout_ms: int | float | str | None = None
 
 
-class ExtraDataMessage(TaggedMessage, tag="extra_data"):
-    id: str = ""
-    serial: str = ""
-    strategy: str = "fb_posts"
-    context: JsonMap | None = None
-
-
-class ExtraDataCancelMessage(TaggedMessage, tag="extra_data_cancel"):
-    id: str = ""
-
-
 class A11yActionMessage(TaggedMessage, tag="a11y_action"):
     id: str = ""
     serial: str = ""
@@ -125,8 +114,6 @@ ServerMessage: TypeAlias = (
     | U2BatchMessage
     | U2BatchCancelMessage
     | U2FlowMessage
-    | ExtraDataMessage
-    | ExtraDataCancelMessage
     | A11yActionMessage
     | PingMessage
 )
@@ -162,8 +149,6 @@ _MESSAGE_TYPES: dict[type[Any], str] = {
     U2BatchMessage: "u2_batch",
     U2BatchCancelMessage: "u2_batch_cancel",
     U2FlowMessage: "u2_flow",
-    ExtraDataMessage: "extra_data",
-    ExtraDataCancelMessage: "extra_data_cancel",
     A11yActionMessage: "a11y_action",
     PingMessage: "ping",
 }

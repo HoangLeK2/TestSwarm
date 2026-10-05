@@ -20,7 +20,7 @@ test('run_scenario display uses campaign scenario name before UUID', () => {
 
 test('run_scenario card displays org scenario name instead of UUID', () => {
   const scenarioId = '34091ee6-80ec-4db4-94a1-449f2b3be2d3';
-  const scenarioName = 'Đăng nhập Facebook copy';
+  const scenarioName = 'Đăng nhập Instagram copy';
   const step = {
     type: 'run_scenario',
     scenario_id: scenarioId,

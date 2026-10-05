@@ -1,6 +1,7 @@
 package rtspserver
 
 import (
+	"errors"
 	"hash/fnv"
 	"log/slog"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
+	"github.com/bluenviron/gortsplib/v5/pkg/liberrors"
 	"github.com/pion/rtp"
 )
 
@@ -30,12 +32,21 @@ type RemoteSink interface {
 
 // NewRemoteSinkFunc builds the sink for one device.
 //
-// onKeyframeNeeded reports an explicit RTCP FIR from the WHIP receiver. It
-// routes into the same rate-limited gate as a local drop
-// (Publisher.requestIDR). Periodic go2rtc PLI is filtered by the WHIP sink
-// because go2rtc emits it on an unconditional two-second ticker rather than in
-// response to actual loss.
-type NewRemoteSinkFunc func(serial string, url string, onKeyframeNeeded func()) RemoteSink
+// onKeyframeNeeded reports loss on the WHIP link (a new NACK, or an explicit
+// FIR). It routes into the rate-limited but never-swallowed gate
+// (Publisher.requestIDRAfterRemoteConnect). Periodic go2rtc PLI is filtered by
+// the WHIP sink because go2rtc emits it on an unconditional two-second ticker
+// rather than in response to actual loss.
+//
+// onConnected is separate because the first usable IDR after a WHIP handshake
+// must not be swallowed by that gate. The startup IDR is commonly sent while
+// ICE is still connecting, and therefore never reaches the remote peer.
+type NewRemoteSinkFunc func(
+	serial string,
+	url string,
+	onKeyframeNeeded func(),
+	onConnected func(),
+) RemoteSink
 
 // rtspSink publishes over RTSP ANNOUNCE/RECORD, the default transport.
 //
@@ -64,6 +75,13 @@ type rtspSink struct {
 	// reconnecting in lockstep after the same network outage.
 	retryAttempt int
 	retrySeed    uint32
+	// onReconnected asks for an IDR after every connect but the first. The
+	// packets sent while the session was down are gone, so without it the remote
+	// picture stays broken until the device happens to send a keyframe — at
+	// codec level >= 4, never. The first connect needs none: it happens inside
+	// the write of the lane's opening SPS/PPS, before anything was lost.
+	onReconnected func()
+	connected     bool
 }
 
 func newRTSPSink(url string, timeout time.Duration, forma *format.H264, logger *slog.Logger) *rtspSink {
@@ -174,6 +192,10 @@ func (s *rtspSink) ensure() bool {
 	if s.logger != nil {
 		s.logger.Info("media adapter remote RTSP publishing", "url", remoteURLForLog(s.url))
 	}
+	if s.connected && s.onReconnected != nil {
+		s.onReconnected()
+	}
+	s.connected = true
 	return true
 }
 
@@ -189,6 +211,14 @@ func (s *rtspSink) WriteRTP(packet *rtp.Packet) error {
 		return nil
 	}
 	if err := s.writePacket(client, media, packet); err != nil {
+		// gortsplib's write queue filling up means the uplink fell behind for a
+		// moment; the session itself is fine. Tearing it down used to turn a
+		// sub-second burst into a full outage: close, back off, re-dial,
+		// ANNOUNCE/SETUP/RECORD, and go2rtc dropping its viewers in between.
+		// Drop the packet only; the caller asks the device for an IDR.
+		if errors.As(err, &liberrors.ErrClientWriteQueueFull{}) {
+			return err
+		}
 		s.mu.Lock()
 		if s.client != nil {
 			s.client.Close()

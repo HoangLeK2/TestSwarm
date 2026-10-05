@@ -234,7 +234,7 @@
       "type": "tap_selector"
     },
     {
-      "description": "Dump UI XML fresh, find first node by attr contains/equals, then tap center from bounds. Useful for Facebook result rows whose u2 selector surface is unstable.",
+      "description": "Dump UI XML fresh, find first node by attr contains/equals, then tap center from bounds. Useful for result rows whose u2 selector surface is unstable.",
       "group": "action",
       "inspector_hints": ["show_hierarchy_match"],
       "recorder_evidence": ["hierarchy_xml", "matched_bounds"],
@@ -304,7 +304,7 @@
       "type": "input_text"
     },
     {
-      "description": "Profile-driven login. Detects logged-in state first, fills login_recipe fields from account/scenario/variables/secret references, then submits. Optional login_recipe.post_submit_actions can navigate intermediate 2FA screens before post_submit_fields such as account.totp_code are entered.",
+      "description": "Profile-driven login. Detects logged-in state first, fills login_recipe fields from account/scenario/variables/secret references, then submits. Optional login_recipe.post_submit_actions can navigate intermediate 2FA screens before post_submit_fields such as account.totp_code are entered. Profile-declared login_recipe.manual_challenges can pause for reusable operator input without binding the executor to one platform or app.",
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
@@ -364,7 +364,7 @@
       "type": "adb_shell"
     },
     {
-      "description": "Vuốt xuống N lần (mặc định 1). start_x_ratio (0–1, mặc định 0.5): neo ngang — dùng ~0.15–0.25 để tránh vuốt xuyên ảnh full-width ở giữa feed Facebook. start_y_ratio/end_y_ratio/duration_ms/pause_seconds: tinh chỉnh gesture.",
+      "description": "Vuốt xuống N lần (mặc định 1). start_x_ratio (0–1, mặc định 0.5): neo ngang — dùng ~0.15–0.25 để tránh vuốt xuyên ảnh full-width ở giữa feed. start_y_ratio/end_y_ratio/duration_ms/pause_seconds: tinh chỉnh gesture.",
       "group": "action",
       "inspector_hints": [],
       "recorder_evidence": [],
@@ -454,156 +454,6 @@
       "type": "if_variable"
     },
     {
-      "description": "Atomic step: tìm + tap nút 'Bình luận' topmost trong feed, tự set parent context cho extract entity=comments. platform: mặc định facebook. then: steps chạy khi tap thành công. else: chạy khi không tap được. comment_filter: most_relevant | newest | all_comments (hoặc none để giữ mặc định của app). Legacy switch_to_all_comments=false tắt đổi filter; true (default) = all_comments.",
-      "group": "action",
-      "inspector_hints": [],
-      "recorder_evidence": [],
-      "requires": ["has_u2"],
-      "risk": "low",
-      "surfaces": ["schema", "api_schema", "executor"],
-      "type": "social_open_comments"
-    },
-    {
-      "description": "Find the visible comment button for the current post and cache its target without tapping. Use before social_tap_comment_target.",
-      "group": "action",
-      "inspector_hints": [],
-      "recorder_evidence": [],
-      "requires": ["has_u2"],
-      "risk": "low",
-      "surfaces": ["schema", "api_schema", "executor"],
-      "type": "social_find_comment_button"
-    },
-    {
-      "description": "Tap the cached comment target from social_find_comment_button, verify the comment sheet opened, and set parent context for following entity=comments extraction.",
-      "group": "action",
-      "inspector_hints": [],
-      "recorder_evidence": [],
-      "requires": [],
-      "risk": "low",
-      "surfaces": ["schema", "api_schema", "executor"],
-      "type": "social_tap_comment_target"
-    },
-    {
-      "description": "Apply the comment sheet filter. comment_filter: most_relevant | newest | all_comments, or none to skip.",
-      "group": "action",
-      "inspector_hints": [],
-      "recorder_evidence": [],
-      "requires": [],
-      "risk": "low",
-      "surfaces": ["schema", "api_schema", "executor"],
-      "type": "social_apply_comment_filter"
-    },
-    {
-      "description": "Agent-boot resolver: score search results for the platform, open one verified target, and save the target proof. target_type: 'person' (default, uses display_name/profile_wait_s) or 'post' (uses display_text/detail_wait_s/current_detail). platform defaults to facebook.",
-      "group": "action",
-      "inspector_hints": [],
-      "recorder_evidence": [],
-      "requires": ["has_u2"],
-      "risk": "low",
-      "surfaces": ["schema", "api_schema", "executor"],
-      "type": "social_select_target"
-    },
-    {
-      "description": "Agent-boot flow: open the platform friend suggestions, scan visible Add Friend rows, require common-context score, send verified requests in a bounded batch, and ledger each request.",
-      "group": "action",
-      "inspector_hints": [],
-      "recorder_evidence": [],
-      "requires": ["has_u2"],
-      "risk": "medium",
-      "surfaces": ["schema", "api_schema", "executor"],
-      "type": "social_connect_visible_people"
-    },
-    {
-      "description": "Agent-boot flow: scan visible feed/group posts, match configured keywords, then optionally like and comment on matched posts.",
-      "group": "action",
-      "inspector_hints": [],
-      "recorder_evidence": [],
-      "requires": ["has_u2"],
-      "risk": "medium",
-      "surfaces": ["schema", "api_schema", "executor"],
-      "type": "social_scan_posts_interact"
-    },
-    {
-      "description": "Platform adapter flow: open the author profile from a previously matched post action, verify profile suitability, and save target proof.",
-      "group": "action",
-      "inspector_hints": [],
-      "recorder_evidence": [],
-      "requires": ["has_u2"],
-      "risk": "low",
-      "surfaces": ["schema", "api_schema", "executor"],
-      "type": "social_open_author_from_post_match"
-    },
-    {
-      "description": "Platform adapter flow: open comments for a previously matched feed post, open a commenter profile, verify suitability, and save target proof.",
-      "group": "action",
-      "inspector_hints": [],
-      "recorder_evidence": [],
-      "requires": ["has_u2"],
-      "risk": "low",
-      "surfaces": ["schema", "api_schema", "executor"],
-      "type": "social_open_commenter_from_post_match"
-    },
-    {
-      "description": "Read how many connections the account has from the screen it is on, publish ACCOUNT_FRIEND_COUNT/ACCOUNT_STAGE for branching, and record the observation so growth is measurable.",
-      "group": "action",
-      "inspector_hints": [],
-      "recorder_evidence": [],
-      "requires": ["has_u2"],
-      "risk": "low",
-      "surfaces": ["schema", "api_schema", "executor"],
-      "type": "social_sync_connections"
-    },
-    {
-      "description": "Interact with content on the current screen through a platform adapter. Supported actions come from the provider capability registry.",
-      "group": "action",
-      "inspector_hints": [],
-      "recorder_evidence": [],
-      "requires": [],
-      "risk": "medium",
-      "surfaces": ["schema", "api_schema", "executor"],
-      "type": "content_interaction"
-    },
-    {
-      "description": "Send an idempotent connection request on the current profile screen; use require_verified_target to bind it to a resolver result.",
-      "group": "action",
-      "inspector_hints": [],
-      "recorder_evidence": [],
-      "requires": [],
-      "risk": "medium",
-      "surfaces": ["schema", "api_schema", "executor"],
-      "type": "connection_request"
-    },
-    {
-      "description": "Atomically lease the highest-ranked ready connection candidate for the bound account; request discovery when none is ready.",
-      "group": "action",
-      "inspector_hints": [],
-      "recorder_evidence": [],
-      "requires": [],
-      "risk": "low",
-      "surfaces": ["schema", "api_schema", "executor"],
-      "type": "lease_connection_candidate"
-    },
-    {
-      "description": "Atomically reserve the next unused device target for the bound account and action.",
-      "group": "action",
-      "inspector_hints": [],
-      "recorder_evidence": [],
-      "requires": [],
-      "risk": "low",
-      "surfaces": ["schema", "api_schema", "executor"],
-      "type": "lease_source_target"
-    },
-    {
-      "description": "Join the community on the current screen and verify member or pending state.",
-      "group": "action",
-      "inspector_hints": [],
-      "recorder_evidence": [],
-      "requires": [],
-      "risk": "medium",
-      "surfaces": ["schema", "api_schema", "executor"],
-      "type": "community_membership"
-    },
-    {
       "description": "Chọn ngẫu nhiên 1 nhánh để thực thi (weighted random). branches: list các nhánh, mỗi nhánh có steps (required) và weight (optional, mặc định 1). Weight cao hơn = xác suất được chọn cao hơn. Ví dụ: [{\"weight\": 3, \"steps\": [...]}, {\"weight\": 1, \"steps\": [...]}].",
       "group": "control",
       "inspector_hints": [],
@@ -624,17 +474,7 @@
       "type": "run_scenario"
     },
     {
-      "description": "Khai báo nguồn dữ liệu dùng cho campaign dispatch. Mặc định dùng external_entities facebook/group đã cào; mỗi device nhận một nguồn qua biến TARGET_* và alias theo output_prefix.",
-      "group": "action",
-      "inspector_hints": [],
-      "recorder_evidence": [],
-      "requires": [],
-      "risk": "low",
-      "surfaces": ["schema", "api_schema", "executor"],
-      "type": "use_source_pool"
-    },
-    {
-      "description": "Extract content data từ XML màn hình hiện tại qua agent-boot extra-data. entity: 'posts' — parse post card (author/text/timestamp/reactions/comments/shares/post_type/image_desc/comment_preview); 'comments' — parse comment rows + stats trong comment view/feed preview; 'groups'/'pages' — cào kết quả tìm kiếm và lưu vào external entity catalog; 'text_nodes' — thu thập text node vào context['text_nodes']. platform: facebook|instagram|tiktok|linkedin, hoặc 'auto' (mặc định) để agent-boot tự nhận diện parser theo app đang mở. extract_profile: balanced|aggressive|safe hoặc ${VAR} (áp defaults scan params). entity_version: lock behavior parser/runtime (vd: comments:v1). stop_if_no_new (bool, default False): set ctx['_break']=True khi không có bài mới trong no_new_threshold (default 3) lần scroll liên tiếp — dùng bên trong step 'loop'. expand_see_more (bool, default True): tự tap nút 'See more'/'Xem thêm' trước khi parse. open_post_before_extract (entity=posts): mở màn chi tiết bài trước extract. open_post_press_back_after_extract: tự Back sau extract; với entity=comments chỉ back khi còn ở comment sheet. entity=comments supports bounded crawl tuning: max_items, comment_scroll_passes, comment_swipes_per_dump, comment_max_snapshots, comment_scroll_wall_s. Nếu set collection/platform/content_type/dedupe_field thì agent-boot sẽ ghi trực tiếp vào content DB. ⚠ Dùng với step 'loop' (không phải 'repeat') để stop_if_no_new hoạt động.",
+      "description": "Extract content data từ XML màn hình hiện tại qua agent-boot extra-data. entity: 'posts' — parse post card (author/text/timestamp/reactions/comments/shares/post_type/image_desc/comment_preview); 'comments' — parse comment rows + stats trong comment view/feed preview; 'groups'/'pages' — cào kết quả tìm kiếm và lưu vào external entity catalog; 'text_nodes' — thu thập text node vào context['text_nodes']. platform: tên platform hoặc 'auto' (mặc định) để agent-boot tự nhận diện parser theo app đang mở. extract_profile: balanced|aggressive|safe hoặc ${VAR} (áp defaults scan params). entity_version: lock behavior parser/runtime (vd: comments:v1). stop_if_no_new (bool, default False): set ctx['_break']=True khi không có bài mới trong no_new_threshold (default 3) lần scroll liên tiếp — dùng bên trong step 'loop'. expand_see_more (bool, default True): tự tap nút 'See more'/'Xem thêm' trước khi parse. open_post_before_extract (entity=posts): mở màn chi tiết bài trước extract. open_post_press_back_after_extract: tự Back sau extract; với entity=comments chỉ back khi còn ở comment sheet. entity=comments supports bounded crawl tuning: max_items, comment_scroll_passes, comment_swipes_per_dump, comment_max_snapshots, comment_scroll_wall_s. Nếu set collection/platform/content_type/dedupe_field thì agent-boot sẽ ghi trực tiếp vào content DB. ⚠ Dùng với step 'loop' (không phải 'repeat') để stop_if_no_new hoạt động.",
       "group": "variable",
       "inspector_hints": [],
       "recorder_evidence": [],
@@ -1234,7 +1074,7 @@
       {
         "category": "Device",
         "defaults": {},
-        "description": "Dump UI XML fresh, find first node by attr contains/equals, then tap center from bounds. Useful for Facebook result rows whose u2 selector surface is unstable.",
+        "description": "Dump UI XML fresh, find first node by attr contains/equals, then tap center from bounds. Useful for result rows whose u2 selector surface is unstable.",
         "display_name": "Tap Xml Match",
         "fields": [],
         "legacy": {},
@@ -1374,7 +1214,7 @@
       {
         "category": "Device",
         "defaults": {},
-        "description": "Profile-driven login. Detects logged-in state first, fills login_recipe fields from account/scenario/variables/secret references, then submits. Optional login_recipe.post_submit_actions can navigate intermediate 2FA screens before post_submit_fields such as account.totp_code are entered.",
+        "description": "Profile-driven login. Detects logged-in state first, fills login_recipe fields from account/scenario/variables/secret references, then submits. Optional login_recipe.post_submit_actions can navigate intermediate 2FA screens before post_submit_fields such as account.totp_code are entered. Profile-declared login_recipe.manual_challenges can pause for reusable operator input without binding the executor to one platform or app.",
         "display_name": "Login If Needed",
         "fields": [],
         "legacy": {},
@@ -1544,7 +1384,7 @@
       {
         "category": "Device",
         "defaults": {},
-        "description": "Vuốt xuống N lần (mặc định 1). start_x_ratio (0–1, mặc định 0.5): neo ngang — dùng ~0.15–0.25 để tránh vuốt xuyên ảnh full-width ở giữa feed Facebook. start_y_ratio/end_y_ratio/duration_ms/pause_seconds: tinh chỉnh gesture.",
+        "description": "Vuốt xuống N lần (mặc định 1). start_x_ratio (0–1, mặc định 0.5): neo ngang — dùng ~0.15–0.25 để tránh vuốt xuyên ảnh full-width ở giữa feed. start_y_ratio/end_y_ratio/duration_ms/pause_seconds: tinh chỉnh gesture.",
         "display_name": "Scroll Down",
         "fields": [],
         "legacy": {},
@@ -1703,546 +1543,6 @@
         "schema_version": 1
       },
       {
-        "capability_id": "social.comments.open",
-        "category": "Advanced / Provider Primitive",
-        "defaults": {},
-        "description": "Atomic step: tìm + tap nút 'Bình luận' topmost trong feed, tự set parent context cho extract entity=comments. platform: mặc định facebook. then: steps chạy khi tap thành công. else: chạy khi không tap được. comment_filter: most_relevant | newest | all_comments (hoặc none để giữ mặc định của app). Legacy switch_to_all_comments=false tắt đổi filter; true (default) = all_comments.",
-        "display_name": "Open Comments",
-        "fields": [],
-        "legacy": {
-          "compound": true,
-          "replacement": "social_find_comment_button -> social_tap_comment_target -> extract"
-        },
-        "node_type": "social_open_comments",
-        "optional": [
-          "platform",
-          "timeout",
-          "poll",
-          "dedupe_field",
-          "ignore_error",
-          "switch_to_all_comments",
-          "comment_filter",
-          "post_tap_wait_s",
-          "comment_filter_settle_s",
-          "require_post_before_comment",
-          "pre_scroll",
-          "pre_scroll_distance",
-          "pre_scroll_duration_ms",
-          "pre_scroll_x_ratio",
-          "pre_scroll_start_y_ratio",
-          "pre_scroll_end_y_ratio",
-          "pre_scroll_pause_s",
-          "then",
-          "else"
-        ],
-        "presets": [],
-        "required": [],
-        "required_any": [],
-        "runtime_step_type": "social_open_comments",
-        "schema_version": 2
-      },
-      {
-        "category": "Social",
-        "defaults": {},
-        "description": "Find the visible comment button for the current post and cache its target without tapping. Use before social_tap_comment_target.",
-        "display_name": "Social Find Comment Button",
-        "fields": [],
-        "legacy": {},
-        "node_type": "social_find_comment_button",
-        "optional": [
-          "platform",
-          "timeout",
-          "poll",
-          "dedupe_field",
-          "ignore_error",
-          "switch_to_all_comments",
-          "comment_filter"
-        ],
-        "presets": [],
-        "required": [],
-        "required_any": [],
-        "runtime_step_type": "social_find_comment_button",
-        "schema_version": 1
-      },
-      {
-        "category": "Social",
-        "defaults": {},
-        "description": "Tap the cached comment target from social_find_comment_button, verify the comment sheet opened, and set parent context for following entity=comments extraction.",
-        "display_name": "Social Tap Comment Target",
-        "fields": [],
-        "legacy": {},
-        "node_type": "social_tap_comment_target",
-        "optional": ["platform", "ignore_error", "post_tap_wait_s"],
-        "presets": [],
-        "required": [],
-        "required_any": [],
-        "runtime_step_type": "social_tap_comment_target",
-        "schema_version": 1
-      },
-      {
-        "category": "Social",
-        "defaults": {},
-        "description": "Apply the comment sheet filter. comment_filter: most_relevant | newest | all_comments, or none to skip.",
-        "display_name": "Social Apply Comment Filter",
-        "fields": [],
-        "legacy": {},
-        "node_type": "social_apply_comment_filter",
-        "optional": [
-          "platform",
-          "switch_to_all_comments",
-          "comment_filter",
-          "comment_filter_settle_s",
-          "comment_filter_step_pause_s",
-          "comment_filter_post_select_s"
-        ],
-        "presets": [],
-        "required": [],
-        "required_any": [],
-        "runtime_step_type": "social_apply_comment_filter",
-        "schema_version": 1
-      },
-      {
-        "category": "Social",
-        "defaults": {},
-        "description": "Agent-boot resolver: score search results for the platform, open one verified target, and save the target proof. target_type: 'person' (default, uses display_name/profile_wait_s) or 'post' (uses display_text/detail_wait_s/current_detail). platform defaults to facebook.",
-        "display_name": "Social Select Target",
-        "fields": [],
-        "legacy": {},
-        "node_type": "social_select_target",
-        "optional": [
-          "platform",
-          "target_type",
-          "search",
-          "display_name",
-          "display_text",
-          "row_text",
-          "required_keywords",
-          "optional_keywords",
-          "forbidden_keywords",
-          "min_score",
-          "require_unique",
-          "timeout",
-          "profile_wait_s",
-          "detail_wait_s",
-          "current_detail",
-          "save_as",
-          "save_success_as",
-          "skip_candidate_on_not_verified",
-          "candidate_entity_id",
-          "candidate_lease_token",
-          "skip_candidate_defer_hours"
-        ],
-        "presets": [],
-        "required": [],
-        "required_any": [],
-        "runtime_step_type": "social_select_target",
-        "schema_version": 1
-      },
-      {
-        "category": "Social",
-        "defaults": {},
-        "description": "Agent-boot flow: open the platform friend suggestions, scan visible Add Friend rows, require common-context score, send verified requests in a bounded batch, and ledger each request.",
-        "display_name": "Social Connect Visible People",
-        "fields": [],
-        "legacy": {},
-        "node_type": "social_connect_visible_people",
-        "optional": [
-          "platform",
-          "min_score",
-          "require_common",
-          "common_keywords",
-          "forbidden_keywords",
-          "timeout",
-          "verify_wait_s",
-          "save_as",
-          "account_action_id",
-          "open_surface",
-          "target_count",
-          "batch_size",
-          "max_scrolls",
-          "no_more_common_limit",
-          "dry_run",
-          "scroll_wait_s",
-          "surface_wait_s",
-          "stop_on_unverified"
-        ],
-        "presets": [],
-        "required": [],
-        "required_any": [],
-        "runtime_step_type": "social_connect_visible_people",
-        "schema_version": 1
-      },
-      {
-        "category": "Social",
-        "defaults": {},
-        "description": "Agent-boot flow: scan visible feed/group posts, match configured keywords, then optionally like and comment on matched posts.",
-        "display_name": "Social Scan Posts Interact",
-        "fields": [],
-        "legacy": {},
-        "node_type": "social_scan_posts_interact",
-        "optional": [
-          "platform",
-          "keywords",
-          "match_mode",
-          "comment_text",
-          "target_count",
-          "batch_size",
-          "max_scrolls",
-          "timeout",
-          "scroll_x_ratio",
-          "scroll_y1_ratio",
-          "scroll_y2_ratio",
-          "scroll_duration_s",
-          "scroll_wait_s",
-          "comment_wait_s",
-          "submit_wait_s",
-          "require_comment",
-          "like_post",
-          "save_as"
-        ],
-        "presets": [],
-        "required": [],
-        "required_any": [],
-        "runtime_step_type": "social_scan_posts_interact",
-        "schema_version": 1
-      },
-      {
-        "category": "Social",
-        "defaults": {},
-        "description": "Platform adapter flow: open the author profile from a previously matched post action, verify profile suitability, and save target proof.",
-        "display_name": "Social Open Author From Post Match",
-        "fields": [],
-        "legacy": {},
-        "node_type": "social_open_author_from_post_match",
-        "optional": [
-          "platform",
-          "source_var",
-          "action_index",
-          "search",
-          "display_name",
-          "required_keywords",
-          "optional_keywords",
-          "forbidden_keywords",
-          "required_keywords_var",
-          "optional_keywords_var",
-          "forbidden_keywords_var",
-          "min_score",
-          "timeout",
-          "comment_wait_s",
-          "profile_wait_s",
-          "max_commenters",
-          "save_as",
-          "save_success_as",
-          "save_opened_as",
-          "save_sheet_opened_as"
-        ],
-        "presets": [],
-        "required": [],
-        "required_any": [],
-        "runtime_step_type": "social_open_author_from_post_match",
-        "schema_version": 1
-      },
-      {
-        "category": "Social",
-        "defaults": {},
-        "description": "Platform adapter flow: open comments for a previously matched feed post, open a commenter profile, verify suitability, and save target proof.",
-        "display_name": "Social Open Commenter From Post Match",
-        "fields": [],
-        "legacy": {},
-        "node_type": "social_open_commenter_from_post_match",
-        "optional": [
-          "platform",
-          "source_var",
-          "action_index",
-          "search",
-          "display_name",
-          "required_keywords",
-          "optional_keywords",
-          "forbidden_keywords",
-          "required_keywords_var",
-          "optional_keywords_var",
-          "forbidden_keywords_var",
-          "min_score",
-          "timeout",
-          "comment_wait_s",
-          "profile_wait_s",
-          "max_commenters",
-          "save_as",
-          "save_success_as",
-          "save_opened_as",
-          "save_sheet_opened_as"
-        ],
-        "presets": [],
-        "required": [],
-        "required_any": [],
-        "runtime_step_type": "social_open_commenter_from_post_match",
-        "schema_version": 1
-      },
-      {
-        "category": "Social",
-        "defaults": {},
-        "description": "Read how many connections the account has from the screen it is on, publish ACCOUNT_FRIEND_COUNT/ACCOUNT_STAGE for branching, and record the observation so growth is measurable.",
-        "display_name": "Social Sync Connections",
-        "fields": [],
-        "legacy": {},
-        "node_type": "social_sync_connections",
-        "optional": ["platform", "metric", "timeout", "persist", "save_as"],
-        "presets": [],
-        "required": [],
-        "required_any": [],
-        "runtime_step_type": "social_sync_connections",
-        "schema_version": 1
-      },
-      {
-        "capability_id": "social.content.interact",
-        "category": "Engagement",
-        "defaults": {},
-        "description": "Interact with content on the current screen through a platform adapter. Supported actions come from the provider capability registry.",
-        "display_name": "Engage with Content",
-        "fields": [
-          {
-            "advanced": false,
-            "depends_on": [],
-            "description": "Provider/app adapter used to execute this semantic action.",
-            "group": "runTarget",
-            "label": "Run on",
-            "name": "platform",
-            "options": [],
-            "placeholder": "",
-            "required": true,
-            "type": "provider",
-            "visible_when": {}
-          },
-          {
-            "advanced": false,
-            "depends_on": [],
-            "description": "Verified target variable produced by a select/lease step.",
-            "group": "target",
-            "label": "Target content/profile",
-            "name": "require_verified_target",
-            "options": [],
-            "placeholder": "_people_target",
-            "required": false,
-            "type": "resourceRef",
-            "visible_when": {}
-          },
-          {
-            "advanced": false,
-            "depends_on": ["platform"],
-            "description": "",
-            "group": "content",
-            "label": "Action",
-            "name": "action",
-            "options": [],
-            "placeholder": "",
-            "required": true,
-            "type": "select",
-            "visible_when": {}
-          },
-          {
-            "advanced": false,
-            "depends_on": ["action"],
-            "description": "",
-            "group": "content",
-            "label": "Comment text",
-            "name": "comment_text",
-            "options": [],
-            "placeholder": "${COMMENT_TEXT}",
-            "required": true,
-            "type": "textarea",
-            "visible_when": {
-              "action": "comment"
-            }
-          },
-          {
-            "advanced": true,
-            "depends_on": [],
-            "description": "",
-            "group": "options",
-            "label": "Find button timeout",
-            "name": "timeout",
-            "options": [],
-            "placeholder": "",
-            "required": false,
-            "type": "number",
-            "visible_when": {}
-          },
-          {
-            "advanced": true,
-            "depends_on": [],
-            "description": "",
-            "group": "options",
-            "label": "Verify timeout",
-            "name": "verify_timeout",
-            "options": [],
-            "placeholder": "",
-            "required": false,
-            "type": "number",
-            "visible_when": {}
-          }
-        ],
-        "legacy": {},
-        "node_type": "content_interaction",
-        "optional": [
-          "platform",
-          "action",
-          "timeout",
-          "poll",
-          "verify_timeout",
-          "settle_seconds",
-          "save_as",
-          "require_verified_target",
-          "comment_text",
-          "require_completion",
-          "completion_steps",
-          "completion_verify",
-          "candidate_entity_id",
-          "require_candidate_status",
-          "candidate_lease_token",
-          "account_action_id"
-        ],
-        "presets": [
-          {
-            "defaults": {
-              "action": "like",
-              "platform": "auto",
-              "type": "content_interaction"
-            },
-            "description": "Add a provider-supported reaction to selected content.",
-            "display_name": "React to Content",
-            "id": "content.reaction.add",
-            "runtime_step_type": "content_interaction"
-          },
-          {
-            "defaults": {
-              "action": "comment",
-              "comment_text": "${COMMENT_TEXT}",
-              "platform": "auto",
-              "type": "content_interaction"
-            },
-            "description": "Write a comment on selected content.",
-            "display_name": "Add Comment",
-            "id": "content.comment.create",
-            "runtime_step_type": "content_interaction"
-          },
-          {
-            "defaults": {
-              "action": "share",
-              "platform": "auto",
-              "type": "content_interaction"
-            },
-            "description": "Share provider-supported content.",
-            "display_name": "Share / Repost",
-            "id": "content.share.create",
-            "runtime_step_type": "content_interaction"
-          }
-        ],
-        "required": [],
-        "required_any": [],
-        "runtime_step_type": "content_interaction",
-        "schema_version": 2
-      },
-      {
-        "category": "Social",
-        "defaults": {},
-        "description": "Send an idempotent connection request on the current profile screen; use require_verified_target to bind it to a resolver result.",
-        "display_name": "Connection Request",
-        "fields": [],
-        "legacy": {},
-        "node_type": "connection_request",
-        "optional": [
-          "platform",
-          "action",
-          "timeout",
-          "poll",
-          "verify_timeout",
-          "settle_seconds",
-          "save_as",
-          "require_verified_target",
-          "require_completion",
-          "completion_steps",
-          "completion_verify",
-          "candidate_entity_id",
-          "require_candidate_status",
-          "candidate_lease_token",
-          "account_action_id"
-        ],
-        "presets": [],
-        "required": [],
-        "required_any": [],
-        "runtime_step_type": "connection_request",
-        "schema_version": 1
-      },
-      {
-        "category": "Device",
-        "defaults": {},
-        "description": "Atomically lease the highest-ranked ready connection candidate for the bound account; request discovery when none is ready.",
-        "display_name": "Lease Connection Candidate",
-        "fields": [],
-        "legacy": {},
-        "node_type": "lease_connection_candidate",
-        "optional": ["platform"],
-        "presets": [],
-        "required": [],
-        "required_any": [],
-        "runtime_step_type": "lease_connection_candidate",
-        "schema_version": 1
-      },
-      {
-        "category": "Device",
-        "defaults": {},
-        "description": "Atomically reserve the next unused device target for the bound account and action.",
-        "display_name": "Lease Source Target",
-        "fields": [],
-        "legacy": {},
-        "node_type": "lease_source_target",
-        "optional": [
-          "platform",
-          "entity_type",
-          "action_type",
-          "action",
-          "statuses",
-          "keywords",
-          "search"
-        ],
-        "presets": [],
-        "required": [],
-        "required_any": [],
-        "runtime_step_type": "lease_source_target",
-        "schema_version": 1
-      },
-      {
-        "category": "Social",
-        "defaults": {},
-        "description": "Join the community on the current screen and verify member or pending state.",
-        "display_name": "Community Membership",
-        "fields": [],
-        "legacy": {},
-        "node_type": "community_membership",
-        "optional": [
-          "platform",
-          "action",
-          "timeout",
-          "poll",
-          "verify_timeout",
-          "settle_seconds",
-          "save_as",
-          "require_verified_target",
-          "require_completion",
-          "completion_steps",
-          "completion_verify",
-          "candidate_entity_id",
-          "require_candidate_status",
-          "candidate_lease_token",
-          "account_action_id"
-        ],
-        "presets": [],
-        "required": [],
-        "required_any": [],
-        "runtime_step_type": "community_membership",
-        "schema_version": 1
-      },
-      {
         "category": "Control Flow",
         "defaults": {},
         "description": "Chọn ngẫu nhiên 1 nhánh để thực thi (weighted random). branches: list các nhánh, mỗi nhánh có steps (required) và weight (optional, mặc định 1). Weight cao hơn = xác suất được chọn cao hơn. Ví dụ: [{\"weight\": 3, \"steps\": [...]}, {\"weight\": 1, \"steps\": [...]}].",
@@ -2273,74 +1573,11 @@
         "schema_version": 1
       },
       {
-        "category": "Device",
-        "defaults": {},
-        "description": "Khai báo nguồn dữ liệu dùng cho campaign dispatch. Mặc định dùng external_entities facebook/group đã cào; mỗi device nhận một nguồn qua biến TARGET_* và alias theo output_prefix.",
-        "display_name": "Use Source Pool",
-        "fields": [],
-        "legacy": {},
-        "node_type": "use_source_pool",
-        "optional": [
-          "platform",
-          "entity_type",
-          "search",
-          "output_prefix",
-          "statuses",
-          "allocation_policy"
-        ],
-        "presets": [],
-        "required": [],
-        "required_any": [],
-        "runtime_step_type": "use_source_pool",
-        "schema_version": 1
-      },
-      {
-        "capability_id": "content.extract",
         "category": "Data",
         "defaults": {},
-        "description": "Extract content data từ XML màn hình hiện tại qua agent-boot extra-data. entity: 'posts' — parse post card (author/text/timestamp/reactions/comments/shares/post_type/image_desc/comment_preview); 'comments' — parse comment rows + stats trong comment view/feed preview; 'groups'/'pages' — cào kết quả tìm kiếm và lưu vào external entity catalog; 'text_nodes' — thu thập text node vào context['text_nodes']. platform: facebook|instagram|tiktok|linkedin, hoặc 'auto' (mặc định) để agent-boot tự nhận diện parser theo app đang mở. extract_profile: balanced|aggressive|safe hoặc ${VAR} (áp defaults scan params). entity_version: lock behavior parser/runtime (vd: comments:v1). stop_if_no_new (bool, default False): set ctx['_break']=True khi không có bài mới trong no_new_threshold (default 3) lần scroll liên tiếp — dùng bên trong step 'loop'. expand_see_more (bool, default True): tự tap nút 'See more'/'Xem thêm' trước khi parse. open_post_before_extract (entity=posts): mở màn chi tiết bài trước extract. open_post_press_back_after_extract: tự Back sau extract; với entity=comments chỉ back khi còn ở comment sheet. entity=comments supports bounded crawl tuning: max_items, comment_scroll_passes, comment_swipes_per_dump, comment_max_snapshots, comment_scroll_wall_s. Nếu set collection/platform/content_type/dedupe_field thì agent-boot sẽ ghi trực tiếp vào content DB. ⚠ Dùng với step 'loop' (không phải 'repeat') để stop_if_no_new hoạt động.",
-        "display_name": "Extract Content",
-        "fields": [
-          {
-            "advanced": false,
-            "depends_on": [],
-            "description": "",
-            "group": "runTarget",
-            "label": "Run on",
-            "name": "platform",
-            "options": [],
-            "placeholder": "",
-            "required": true,
-            "type": "provider",
-            "visible_when": {}
-          },
-          {
-            "advanced": false,
-            "depends_on": ["platform"],
-            "description": "",
-            "group": "target",
-            "label": "What to extract",
-            "name": "entity",
-            "options": [],
-            "placeholder": "",
-            "required": true,
-            "type": "select",
-            "visible_when": {}
-          },
-          {
-            "advanced": false,
-            "depends_on": [],
-            "description": "",
-            "group": "options",
-            "label": "Save to collection",
-            "name": "collection",
-            "options": [],
-            "placeholder": "",
-            "required": false,
-            "type": "text",
-            "visible_when": {}
-          }
-        ],
+        "description": "Extract content data từ XML màn hình hiện tại qua agent-boot extra-data. entity: 'posts' — parse post card (author/text/timestamp/reactions/comments/shares/post_type/image_desc/comment_preview); 'comments' — parse comment rows + stats trong comment view/feed preview; 'groups'/'pages' — cào kết quả tìm kiếm và lưu vào external entity catalog; 'text_nodes' — thu thập text node vào context['text_nodes']. platform: tên platform hoặc 'auto' (mặc định) để agent-boot tự nhận diện parser theo app đang mở. extract_profile: balanced|aggressive|safe hoặc ${VAR} (áp defaults scan params). entity_version: lock behavior parser/runtime (vd: comments:v1). stop_if_no_new (bool, default False): set ctx['_break']=True khi không có bài mới trong no_new_threshold (default 3) lần scroll liên tiếp — dùng bên trong step 'loop'. expand_see_more (bool, default True): tự tap nút 'See more'/'Xem thêm' trước khi parse. open_post_before_extract (entity=posts): mở màn chi tiết bài trước extract. open_post_press_back_after_extract: tự Back sau extract; với entity=comments chỉ back khi còn ở comment sheet. entity=comments supports bounded crawl tuning: max_items, comment_scroll_passes, comment_swipes_per_dump, comment_max_snapshots, comment_scroll_wall_s. Nếu set collection/platform/content_type/dedupe_field thì agent-boot sẽ ghi trực tiếp vào content DB. ⚠ Dùng với step 'loop' (không phải 'repeat') để stop_if_no_new hoạt động.",
+        "display_name": "Extract",
+        "fields": [],
         "legacy": {},
         "node_type": "extract",
         "optional": [
@@ -2383,36 +1620,11 @@
           "comment_stop_if_no_new",
           "comment_no_new_threshold"
         ],
-        "presets": [
-          {
-            "defaults": {
-              "content_type": "fb_post",
-              "entity": "posts",
-              "platform": "facebook",
-              "type": "extract"
-            },
-            "description": "Preset for extracting provider posts.",
-            "display_name": "Extract Posts",
-            "id": "extract_posts",
-            "runtime_step_type": "extract"
-          },
-          {
-            "defaults": {
-              "content_type": "fb_comment",
-              "entity": "comments",
-              "platform": "facebook",
-              "type": "extract"
-            },
-            "description": "Preset for extracting comments from the active content.",
-            "display_name": "Extract Comments",
-            "id": "extract_comments",
-            "runtime_step_type": "extract"
-          }
-        ],
+        "presets": [],
         "required": ["entity"],
         "required_any": [],
         "runtime_step_type": "extract",
-        "schema_version": 2
+        "schema_version": 1
       },
       {
         "category": "Control Flow",
@@ -2723,382 +1935,7 @@
         "schema_version": 1
       }
     ],
-    "providers": [
-      {
-        "capabilities": {
-          "platform.session.check": {
-            "execution_mode": "adapter_code",
-            "facets": {
-              "login_state_markers": "facebook_readiness",
-              "session_surface": "facebook_app"
-            },
-            "generic_recipes": [],
-            "provider_fields": [],
-            "status": "active",
-            "unsupported_reason": ""
-          },
-          "social.comments.open": {
-            "execution_mode": "adapter_code",
-            "facets": {
-              "comment_filter_modes": [
-                "most_relevant",
-                "newest",
-                "all_comments"
-              ],
-              "comment_surface": "overlay",
-              "locator_strategy": "facebook_comment_button"
-            },
-            "generic_recipes": [],
-            "provider_fields": [
-              {
-                "advanced": true,
-                "group": "provider",
-                "label": "Comment ordering",
-                "name": "comment_filter",
-                "options": ["most_relevant", "newest", "all_comments"],
-                "type": "select"
-              }
-            ],
-            "status": "active",
-            "unsupported_reason": ""
-          },
-          "social.community.membership": {
-            "execution_mode": "adapter_code",
-            "facets": {
-              "community_surface": "group",
-              "membership_state": "member_or_pending"
-            },
-            "generic_recipes": [],
-            "provider_fields": [],
-            "status": "active",
-            "unsupported_reason": ""
-          },
-          "social.connection.request": {
-            "execution_mode": "adapter_code",
-            "facets": {
-              "connection_kind": "friend_request",
-              "profile_surface": "facebook_profile"
-            },
-            "generic_recipes": [],
-            "provider_fields": [],
-            "status": "active",
-            "unsupported_reason": ""
-          },
-          "social.connections.sync": {
-            "execution_mode": "adapter_code",
-            "facets": {
-              "connection_kind": "friend_request",
-              "metric": "friends"
-            },
-            "generic_recipes": [],
-            "provider_fields": [],
-            "status": "active",
-            "unsupported_reason": ""
-          },
-          "social.content.interact": {
-            "execution_mode": "adapter_code",
-            "facets": {
-              "comment_surface": "overlay",
-              "content_actions": ["like", "comment", "share"]
-            },
-            "generic_recipes": [],
-            "provider_fields": [],
-            "status": "active",
-            "unsupported_reason": ""
-          },
-          "social.content.scan": {
-            "execution_mode": "adapter_code",
-            "facets": {
-              "comment_surface": "overlay",
-              "content_surface": "feed_or_group",
-              "profile_surface": "facebook_profile"
-            },
-            "generic_recipes": [],
-            "provider_fields": [],
-            "status": "active",
-            "unsupported_reason": ""
-          },
-          "social.target.lease": {
-            "execution_mode": "generic_recipe",
-            "facets": {
-              "connection_kind": "friend_request"
-            },
-            "generic_recipes": ["database_lease"],
-            "provider_fields": [],
-            "status": "active",
-            "unsupported_reason": ""
-          },
-          "social.target.select": {
-            "execution_mode": "adapter_code",
-            "facets": {
-              "locator_strategy": "facebook_hierarchy",
-              "post_surface": "facebook_post_detail",
-              "profile_surface": "facebook_profile",
-              "target_type": "person_or_post"
-            },
-            "generic_recipes": [],
-            "provider_fields": [],
-            "status": "active",
-            "unsupported_reason": ""
-          },
-          "social.visible_people.connect": {
-            "execution_mode": "adapter_code",
-            "facets": {
-              "common_context_markers": "mutual_friends_or_group",
-              "connection_kind": "friend_request"
-            },
-            "generic_recipes": [],
-            "provider_fields": [],
-            "status": "active",
-            "unsupported_reason": ""
-          }
-        },
-        "capability_schemas": {
-          "platform.session.check": {
-            "facets": ["session_surface", "login_state_markers"],
-            "id": "platform.session.check",
-            "input_schema_version": 1,
-            "mutates_platform_state": false,
-            "output_schema_version": 1,
-            "requires_account": false,
-            "safe_generic_recipes": [],
-            "step_types": ["platform_session_gate"]
-          },
-          "social.comments.open": {
-            "facets": [
-              "comment_surface",
-              "comment_filter_modes",
-              "locator_strategy"
-            ],
-            "id": "social.comments.open",
-            "input_schema_version": 1,
-            "mutates_platform_state": false,
-            "output_schema_version": 1,
-            "requires_account": false,
-            "safe_generic_recipes": [],
-            "step_types": [
-              "social_open_comments",
-              "social_find_comment_button",
-              "social_tap_comment_target",
-              "social_apply_comment_filter"
-            ]
-          },
-          "social.community.membership": {
-            "facets": ["community_surface", "membership_state"],
-            "id": "social.community.membership",
-            "input_schema_version": 1,
-            "mutates_platform_state": true,
-            "output_schema_version": 1,
-            "requires_account": true,
-            "safe_generic_recipes": [],
-            "step_types": ["community_membership"]
-          },
-          "social.connection.request": {
-            "facets": ["connection_kind", "profile_surface"],
-            "id": "social.connection.request",
-            "input_schema_version": 1,
-            "mutates_platform_state": true,
-            "output_schema_version": 1,
-            "requires_account": true,
-            "safe_generic_recipes": [],
-            "step_types": ["connection_request"]
-          },
-          "social.connections.sync": {
-            "facets": ["connection_kind", "metric"],
-            "id": "social.connections.sync",
-            "input_schema_version": 1,
-            "mutates_platform_state": false,
-            "output_schema_version": 1,
-            "requires_account": true,
-            "safe_generic_recipes": [],
-            "step_types": ["social_sync_connections"]
-          },
-          "social.content.interact": {
-            "facets": ["content_actions", "comment_surface"],
-            "id": "social.content.interact",
-            "input_schema_version": 1,
-            "mutates_platform_state": true,
-            "output_schema_version": 1,
-            "requires_account": true,
-            "safe_generic_recipes": [],
-            "step_types": ["content_interaction"]
-          },
-          "social.content.scan": {
-            "facets": ["content_surface", "comment_surface", "profile_surface"],
-            "id": "social.content.scan",
-            "input_schema_version": 1,
-            "mutates_platform_state": true,
-            "output_schema_version": 1,
-            "requires_account": true,
-            "safe_generic_recipes": [],
-            "step_types": [
-              "social_scan_posts_interact",
-              "social_open_author_from_post_match",
-              "social_open_commenter_from_post_match"
-            ]
-          },
-          "social.target.lease": {
-            "facets": ["target_entity", "connection_kind"],
-            "id": "social.target.lease",
-            "input_schema_version": 1,
-            "mutates_platform_state": false,
-            "output_schema_version": 1,
-            "requires_account": true,
-            "safe_generic_recipes": ["database_lease"],
-            "step_types": ["lease_connection_candidate"]
-          },
-          "social.target.select": {
-            "facets": [
-              "target_type",
-              "locator_strategy",
-              "profile_surface",
-              "post_surface"
-            ],
-            "id": "social.target.select",
-            "input_schema_version": 1,
-            "mutates_platform_state": false,
-            "output_schema_version": 1,
-            "requires_account": false,
-            "safe_generic_recipes": [],
-            "step_types": ["social_select_target"]
-          },
-          "social.visible_people.connect": {
-            "facets": ["connection_kind", "common_context_markers"],
-            "id": "social.visible_people.connect",
-            "input_schema_version": 1,
-            "mutates_platform_state": true,
-            "output_schema_version": 1,
-            "requires_account": true,
-            "safe_generic_recipes": [],
-            "step_types": ["social_connect_visible_people"]
-          }
-        },
-        "content_types": [
-          {
-            "code": "fb_post",
-            "description": "Facebook post extracted and persisted by agent-boot extra_data",
-            "object_type": "post",
-            "persisted_in_device_farm": false,
-            "raw_data_owner": "agent-boot",
-            "storage_owner": "agent-boot"
-          },
-          {
-            "code": "fb_comment",
-            "description": "Facebook comment extracted and persisted by agent-boot extra_data",
-            "object_type": "comment",
-            "persisted_in_device_farm": false,
-            "raw_data_owner": "agent-boot",
-            "storage_owner": "agent-boot"
-          }
-        ],
-        "coverage": "L2 Active",
-        "enabled_by_default": true,
-        "entities": ["posts", "comments", "groups", "pages"],
-        "name": "facebook",
-        "step_types": [
-          "platform_session_gate",
-          "lease_connection_candidate",
-          "content_interaction",
-          "connection_request",
-          "community_membership",
-          "social_select_target",
-          "social_connect_visible_people",
-          "social_open_comments",
-          "social_find_comment_button",
-          "social_tap_comment_target",
-          "social_apply_comment_filter",
-          "social_scan_posts_interact",
-          "social_open_author_from_post_match",
-          "social_open_commenter_from_post_match",
-          "social_sync_connections"
-        ],
-        "version": "2.0.0"
-      },
-      {
-        "capabilities": {},
-        "capability_schemas": {},
-        "content_types": [
-          {
-            "code": "ig_comment",
-            "description": "instagram comment draft payload owned by agent-boot",
-            "object_type": "comment",
-            "persisted_in_device_farm": false,
-            "raw_data_owner": "agent-boot",
-            "storage_owner": "agent-boot"
-          },
-          {
-            "code": "ig_post",
-            "description": "instagram post draft payload owned by agent-boot",
-            "object_type": "post",
-            "persisted_in_device_farm": false,
-            "raw_data_owner": "agent-boot",
-            "storage_owner": "agent-boot"
-          }
-        ],
-        "coverage": "Draft",
-        "enabled_by_default": false,
-        "entities": ["posts", "comments"],
-        "name": "instagram",
-        "step_types": [],
-        "version": "0.1.0"
-      },
-      {
-        "capabilities": {},
-        "capability_schemas": {},
-        "content_types": [
-          {
-            "code": "threads_comment",
-            "description": "threads comment draft payload owned by agent-boot",
-            "object_type": "comment",
-            "persisted_in_device_farm": false,
-            "raw_data_owner": "agent-boot",
-            "storage_owner": "agent-boot"
-          },
-          {
-            "code": "threads_post",
-            "description": "threads post draft payload owned by agent-boot",
-            "object_type": "post",
-            "persisted_in_device_farm": false,
-            "raw_data_owner": "agent-boot",
-            "storage_owner": "agent-boot"
-          }
-        ],
-        "coverage": "Draft",
-        "enabled_by_default": false,
-        "entities": ["posts", "comments"],
-        "name": "threads",
-        "step_types": [],
-        "version": "0.1.0"
-      },
-      {
-        "capabilities": {},
-        "capability_schemas": {},
-        "content_types": [
-          {
-            "code": "tiktok_comment",
-            "description": "tiktok comment draft payload owned by agent-boot",
-            "object_type": "comment",
-            "persisted_in_device_farm": false,
-            "raw_data_owner": "agent-boot",
-            "storage_owner": "agent-boot"
-          },
-          {
-            "code": "tiktok_video",
-            "description": "tiktok video draft payload owned by agent-boot",
-            "object_type": "video",
-            "persisted_in_device_farm": false,
-            "raw_data_owner": "agent-boot",
-            "storage_owner": "agent-boot"
-          }
-        ],
-        "coverage": "Draft",
-        "enabled_by_default": false,
-        "entities": ["posts", "comments"],
-        "name": "tiktok",
-        "step_types": [],
-        "version": "0.1.0"
-      }
-    ],
+    "providers": [],
     "schema_version": 1
   },
   "scenario": {
@@ -3143,24 +1980,8 @@
     "repeat_until",
     "if_element",
     "if_variable",
-    "social_open_comments",
-    "social_find_comment_button",
-    "social_tap_comment_target",
-    "social_apply_comment_filter",
-    "social_select_target",
-    "social_connect_visible_people",
-    "social_scan_posts_interact",
-    "social_open_author_from_post_match",
-    "social_open_commenter_from_post_match",
-    "social_sync_connections",
-    "content_interaction",
-    "connection_request",
-    "lease_connection_candidate",
-    "lease_source_target",
-    "community_membership",
     "random_pick",
     "run_scenario",
-    "use_source_pool",
     "extract",
     "loop",
     "break_if",
@@ -3337,7 +2158,7 @@
       "required": []
     },
     "extract": {
-      "description": "Extract content data từ XML màn hình hiện tại qua agent-boot extra-data. entity: 'posts' — parse post card (author/text/timestamp/reactions/comments/shares/post_type/image_desc/comment_preview); 'comments' — parse comment rows + stats trong comment view/feed preview; 'groups'/'pages' — cào kết quả tìm kiếm và lưu vào external entity catalog; 'text_nodes' — thu thập text node vào context['text_nodes']. platform: facebook|instagram|tiktok|linkedin, hoặc 'auto' (mặc định) để agent-boot tự nhận diện parser theo app đang mở. extract_profile: balanced|aggressive|safe hoặc ${VAR} (áp defaults scan params). entity_version: lock behavior parser/runtime (vd: comments:v1). stop_if_no_new (bool, default False): set ctx['_break']=True khi không có bài mới trong no_new_threshold (default 3) lần scroll liên tiếp — dùng bên trong step 'loop'. expand_see_more (bool, default True): tự tap nút 'See more'/'Xem thêm' trước khi parse. open_post_before_extract (entity=posts): mở màn chi tiết bài trước extract. open_post_press_back_after_extract: tự Back sau extract; với entity=comments chỉ back khi còn ở comment sheet. entity=comments supports bounded crawl tuning: max_items, comment_scroll_passes, comment_swipes_per_dump, comment_max_snapshots, comment_scroll_wall_s. Nếu set collection/platform/content_type/dedupe_field thì agent-boot sẽ ghi trực tiếp vào content DB. ⚠ Dùng với step 'loop' (không phải 'repeat') để stop_if_no_new hoạt động.",
+      "description": "Extract content data từ XML màn hình hiện tại qua agent-boot extra-data. entity: 'posts' — parse post card (author/text/timestamp/reactions/comments/shares/post_type/image_desc/comment_preview); 'comments' — parse comment rows + stats trong comment view/feed preview; 'groups'/'pages' — cào kết quả tìm kiếm và lưu vào external entity catalog; 'text_nodes' — thu thập text node vào context['text_nodes']. platform: tên platform hoặc 'auto' (mặc định) để agent-boot tự nhận diện parser theo app đang mở. extract_profile: balanced|aggressive|safe hoặc ${VAR} (áp defaults scan params). entity_version: lock behavior parser/runtime (vd: comments:v1). stop_if_no_new (bool, default False): set ctx['_break']=True khi không có bài mới trong no_new_threshold (default 3) lần scroll liên tiếp — dùng bên trong step 'loop'. expand_see_more (bool, default True): tự tap nút 'See more'/'Xem thêm' trước khi parse. open_post_before_extract (entity=posts): mở màn chi tiết bài trước extract. open_post_press_back_after_extract: tự Back sau extract; với entity=comments chỉ back khi còn ở comment sheet. entity=comments supports bounded crawl tuning: max_items, comment_scroll_passes, comment_swipes_per_dump, comment_max_snapshots, comment_scroll_wall_s. Nếu set collection/platform/content_type/dedupe_field thì agent-boot sẽ ghi trực tiếp vào content DB. ⚠ Dùng với step 'loop' (không phải 'repeat') để stop_if_no_new hoạt động.",
       "optional": [
         "stop_if_no_new",
         "no_new_threshold",
@@ -3533,7 +2354,7 @@
       "required": []
     },
     "login_if_needed": {
-      "description": "Profile-driven login. Detects logged-in state first, fills login_recipe fields from account/scenario/variables/secret references, then submits. Optional login_recipe.post_submit_actions can navigate intermediate 2FA screens before post_submit_fields such as account.totp_code are entered.",
+      "description": "Profile-driven login. Detects logged-in state first, fills login_recipe fields from account/scenario/variables/secret references, then submits. Optional login_recipe.post_submit_actions can navigate intermediate 2FA screens before post_submit_fields such as account.totp_code are entered. Profile-declared login_recipe.manual_challenges can pause for reusable operator input without binding the executor to one platform or app.",
       "optional": ["profile", "clear_first", "implicit_wait"],
       "required": []
     },
@@ -3684,7 +2505,7 @@
       "required": ["data_var"]
     },
     "scroll_down": {
-      "description": "Vuốt xuống N lần (mặc định 1). start_x_ratio (0–1, mặc định 0.5): neo ngang — dùng ~0.15–0.25 để tránh vuốt xuyên ảnh full-width ở giữa feed Facebook. start_y_ratio/end_y_ratio/duration_ms/pause_seconds: tinh chỉnh gesture.",
+      "description": "Vuốt xuống N lần (mặc định 1). start_x_ratio (0–1, mặc định 0.5): neo ngang — dùng ~0.15–0.25 để tránh vuốt xuyên ảnh full-width ở giữa feed. start_y_ratio/end_y_ratio/duration_ms/pause_seconds: tinh chỉnh gesture.",
       "optional": [
         "repeats",
         "start_x_ratio",
@@ -3828,7 +2649,7 @@
       "required": []
     },
     "social_open_comments": {
-      "description": "Atomic step: tìm + tap nút 'Bình luận' topmost trong feed, tự set parent context cho extract entity=comments. platform: mặc định facebook. then: steps chạy khi tap thành công. else: chạy khi không tap được. comment_filter: most_relevant | newest | all_comments (hoặc none để giữ mặc định của app). Legacy switch_to_all_comments=false tắt đổi filter; true (default) = all_comments.",
+      "description": "Atomic step: tìm + tap nút 'Bình luận' topmost trong feed, tự set parent context cho extract entity=comments. platform: mặc định auto. then: steps chạy khi tap thành công. else: chạy khi không tap được. comment_filter: most_relevant | newest | all_comments (hoặc none để giữ mặc định của app). Legacy switch_to_all_comments=false tắt đổi filter; true (default) = all_comments.",
       "optional": [
         "platform",
         "timeout",
@@ -3877,7 +2698,7 @@
       "required": []
     },
     "social_select_target": {
-      "description": "Agent-boot resolver: score search results for the platform, open one verified target, and save the target proof. target_type: 'person' (default, uses display_name/profile_wait_s) or 'post' (uses display_text/detail_wait_s/current_detail). platform defaults to facebook.",
+      "description": "Agent-boot resolver: score search results for the platform, open one verified target, and save the target proof. target_type: 'person' (default, uses display_name/profile_wait_s) or 'post' (uses display_text/detail_wait_s/current_detail). platform defaults to auto.",
       "optional": [
         "platform",
         "target_type",
@@ -4011,7 +2832,7 @@
       ]
     },
     "tap_xml_match": {
-      "description": "Dump UI XML fresh, find first node by attr contains/equals, then tap center from bounds. Useful for Facebook result rows whose u2 selector surface is unstable.",
+      "description": "Dump UI XML fresh, find first node by attr contains/equals, then tap center from bounds. Useful for result rows whose u2 selector surface is unstable.",
       "optional": [
         "attr",
         "by",
@@ -4026,7 +2847,7 @@
       "required_any": [["contains", "equals", "value"]]
     },
     "use_source_pool": {
-      "description": "Khai báo nguồn dữ liệu dùng cho campaign dispatch. Mặc định dùng external_entities facebook/group đã cào; mỗi device nhận một nguồn qua biến TARGET_* và alias theo output_prefix.",
+      "description": "Khai báo nguồn dữ liệu dùng cho campaign dispatch. Mặc định dùng external_entities theo platform/entity đã chọn; mỗi device nhận một nguồn qua biến TARGET_* và alias theo output_prefix.",
       "optional": [
         "platform",
         "entity_type",

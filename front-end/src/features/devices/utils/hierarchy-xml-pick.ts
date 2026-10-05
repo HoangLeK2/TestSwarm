@@ -49,12 +49,12 @@ export type HierarchyPickOptions = {
 
 const BOUNDS_RE = /\[(\d+),(\d+)\]\[(\d+),(\d+)\]/;
 
-/** FB group page shells embed feed inside a row whose content-desc is the group header. */
-const FB_GROUP_HEADER_DESC_RE =
+/** Group page shells may embed content inside a row whose description is the group header. */
+const GROUP_HEADER_DESC_RE =
   /\b(thành viên|members|Công khai|Public|Nhóm công khai|private group|Private)\b/i;
 
-function isFbGroupHeaderDescription(desc: string): boolean {
-  return FB_GROUP_HEADER_DESC_RE.test(desc.trim());
+function isGroupHeaderDescription(desc: string): boolean {
+  return GROUP_HEADER_DESC_RE.test(desc.trim());
 }
 
 function nodeBoundsArea(n: Element): number {
@@ -89,7 +89,7 @@ type Sel = {
 /**
  * Rank every node whose bounds contain (rx,ry) into selector picks, best first.
  *
- * FB-safe picking:
+ * Stable picking:
  *   1. Drop system UI chrome; keep the foreground app package.
  *   2. Prefer deep semantic nodes (content-desc / text) over layout shells.
  *   3. Build the selector from the deepest semantic anchor, not a shallow ancestor.
@@ -214,7 +214,7 @@ export function listSelectorCandidatesInXml(
       if (!s || s.by === 'xpath' || s.by === 'class name') continue;
       if (s.by === 'description') {
         const desc = (n.getAttribute('content-desc') ?? '').trim();
-        if (isFbGroupHeaderDescription(desc)) continue;
+        if (isGroupHeaderDescription(desc)) continue;
       }
       const score = scoreSelectorAnchor(n, s);
       if (!best || score > best.score) {
@@ -269,7 +269,7 @@ export function listSelectorCandidatesInXml(
         const desc = (n.getAttribute('content-desc') ?? '').trim();
         const area = nodeBoundsArea(n);
         if (
-          isFbGroupHeaderDescription(desc) &&
+          isGroupHeaderDescription(desc) &&
           startArea > 0 &&
           area > startArea * 2
         ) {

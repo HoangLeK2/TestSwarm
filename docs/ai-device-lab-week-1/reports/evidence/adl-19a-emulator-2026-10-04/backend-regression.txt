@@ -1,0 +1,4 @@
+focused command: backend/.venv/bin/pytest -q tests/test_ai_lab_hygiene_api.py tests/test_ai_lab_fleet.py tests/test_ai_lab_lifecycle.py tests/test_ai_device_lab_api_e2e.py
+focused result: 16 passed in 5.83s
+full command: backend/.venv/bin/pytest -q tests/test_ai_lab*.py tests/test_ai_device_lab*.py
+full result: 90 passed, 1 skipped, 2 warnings in 20.95s

@@ -1,0 +1,15 @@
+{
+  "concurrency": 12,
+  "contract": "12 logical lanes x 14 days = 168 control-plane inspections",
+  "http_200": 168,
+  "latency_ms": {
+    "max": 139.926,
+    "median": 24.086,
+    "min": 18.485,
+    "p95": 131.276
+  },
+  "requests": 168,
+  "succeeded_state": 168,
+  "throughput_rps": 363.596,
+  "wall_ms": 462.052
+}

@@ -1,0 +1,2 @@
+  mCurrentFocus=Window{7e67bc u0 com.android.settings/com.android.settings.homepage.SettingsHomepageActivity}
+  mFocusedApp=ActivityRecord{86da991 u0 com.android.settings/.homepage.SettingsHomepageActivity t8}

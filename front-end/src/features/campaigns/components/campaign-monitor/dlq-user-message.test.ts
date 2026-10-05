@@ -35,7 +35,7 @@ test('humanizeDlqMessage maps u2 transient extra_data inside loop', () => {
 
 test('humanizeDlqMessage maps no relay inside loop', () => {
   const out = humanizeDlqMessage(
-    "run_scenario: sub-scenario 'b5752658-9cef-42cb-bb03-e7f82de05c92' failed — loop: iteration 44 failed — edge extra_data fb_posts: no relay for device (start agent-boot relay and ensure device is registered)",
+    "run_scenario: sub-scenario 'b5752658-9cef-42cb-bb03-e7f82de05c92' failed — loop: iteration 44 failed — edge extra_data posts: no relay for device (start agent-boot relay and ensure device is registered)",
     t
   );
   assert.ok(out.summary.includes('Vòng 44'));

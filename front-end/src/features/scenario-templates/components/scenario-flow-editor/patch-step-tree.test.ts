@@ -19,7 +19,7 @@ const fbGroupLoop: FlowStep = {
         {
           type: 'extract',
           entity: 'comments',
-          platform: 'facebook',
+          platform: 'instagram',
           _fgId: 'extract-node',
           max_items: 500
         }
@@ -33,7 +33,7 @@ test('patchStepByFlowgramId updates extract inside social_open_comments then bra
   const next = patchStepByFlowgramId([fbGroupLoop], 'extract-node', {
     type: 'extract',
     entity: 'comments',
-    platform: 'facebook',
+    platform: 'instagram',
     max_items: 120,
     comment_scroll_passes: 12
   } as FlowStep);

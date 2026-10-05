@@ -2145,7 +2145,7 @@ export function StepDetailPanel({
                     !runtimeContext?.accountLabel ? (
                       <SessionGateAccountBinder
                         deviceId={runtimeContext?.deviceId ?? null}
-                        platform={step.platform ?? 'facebook'}
+                        platform={step.platform ?? 'auto'}
                       />
                     ) : null}
                   </div>
@@ -3537,7 +3537,7 @@ export function StepDetailPanel({
                       </code>
                       →
                       <code className='mx-1 rounded bg-amber-100 px-1 dark:bg-amber-900/50'>
-                        extract fb_comments
+                        extract comments
                       </code>
                       .
                     </div>
@@ -4729,7 +4729,7 @@ export function StepDetailPanel({
                     <F label={t('saveExtraction.platformLabel')}>
                       <Input
                         className='h-8 text-xs'
-                        placeholder='facebook'
+                        placeholder='platform'
                         value={step.platform ?? ''}
                         onChange={(e) =>
                           update({ platform: e.target.value || undefined })
@@ -4739,7 +4739,7 @@ export function StepDetailPanel({
                     <F label={t('saveExtraction.contentTypeLabel')}>
                       <Input
                         className='h-8 text-xs'
-                        placeholder='fb_post'
+                        placeholder='platform_content_type'
                         value={step.content_type ?? ''}
                         onChange={(e) =>
                           update({ content_type: e.target.value || undefined })
@@ -4877,9 +4877,9 @@ export function StepDetailPanel({
                     <F label='Platform'>
                       <Input
                         className='h-8 text-xs'
-                        value={step.platform ?? 'facebook'}
+                        value={step.platform ?? 'auto'}
                         onChange={(e) =>
-                          update({ platform: e.target.value || 'facebook' })
+                          update({ platform: e.target.value || 'auto' })
                         }
                       />
                     </F>
@@ -4957,9 +4957,9 @@ export function StepDetailPanel({
                     <F label={t('leaseTarget.platform')}>
                       <Input
                         className='h-8 text-xs'
-                        value={step.platform ?? 'facebook'}
+                        value={step.platform ?? 'auto'}
                         onChange={(event) =>
-                          update({ platform: event.target.value || 'facebook' })
+                          update({ platform: event.target.value || 'auto' })
                         }
                       />
                     </F>

@@ -101,8 +101,8 @@ test('foldEventsToStepLog attaches incident events to the owning step', () => {
       execution_id: 'exec-1',
       payload: {
         step_index: 2,
-        step_type: 'fb_comment',
-        incident_type: 'facebook_popup',
+        step_type: 'ig_comment',
+        incident_type: 'app_popup',
         confidence: 0.9,
         matched_rule: true
       }
@@ -113,7 +113,7 @@ test('foldEventsToStepLog attaches incident events to the owning step', () => {
       execution_id: 'exec-1',
       payload: {
         step_index: 2,
-        step_type: 'fb_comment',
+        step_type: 'ig_comment',
         message: 'ok'
       }
     } as any
@@ -121,10 +121,10 @@ test('foldEventsToStepLog attaches incident events to the owning step', () => {
 
   assert.equal(rows.length, 1);
   assert.equal(rows[0].index, 2);
-  assert.equal(rows[0].step_type, 'fb_comment');
+  assert.equal(rows[0].step_type, 'ig_comment');
   assert.equal(rows[0].incidents?.length, 1);
   assert.equal(rows[0].incidents?.[0]?.event_type, 'incident.detected');
-  assert.equal(rows[0].incidents?.[0]?.incident_type, 'facebook_popup');
+  assert.equal(rows[0].incidents?.[0]?.incident_type, 'app_popup');
   assert.equal(rows[0].incidents?.[0]?.matched_rule, true);
 });
 
@@ -301,7 +301,7 @@ test('foldEventsToStepLog keeps recovery scenario metadata on incident events', 
       execution_id: 'exec-1',
       payload: {
         step_index: 4,
-        step_type: 'fb_comment',
+        step_type: 'ig_comment',
         incident_type: 'profile_page',
         attempt: 2,
         scenario_id: 'main-scenario',

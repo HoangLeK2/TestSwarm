@@ -1,0 +1,11 @@
+{
+  "checked_at": "2026-10-04T10:51:04.734933+00:00",
+  "elapsed_since_registration_seconds": 2286.115,
+  "hierarchy_bytes": 7840,
+  "hierarchy_sha256": "05c643045ba0b598b5b1d71683a4eb150270050b7e11940da72706565855fbbd",
+  "http_status": 200,
+  "latency_ms": 187.2,
+  "serial": "emulator-5580",
+  "target_type": "emulator",
+  "watchdog_dead_threshold_seconds": 120
+}

@@ -543,11 +543,7 @@ function requiredCommentFlowStep(type: string, step: FlowStep): string | null {
   if (type === 'social_apply_comment_filter') {
     return 'social_tap_comment_target';
   }
-  if (
-    type === 'extract' &&
-    String(step.platform ?? '') === 'facebook' &&
-    String(step.entity ?? '') === 'comments'
-  ) {
+  if (type === 'extract' && String(step.entity ?? '') === 'comments') {
     return 'social_apply_comment_filter';
   }
   return null;

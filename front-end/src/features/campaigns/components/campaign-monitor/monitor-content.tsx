@@ -22,8 +22,6 @@ import { ArtifactPanel } from './artifact-panel';
 import { DlqPanel } from './dlq-panel';
 import { MonitorFailureBanner } from './monitor-failure-banner';
 import { Z_CAMPAIGN_MONITOR_FLOATING } from '@/lib/z-index';
-import { isContinuousCrawl } from '../../lib/continuous-crawl-monitor';
-import { ContinuousCrawlDashboard } from './continuous-crawl-dashboard';
 
 interface Props {
   campaignId: string;
@@ -145,8 +143,7 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
   const [deviceFilter, setDeviceFilter] = useState('');
   const { data: campaign, isLoading: isCampaignLoading } =
     useCampaign(campaignId);
-  const continuous = isContinuousCrawl(campaign?.vars ?? campaign?.variables);
-  const pollStandardMonitor = !!campaign && isRunning && !continuous;
+  const pollStandardMonitor = !!campaign && isRunning;
   const { data, isLoading } = useCampaignWorkflows(
     campaignId,
     pollStandardMonitor
@@ -169,7 +166,7 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
     [filteredWorkflows]
   );
 
-  if (isCampaignLoading || (!continuous && isRunning && isLoading)) {
+  if (isCampaignLoading || (isRunning && isLoading)) {
     return (
       <div className='flex items-center justify-center py-12 text-sm text-muted-foreground'>
         {t('loading')}
@@ -186,23 +183,9 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
         onDeviceChange={setDeviceFilter}
       />
     ) : null;
-  const crawlDashboard = (
-    <ContinuousCrawlDashboard campaignId={campaignId} enabled={continuous} />
-  );
-
-  if (continuous) {
-    return (
-      <div>
-        {crawlDashboard}
-        <MonitorSidePanels campaignId={campaignId} pollAggressive={isRunning} />
-      </div>
-    );
-  }
-
   if (isRunning && data && !data.temporal_available && workflows.length === 0) {
     return (
       <div>
-        {crawlDashboard}
         <p className='border-b px-6 py-3 text-sm text-muted-foreground'>
           {t('monitorTemporalUnavailableMessage')}
         </p>
@@ -215,7 +198,6 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
   if (workflows.length === 0) {
     return (
       <div>
-        {crawlDashboard}
         <p className='border-b px-6 py-3 text-sm text-muted-foreground'>
           {t('monitorNoRunningWorkflowsMessage')}
         </p>
@@ -226,7 +208,6 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
 
   return (
     <div>
-      {crawlDashboard}
       <MonitorFailureBanner workflows={workflows} />
       {filterBar}
       <div className='divide-y'>

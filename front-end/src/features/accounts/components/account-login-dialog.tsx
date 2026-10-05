@@ -57,14 +57,13 @@ type ManualInputChallenge = {
 };
 
 /**
- * Session-gate refusals that are an operator problem, not a bug. The gate
- * refuses to log in when the phone is already showing a signed-in Facebook it
- * cannot attribute to this account — right call, useless message. Both codes
- * mean the same thing to whoever clicked the button: log the phone out first.
+ * Session-gate refusals that are an operator problem. Both codes mean the
+ * device has an active session that cannot be attributed to this account, so
+ * the operator must clear that session first.
  */
 const GATE_HINT_REASONS = [
-  'facebook_session_account_mismatch',
-  'facebook_ready_without_matching_provenance'
+  '_session_account_mismatch',
+  '_ready_without_matching_provenance'
 ];
 
 export function AccountLoginDialog({

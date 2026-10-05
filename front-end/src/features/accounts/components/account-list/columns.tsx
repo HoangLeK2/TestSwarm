@@ -233,7 +233,9 @@ export function getAccountColumns(
       cell: ({ row }) => (
         <span className='text-sm'>
           {row.original.assigned_device_name || (
-            <span className='text-muted-foreground'>{t('phoneUnassigned')}</span>
+            <span className='text-muted-foreground'>
+              {t('phoneUnassigned')}
+            </span>
           )}
         </span>
       )

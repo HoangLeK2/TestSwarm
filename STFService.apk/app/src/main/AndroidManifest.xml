@@ -20,7 +20,7 @@
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
-    <!-- Needed to query/launch ANY installed app (e.g. com.facebook.katana) on Android 11+.
+    <!-- Needed to query/launch any installed app on Android 11+.
          Without this, getLaunchIntentForPackage and queryIntentActivities return null
          for apps not explicitly listed in <queries>. -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />

@@ -1,0 +1,4 @@
+2026-10-04 ADL + shared campaign/runtime/watchdog regression
+120 passed, 1 skipped, 2 warnings in 18.18s
+Command: backend/.venv/bin/pytest -q tests/test_ai_lab_*.py tests/test_epic04_execution_runtime.py tests/test_campaign_pipeline_harness.py tests/test_local_emulator_watchdog.py
+Frontend: pnpm typecheck PASS; Playwright AI Device Lab 11 passed (49.9s)

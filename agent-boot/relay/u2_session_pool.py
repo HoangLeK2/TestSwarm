@@ -65,7 +65,7 @@ REAP_INTERVAL_SECONDS = max(1.0, _env_float("U2_REAP_INTERVAL_SECONDS", 30.0))
 CONNECT_TIMEOUT_SECONDS = max(1.0, _env_float("U2_CONNECT_TIMEOUT_SECONDS", 8.0))
 ALIVE_TIMEOUT_SECONDS = max(0.1, _env_float("U2_ALIVE_TIMEOUT_SECONDS", 3.0))
 HEARTBEAT_INTERVAL_SECONDS = max(1.0, _env_float("U2_HEARTBEAT_INTERVAL_SECONDS", 10.0))
-# Keep warm between rapid extra_data / tap round-trips (scrcpy can briefly kill u2d).
+# Keep warm between rapid hierarchy / tap round-trips (scrcpy can briefly kill u2d).
 HEARTBEAT_GRACE_AFTER_USE_SECONDS = max(
     0.0,
     _env_float("U2_HEARTBEAT_GRACE_AFTER_USE_SECONDS", 45.0),
@@ -92,7 +92,7 @@ RESET_UIAUTOMATOR_COOLDOWN_SECONDS = max(
     _env_float("U2_RESET_UIAUTOMATOR_COOLDOWN_SECONDS", 30.0),
 )
 
-# When extra_data collect holds the per-serial lock, nested run_locked must not re-enter.
+# Nested operations sharing the per-serial lock must not re-enter.
 _active_session: contextvars.ContextVar[tuple[str, "_Entry"] | None] = contextvars.ContextVar(
     "u2_active_session",
     default=None,
@@ -485,7 +485,7 @@ class U2SessionPool:
         except asyncio.TimeoutError as exc:
             # wait_for raises a bare TimeoutError. Callers up the stack report
             # str(exc), so an unlabelled one reaches the operator as an empty
-            # error — see _handle_extra_data. Keep the type, add the story.
+            # error. Keep the type and add the operation context.
             raise TimeoutError(
                 f"u2 connect timed out after {CONNECT_TIMEOUT_SECONDS}s serial={serial}"
             ) from exc

@@ -1085,7 +1085,7 @@ public class WsAgentService extends android.app.Service {
                             }
                             if (i == null) {
                                 // Fallback: query all LAUNCHER activities for the package.
-                                // Some apps (e.g. Facebook) do not expose a standard launch
+                                // Some apps do not expose a standard launch
                                 // intent via getLaunchIntentForPackage on certain OEMs.
                                 Intent query = new Intent(Intent.ACTION_MAIN);
                                 query.addCategory(Intent.CATEGORY_LAUNCHER);
@@ -1235,7 +1235,7 @@ public class WsAgentService extends android.app.Service {
                 case "extra_data_xml": {
                     final String endpoint = msg.optString("endpoint", "");
                     final String requestId = msg.optString("request_id", "");
-                    final String strategy = msg.optString("strategy", "fb_posts");
+                    final String strategy = msg.optString("strategy", "");
                     final String token = msg.optString("extra_data_token", "");
                     final JSONObject context = msg.optJSONObject("context");
                     executor.submit(() -> handleExtraDataXml(endpoint, requestId, strategy, token, context));
@@ -1282,12 +1282,12 @@ public class WsAgentService extends android.app.Service {
             payload.put("schema_version", 1);
             payload.put("request_id", requestId);
             payload.put("serial", serial);
-            String serverStrategy = "fb_comment_target_tap".equals(strategy)
-                    ? "fb_comment_target"
+            String serverStrategy = "comment_target_tap".equals(strategy)
+                    ? "comment_target"
                     : strategy;
             JSONArray xmlSnapshots = new JSONArray();
             xmlSnapshots.put(xml);
-            if ("fb_comments".equals(serverStrategy)) {
+            if ("comments".equals(serverStrategy)) {
                 collectCommentXmlSnapshots(client, context, xmlSnapshots);
             }
             payload.put("strategy", serverStrategy);
@@ -1317,7 +1317,7 @@ public class WsAgentService extends android.app.Service {
                 result.put("ok", resp.isSuccessful() && ingest.optBoolean("ok", false));
                 result.put("status", resp.code());
                 result.put("ingest", ingest);
-                if ("fb_comment_target_tap".equals(strategy)
+                if ("comment_target_tap".equals(strategy)
                         && resp.isSuccessful()
                         && ingest.optBoolean("ok", false)) {
                     boolean tapped = tapResolvedCommentTarget(ingest);

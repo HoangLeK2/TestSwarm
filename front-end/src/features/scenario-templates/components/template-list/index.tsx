@@ -18,7 +18,7 @@ import { cn } from '@/lib/utils';
 import { useConfirm } from '@/providers/modal-provider';
 import { Can } from '@/features/auth';
 
-const CATEGORIES = ['all', 'general', 'facebook', 'tiktok', 'utility'] as const;
+const CATEGORIES = ['all', 'general', 'tiktok', 'utility'] as const;
 
 function humanizeTechnicalName(name: string) {
   const raw = String(name ?? '').trim();

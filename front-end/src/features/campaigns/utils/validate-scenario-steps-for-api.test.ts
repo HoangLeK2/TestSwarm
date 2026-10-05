@@ -8,7 +8,7 @@ import {
 
 test('allows if_variable to no-op on then and run login recovery from else', () => {
   const result = validateScenarioStepsForApi([
-    { type: 'launch_app', package: 'com.facebook.katana' },
+    { type: 'launch_app', package: 'com.instagram.android' },
     { type: 'platform_session_gate', phase: 'preflight' },
     {
       type: 'if_variable',
@@ -18,7 +18,7 @@ test('allows if_variable to no-op on then and run login recovery from else', () 
         {
           type: 'login_if_needed',
           profile: {
-            package: 'com.facebook.katana',
+            package: 'com.instagram.android',
             semantic_locators: {},
             login_recipe: {
               detect_logged_in: { any_text: [] },

@@ -14,7 +14,7 @@ test('prefers an active org login override over system template fallback', () =>
     is_runnable: true,
     tags: [
       'login',
-      'facebook',
+      'instagram',
       'account-login',
       'login-override',
       'system-account-login'
@@ -56,7 +56,7 @@ test('selects active login scenario by platform tag and ignores drafts', () => {
         kind: 'sequence',
         status: 'draft',
         is_runnable: true,
-        tags: ['login', 'facebook'],
+        tags: ['login', 'instagram'],
         updated_at: '2026-09-16T12:00:00Z'
       },
       {
@@ -66,7 +66,7 @@ test('selects active login scenario by platform tag and ignores drafts', () => {
         is_runnable: true,
         tags: [
           'login',
-          'login-platform:facebook',
+          'login-platform:instagram',
           'account-login',
           'login-override',
           'system-account-login'
@@ -74,7 +74,7 @@ test('selects active login scenario by platform tag and ignores drafts', () => {
         updated_at: '2026-09-16T10:00:00Z'
       }
     ],
-    'facebook'
+    'instagram'
   );
 
   assert.equal(scenario?.id, 'active-login');
@@ -90,7 +90,7 @@ test('ignores graph login scenarios because account login runs sequence steps', 
         is_runnable: true,
         tags: [
           'login',
-          'facebook',
+          'instagram',
           'account-login',
           'login-override',
           'system-account-login'
@@ -104,7 +104,7 @@ test('ignores graph login scenarios because account login runs sequence steps', 
         is_runnable: true,
         tags: [
           'login',
-          'facebook',
+          'instagram',
           'account-login',
           'login-override',
           'system-account-login'
@@ -112,7 +112,7 @@ test('ignores graph login scenarios because account login runs sequence steps', 
         updated_at: '2026-09-16T10:00:00Z'
       }
     ],
-    'facebook'
+    'instagram'
   );
 
   assert.equal(scenario?.id, 'sequence-login');
@@ -126,7 +126,7 @@ test('prefers explicit account-login override tags over a plain clone', () => {
         kind: 'sequence',
         status: 'active',
         is_runnable: true,
-        tags: ['login', 'facebook'],
+        tags: ['login', 'instagram'],
         updated_at: '2026-09-16T12:00:00Z'
       },
       {
@@ -136,7 +136,7 @@ test('prefers explicit account-login override tags over a plain clone', () => {
         is_runnable: true,
         tags: [
           'login',
-          'facebook',
+          'instagram',
           'account-login',
           'login-override',
           'system-account-login'
@@ -144,7 +144,7 @@ test('prefers explicit account-login override tags over a plain clone', () => {
         updated_at: '2026-09-16T10:00:00Z'
       }
     ],
-    'facebook'
+    'instagram'
   );
 
   assert.equal(scenario?.id, 'override');
@@ -158,7 +158,7 @@ test('falls back to the system template when org override body has no steps', ()
       status: 'active',
       tags: [
         'login',
-        'facebook',
+        'instagram',
         'account-login',
         'login-override',
         'system-account-login'
@@ -183,33 +183,36 @@ test('ignores active login scenarios that were not system-created for Account Lo
         kind: 'sequence',
         status: 'active',
         is_runnable: true,
-        tags: ['login', 'facebook', 'account-login', 'login-override'],
+        tags: ['login', 'instagram', 'account-login', 'login-override'],
         updated_at: '2026-09-16T12:00:00Z'
       }
     ],
-    'facebook'
+    'instagram'
   );
 
   assert.equal(scenario, null);
 });
 
 test('accountLoginOrgScenarioTags adds explicit system-created override tags once', () => {
-  assert.deepEqual(accountLoginOrgScenarioTags('facebook,login', 'facebook'), [
-    'facebook',
-    'login',
-    'login-platform:facebook',
-    'account-login',
-    'login-override',
-    'system-account-login'
-  ]);
+  assert.deepEqual(
+    accountLoginOrgScenarioTags('instagram,login', 'instagram'),
+    [
+      'instagram',
+      'login',
+      'login-platform:instagram',
+      'account-login',
+      'login-override',
+      'system-account-login'
+    ]
+  );
 });
 
 test('accountLoginOrgScenarioName uses display name before internal name', () => {
   assert.equal(
     accountLoginOrgScenarioName({
-      name: 'fb_login',
-      display_name: 'Đăng nhập Facebook'
+      name: 'instagram_login',
+      display_name: 'Đăng nhập Instagram'
     }),
-    'Đăng nhập Facebook (Account Login)'
+    'Đăng nhập Instagram (Account Login)'
   );
 });

@@ -552,7 +552,7 @@ function taskStepTypeLabel(
   if (stepType === 'run_scenario') return t('taskLogStepRunScenario');
   if (stepType === 'if_variable') return t('taskLogStepIfVariable');
   if (stepType === 'platform_session_gate') {
-    return t('taskLogStepFacebookSessionGate');
+    return t('taskLogStepPlatformSessionGate');
   }
   if (!stepType) return t('taskLogStepFallback');
   return stepType.replaceAll('_', ' ');
@@ -571,7 +571,7 @@ function friendlyStepCause(
   }
   if (
     normalized ===
-    'platform_session_gate failed: Facebook session gate requires an execution account'
+    'platform_session_gate failed: platform session gate requires an execution account'
   ) {
     return t('taskLogCauseMissingExecutionAccount');
   }

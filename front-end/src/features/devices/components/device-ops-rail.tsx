@@ -2,17 +2,15 @@
 
 import {
   useCallback,
-  useEffect,
   useMemo,
   useRef,
   useState,
   type ComponentType,
   type ReactNode
 } from 'react';
-import { Loader2, Trash2 } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
 import {
   IconApps,
-  IconBrandFacebookFilled,
   IconBrandGoogleFilled,
   IconBrandInstagramFilled,
   IconBrandThreads,
@@ -42,7 +40,6 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
-import { farmApi } from '@/lib/farm-api';
 import {
   createDefaultStep,
   type FlowStep
@@ -59,33 +56,15 @@ import {
 
 export type { DeviceShellResult };
 
-type FacebookAppInstallOut = {
-  release: {
-    version_name: string;
-    version_code?: string | null;
-  };
-};
-
-type FacebookAppReleaseOut = {
-  version_name: string;
-  version_code?: string | null;
-};
-
 export type DeviceOpsConfig = {
   disabled?: boolean;
   defaultPackage?: string;
   onRunStep: (step: FlowStep) => Promise<void>;
   onRunShell?: (cmd: string) => Promise<DeviceShellResult>;
-  onInstallStandardFacebookApk?: () => Promise<FacebookAppInstallOut>;
 };
 
 type OpKind = 'adb_shell' | 'install_apk' | 'clear_app';
-type QuickLaunchKey =
-  | 'facebook'
-  | 'tiktok'
-  | 'google'
-  | 'instagram'
-  | 'threads';
+type QuickLaunchKey = 'tiktok' | 'google' | 'instagram' | 'threads';
 
 const RAIL_OPS: OpKind[] = ['adb_shell', 'install_apk', 'clear_app'];
 const QUICK_LAUNCH_APPS: Array<{
@@ -94,12 +73,6 @@ const QUICK_LAUNCH_APPS: Array<{
   packageFallbacks?: string[];
   Icon: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
 }> = [
-  {
-    key: 'facebook',
-    packageName: 'com.facebook.katana',
-    packageFallbacks: ['com.facebook.lite'],
-    Icon: IconBrandFacebookFilled
-  },
   {
     key: 'tiktok',
     packageName: 'com.ss.android.ugc.trill',
@@ -206,10 +179,6 @@ export function DeviceOpsRailSection({
   const [quickLaunching, setQuickLaunching] = useState<QuickLaunchKey | null>(
     null
   );
-  const [loadingFacebookApk, setLoadingFacebookApk] = useState(false);
-  const [loadingFacebookRelease, setLoadingFacebookRelease] = useState(false);
-  const [facebookRelease, setFacebookRelease] =
-    useState<FacebookAppReleaseOut | null>(null);
   const [showManualApkUrl, setShowManualApkUrl] = useState(false);
   const shellApiRef = useRef<{ clear: () => void } | null>(null);
 
@@ -223,7 +192,6 @@ export function DeviceOpsRailSection({
         (step as FlowStep).package = defaultPkg;
       }
       setShowManualApkUrl(false);
-      setFacebookRelease(null);
       setDraft(step);
       setOpen(kind);
     },
@@ -258,26 +226,6 @@ export function DeviceOpsRailSection({
     },
     [config, draft, tRun, updateDraft]
   );
-
-  useEffect(() => {
-    if (open !== 'install_apk') return;
-    let cancelled = false;
-    setLoadingFacebookRelease(true);
-    farmApi
-      .get<FacebookAppReleaseOut>('/platform-apps/facebook/current')
-      .then(({ data }) => {
-        if (!cancelled) setFacebookRelease(data);
-      })
-      .catch(() => {
-        if (!cancelled) setFacebookRelease(null);
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingFacebookRelease(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
 
   const runDraft = useCallback(async () => {
     if (!config || !draft) return;
@@ -324,29 +272,6 @@ export function DeviceOpsRailSection({
       setRunning(false);
     }
   }, [config, draft, close, tRun]);
-
-  const fillStandardFacebookApk = useCallback(async () => {
-    if (!config || !draft || draft.type !== 'install_apk') return;
-    if (!config.onInstallStandardFacebookApk) {
-      toast.error(tRun('standardFacebookApkUnavailable'));
-      return;
-    }
-    setLoadingFacebookApk(true);
-    try {
-      const data = await config.onInstallStandardFacebookApk();
-      toast.success(tRun('installApkSubmitted'));
-      toast.success(
-        tRun('facebookApkSelected', {
-          version: data.release.version_name
-        })
-      );
-      close();
-    } catch (e) {
-      toast.error(String(e));
-    } finally {
-      setLoadingFacebookApk(false);
-    }
-  }, [close, config, draft, tRun]);
 
   const launchQuickApp = useCallback(
     async (app: (typeof QUICK_LAUNCH_APPS)[number]) => {
@@ -515,7 +440,9 @@ export function DeviceOpsRailSection({
               {open === 'install_apk' && draft.type === 'install_apk' ? (
                 <div className='space-y-3'>
                   <p className='text-[12px] text-muted-foreground'>
-                    {tRun('standardFacebookApkHint')}
+                    {tApp('installApkHint', {
+                      varToken: SCENARIO_VAR_TOKENS.VAR
+                    })}
                   </p>
                   <div className='grid gap-2'>
                     <button
@@ -535,40 +462,6 @@ export function DeviceOpsRailSection({
                         </span>
                         <span className='mt-0.5 block text-xs text-muted-foreground'>
                           {tRun('manualApkDescription')}
-                        </span>
-                      </span>
-                    </button>
-                    <button
-                      type='button'
-                      className='flex w-full items-center gap-3 rounded-md border bg-background p-3 text-left transition-colors hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-60'
-                      disabled={
-                        loadingFacebookApk ||
-                        loadingFacebookRelease ||
-                        !facebookRelease ||
-                        config?.disabled
-                      }
-                      onClick={() => void fillStandardFacebookApk()}
-                    >
-                      <span className='flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted/40 text-blue-600'>
-                        {loadingFacebookApk || loadingFacebookRelease ? (
-                          <Loader2 className='size-4 animate-spin' />
-                        ) : (
-                          <IconBrandFacebookFilled
-                            className='size-5'
-                            aria-hidden
-                          />
-                        )}
-                      </span>
-                      <span className='min-w-0'>
-                        <span className='block truncate text-sm font-medium'>
-                          {facebookRelease
-                            ? tRun('standardFacebookApkOption', {
-                                version: facebookRelease.version_name
-                              })
-                            : tRun('standardFacebookApkMissing')}
-                        </span>
-                        <span className='mt-0.5 block text-xs text-muted-foreground'>
-                          {tRun('standardFacebookApkDescription')}
                         </span>
                       </span>
                     </button>

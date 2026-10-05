@@ -1,0 +1,1 @@
+{"steps": [{"id": "sim-launch-settings", "type": "launch_app", "package": "com.android.settings", "wait_after": 1}, {"id": "sim-assert-settings", "type": "assert_element", "by": "text", "value": "Settings", "timeout": 15}], "variables": {}}

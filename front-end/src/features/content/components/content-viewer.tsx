@@ -12,8 +12,6 @@ import {
   TrendingUp,
   Smartphone,
   FileText,
-  MessageCircle,
-  Newspaper,
   Download,
   ChevronDown,
   X,
@@ -180,10 +178,6 @@ function StatCard({
 
 // ── Filters ──────────────────────────────────────────────────────────────────
 
-type ContentDatasetType = 'fb_post' | 'fb_comment';
-
-const DEFAULT_CONTENT_TYPE: ContentDatasetType = 'fb_post';
-
 interface FiltersProps {
   search: string;
   onSearchChange: (v: string) => void;
@@ -193,13 +187,10 @@ interface FiltersProps {
   onCollectionChange: (v: string) => void;
   platform: string;
   onPlatformChange: (v: string) => void;
-  contentType: ContentDatasetType;
-  onContentTypeChange: (v: ContentDatasetType) => void;
   onRefresh: () => void;
   onApply: () => void;
   onClear: () => void;
   loading: boolean;
-  showContentTypeTabs: boolean;
 }
 
 function Filters({
@@ -211,41 +202,19 @@ function Filters({
   onCollectionChange,
   platform,
   onPlatformChange,
-  contentType,
-  onContentTypeChange,
   onRefresh,
   onApply,
   onClear,
-  loading,
-  showContentTypeTabs
+  loading
 }: FiltersProps) {
   const t = useTranslations('contentFeature.list');
   const { data: campaigns = [], isLoading: loadingCampaigns } = useCampaigns();
   const { stats } = useContentStats();
 
-  const contentTypeTabs = [
-    {
-      value: 'fb_post',
-      label: t('tabPosts'),
-      icon: <Newspaper className='size-3.5' />
-    },
-    {
-      value: 'fb_comment',
-      label: t('tabComments'),
-      icon: <MessageCircle className='size-3.5' />
-    }
-  ] as const;
-
   const onKeyEnter = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') onApply();
   };
-  const hasFilters = !!(
-    search ||
-    campaignId ||
-    collection ||
-    platform ||
-    (showContentTypeTabs && contentType && contentType !== DEFAULT_CONTENT_TYPE)
-  );
+  const hasFilters = !!(search || campaignId || collection || platform);
 
   const platformOptions = Object.keys(stats?.by_platform ?? {}).sort((a, b) =>
     a.localeCompare(b, 'vi')
@@ -266,32 +235,7 @@ function Filters({
     <div className='space-y-3'>
       {/* Tabs + actions */}
       <div className='flex flex-wrap items-center justify-between gap-2'>
-        {showContentTypeTabs ? (
-          <div className='inline-flex items-center gap-1 rounded-xl bg-muted/60 p-1 ring-1 ring-border/40'>
-            {contentTypeTabs.map((tab) => {
-              const active = contentType === tab.value;
-              return (
-                <button
-                  key={tab.value}
-                  type='button'
-                  onClick={() => onContentTypeChange(tab.value)}
-                  className={cn(
-                    'inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all',
-                    active
-                      ? 'bg-background text-foreground shadow-sm ring-1 ring-border/60'
-                      : 'text-muted-foreground hover:bg-background/60 hover:text-foreground'
-                  )}
-                  aria-pressed={active}
-                >
-                  {tab.icon}
-                  {tab.label}
-                </button>
-              );
-            })}
-          </div>
-        ) : (
-          <span />
-        )}
+        <span />
 
         <div className='flex items-center gap-2'>
           {hasFilters && (
@@ -497,18 +441,12 @@ interface Props {
   defaultExecutionId?: string;
   /** Pre-filter by a content hash, e.g. parent post opened from a comment. */
   defaultContentHash?: string;
-  /** Select the initial content dataset when rendered inside a parent tab bar. */
-  defaultContentType?: 'fb_post' | 'fb_comment';
-  /** Keep the legacy local post/comment switch for existing callers. */
-  showContentTypeTabs?: boolean;
 }
 
 export function ContentViewer({
   defaultCampaignId,
   defaultExecutionId,
-  defaultContentHash,
-  defaultContentType = DEFAULT_CONTENT_TYPE,
-  showContentTypeTabs = true
+  defaultContentHash
 }: Props) {
   const router = useRouter();
   const [search, setSearch] = useState('');
@@ -516,7 +454,6 @@ export function ContentViewer({
   const [executionId, setExecutionId] = useState(defaultExecutionId ?? '');
   const [collection, setCollection] = useState('');
   const [platform, setPlatform] = useState('');
-  const [contentType, setContentType] = useState(defaultContentType);
   const [exportOpen, setExportOpen] = useState(false);
   const [pageSize, setPageSize] = useState(50);
   const tList = useTranslations('contentFeature.list');
@@ -543,8 +480,7 @@ export function ContentViewer({
     {
       campaign_id: defaultCampaignId || undefined,
       run_id: defaultExecutionId || undefined,
-      content_hash: defaultContentHash || undefined,
-      content_type: defaultContentHash ? undefined : defaultContentType
+      content_hash: defaultContentHash || undefined
     },
     { pageSize }
   );
@@ -553,18 +489,13 @@ export function ContentViewer({
     setExportOpen(true);
   };
 
-  const handleApply = (overrides?: { contentType?: string }) => {
-    const ct =
-      overrides?.contentType !== undefined
-        ? overrides.contentType
-        : contentType;
+  const handleApply = () => {
     applyFilters({
       search: search || undefined,
       campaign_id: campaignId || undefined,
       run_id: executionId || undefined,
       collection: collection || undefined,
-      platform: platform || undefined,
-      content_type: ct || undefined
+      platform: platform || undefined
     });
   };
 
@@ -574,21 +505,18 @@ export function ContentViewer({
     executionId?: string;
     collection?: string;
     platform?: string;
-    contentType?: string;
   }) => {
     const nextSearch = next.search ?? search;
     const nextCampaignId = next.campaignId ?? campaignId;
     const nextExecutionId = next.executionId ?? executionId;
     const nextCollection = next.collection ?? collection;
     const nextPlatform = next.platform ?? platform;
-    const nextContentType = next.contentType ?? contentType;
     applyFilters({
       search: nextSearch || undefined,
       campaign_id: nextCampaignId || undefined,
       run_id: nextExecutionId || undefined,
       collection: nextCollection || undefined,
-      platform: nextPlatform || undefined,
-      content_type: nextContentType || undefined
+      platform: nextPlatform || undefined
     });
   };
 
@@ -622,20 +550,11 @@ export function ContentViewer({
     } catch {
       // Fallback to the filtered list below.
     }
-    applyFilters({
-      content_hash: parentId,
-      content_type: DEFAULT_CONTENT_TYPE
-    });
+    applyFilters({ content_hash: parentId });
     setSearch('');
     setCampaignId('');
     setCollection('');
     setPlatform('');
-    setContentType(DEFAULT_CONTENT_TYPE);
-  };
-
-  const handleContentTypeChange = (v: ContentDatasetType) => {
-    setContentType(v);
-    handleApply({ contentType: v });
   };
 
   const handleClear = () => {
@@ -644,8 +563,7 @@ export function ContentViewer({
     setExecutionId('');
     setCollection('');
     setPlatform('');
-    setContentType(defaultContentType);
-    applyFilters({ content_type: defaultContentType });
+    applyFilters({});
   };
 
   const hasFilters = !!(
@@ -654,9 +572,6 @@ export function ContentViewer({
     executionId ||
     collection ||
     platform ||
-    (showContentTypeTabs &&
-      contentType &&
-      contentType !== DEFAULT_CONTENT_TYPE) ||
     filters.content_hash
   );
 
@@ -758,8 +673,6 @@ export function ContentViewer({
             onCollectionChange={handleCollectionChange}
             platform={platform}
             onPlatformChange={handlePlatformChange}
-            contentType={contentType}
-            onContentTypeChange={handleContentTypeChange}
             onRefresh={() => {
               handleApply();
               reload();
@@ -767,7 +680,6 @@ export function ContentViewer({
             onApply={() => handleApply()}
             onClear={handleClear}
             loading={loading}
-            showContentTypeTabs={showContentTypeTabs}
           />
         </div>
 

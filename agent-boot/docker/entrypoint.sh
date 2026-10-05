@@ -63,7 +63,7 @@ else
     ADB_PORT="${BASH_REMATCH[2]}"
   fi
   export ADB_SERVER_SOCKET="tcp:${ADB_HOST}:${ADB_PORT}"
-  # adbutils/uiautomator2 (extra_data) reads these; adb CLI uses ADB_SERVER_SOCKET.
+  # adbutils/uiautomator2 reads these; adb CLI uses ADB_SERVER_SOCKET.
   export ANDROID_ADB_SERVER_HOST="${ADB_HOST}"
   export ANDROID_ADB_SERVER_PORT="${ADB_PORT}"
   echo "== ADB mode: host server ${ADB_HOST}:${ADB_PORT} =="

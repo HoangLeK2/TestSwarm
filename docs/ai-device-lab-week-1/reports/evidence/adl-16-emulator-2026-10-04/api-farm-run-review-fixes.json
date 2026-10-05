@@ -1,0 +1,17 @@
+{
+  "deadline_at": "2026-10-04T10:46:21.770223Z",
+  "device_id": "bd4c674c-00ca-47fe-bea9-89c07dc3eb76",
+  "execution_id": "03f1fed2-7d99-49ca-a83e-b2bb8134ae2b",
+  "job_id": "3e043066-6148-420b-bff7-929fab03e443",
+  "lane_id": "bdcab4b9-5b98-4e0d-9642-13040cf8bba1",
+  "policy_version": "adl-operations-v1",
+  "reservation_id": "0ccd310c-6ea1-4948-b29b-6013e0338ae1",
+  "run_attempt_id": "9262f1bf-6936-42cb-a202-c9b8564e6dcd",
+  "scenario_hash": "8fcab6919e71c90439e95a3dcb1e1f02e9a77de0ecb512813d29e2c0947b3547",
+  "scenario_version_id": "3e237c59-cee5-47ea-9896-3dfb88c2902e",
+  "schema_version": "adl-farm-job-v1",
+  "slot_id": "e97bfd25-d7b3-4ba0-bfca-dcf120b067be",
+  "status": "pending",
+  "terminal_reason": null,
+  "verdict": null
+}

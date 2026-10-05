@@ -1,21 +1,24 @@
 // Package whip publishes a device's H264 stream to go2rtc over WebRTC-HTTP
 // Ingestion (WHIP) instead of RTSP ANNOUNCE/RECORD.
 //
-// Why this exists: RTSP gives a publisher no feedback channel. Once a packet is
-// lost between the customer's machine and the server there is no way for the
-// receiver to say so and no way to repair it, so the picture stays broken until
-// the next IDR — which on scrcpy codec level >= 4 may never come. Over WebRTC,
-// go2rtc negotiates nack (go2rtc pkg/webrtc/api.go RegisterDefaultCodecs lists
-// goog-remb, ccm fir, nack and nack pli) and registers the default interceptors,
-// so pion's NACK responder on this side simply retransmits the lost packets. The
-// loss is repaired without touching the encoder at all.
+// Why this exists: RTSP gives a publisher no feedback channel. Over WebRTC,
+// go2rtc negotiates nack (pkg/webrtc/api.go lists goog-remb, ccm fir, nack and
+// nack pli) and its default interceptors send a NACK for every missing sequence
+// number, which is a real per-loss signal.
+//
+// What a NACK cannot do here is trigger a useful retransmission. go2rtc has no
+// jitter buffer: pkg/webrtc/conn.go hands each packet to the H264 depacketizer
+// in arrival order, and pkg/h264/rtp.go RTPDepay never checks sequence numbers.
+// A retransmission always lands after the frame's marker packet, so it is glued
+// onto the NEXT frame and corrupts that one too. This sink therefore does not
+// retransmit; it turns a new NACK into one gated IDR request, the only thing
+// that repairs a broken H264 reference chain.
 //
 // What this deliberately does NOT rely on is go2rtc's PLI. go2rtc fires one every
 // two seconds on an unconditional ticker (pkg/webrtc/conn.go), not on real loss,
 // so it carries no information. Honouring each one would reset MediaCodec on
 // every phone every two seconds, and MediaCodec.configure() is exactly where
-// Exynos encoders abort. Periodic PLI is ignored; an explicit FIR can still ask
-// for a gated encoder refresh.
+// Exynos encoders abort. Periodic PLI is ignored.
 //
 // Cost of this path: RTSP publishing needs one outbound TCP connection and so
 // survives any NAT. WHIP needs UDP to go2rtc's media port plus STUN, so a
@@ -92,6 +95,7 @@ type Sink struct {
 	url              string
 	logger           *slog.Logger
 	onKeyframeNeeded func()
+	onConnected      func()
 	client           *http.Client
 
 	mu           sync.Mutex
@@ -103,7 +107,33 @@ type Sink struct {
 	retryAttempt int
 	retrySeed    uint32
 	closed       bool
+
+	// The sink numbers packets itself rather than passing the lane encoder's
+	// sequence through. Packets held back while waiting for a keyframe must not
+	// leave a gap — go2rtc would NACK it and the hold would re-arm forever — and
+	// one counter across reconnects keeps "newer than" comparisons meaningful.
+	seq uint16
+	// waitKey holds P-frames back until the next keyframe. go2rtc forwards
+	// whatever it gets, so a P-frame after a loss or before the first IDR is
+	// painted by the browser as green smear; a held picture is the honest one.
+	waitKey   bool
+	waitSince time.Time
+	// repaired is the newest sequence number whose loss is already handled,
+	// either by a requested IDR or by a keyframe sent after it. go2rtc re-sends
+	// the same NACK every ~100ms until the packet ages out of its log, so only
+	// a NACK past this point is a new loss.
+	repaired     uint16
+	haveRepaired bool
 }
+
+// keyframeWaitMax bounds how long P-frames are held after a loss. The IDR it
+// waits for is rate-gated by the publisher (IDRMinInterval, 3s by default) but
+// guaranteed; if it still never comes — a wedged control socket — a smeared
+// moving picture beats a frozen one.
+//
+// ponytail: fixed, not derived from IDRMinInterval; raise it together with
+// that interval.
+const keyframeWaitMax = 5 * time.Second
 
 type peerConnection struct {
 	pc         *webrtc.PeerConnection
@@ -112,7 +142,14 @@ type peerConnection struct {
 	states     <-chan webrtc.PeerConnectionState
 }
 
-func NewSink(cfg Config, serial string, url string, onKeyframeNeeded func(), logger *slog.Logger) *Sink {
+func NewSink(
+	cfg Config,
+	serial string,
+	url string,
+	onKeyframeNeeded func(),
+	onConnected func(),
+	logger *slog.Logger,
+) *Sink {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 5 * time.Second
 	}
@@ -131,6 +168,7 @@ func NewSink(cfg Config, serial string, url string, onKeyframeNeeded func(), log
 		url:              url,
 		logger:           logger,
 		onKeyframeNeeded: onKeyframeNeeded,
+		onConnected:      onConnected,
 		client:           &http.Client{Timeout: cfg.Timeout},
 		retrySeed:        whipRetrySeed(serial, url),
 	}
@@ -185,7 +223,7 @@ func (s *Sink) scheduleRetryLocked(now time.Time) {
 // every stream begin its life reporting errors.
 func (s *Sink) WriteRTP(packet *rtp.Packet) error {
 	track := s.ensure()
-	if track == nil {
+	if track == nil || !s.admit(packet, time.Now()) {
 		return nil
 	}
 	if err := track.WriteRTP(packet); err != nil {
@@ -289,8 +327,21 @@ func (s *Sink) ensure() *webrtc.TrackLocalStaticRTP {
 	s.sessionURL = connection.sessionURL
 	s.retryAttempt = 0
 	s.nextDial = time.Time{}
+	// A fresh receiver has no reference frame; hold P-frames until the IDR
+	// requested by onConnected below arrives.
+	s.waitKey, s.waitSince = true, time.Now()
 	s.mu.Unlock()
 	go s.watchConnection(connection.pc, connection.states)
+	// The handshake can finish long after the lane's startup SPS/PPS and IDR
+	// were offered, especially when a fleet shares the global dial slots. Those
+	// packets are intentionally not queued while ICE is connecting, so request
+	// one fresh keyframe after every successful connection. The publisher routes
+	// this distinct connect callback past a rate gate that startup may already
+	// have spent. Periodic go2rtc PLI remains ignored below; this is one encoder
+	// refresh per connect, not one every two seconds.
+	if s.onConnected != nil {
+		s.onConnected()
+	}
 	if s.logger != nil {
 		s.logger.Info("media adapter WHIP publishing", "serial", s.serial, "url", whipURLForLog(s.url))
 	}
@@ -459,10 +510,6 @@ func (s *Sink) connect() (*peerConnection, error) {
 }
 
 // readRTCP turns receiver feedback into keyframe requests.
-//
-// Reading is mandatory even when nothing acts on the result: the interceptor
-// chain only processes NACKs — the retransmissions that make this transport
-// worth using — for a sender someone is draining.
 func (s *Sink) readRTCP(sender *webrtc.RTPSender) {
 	buf := make([]byte, 1500)
 	for {
@@ -474,23 +521,99 @@ func (s *Sink) readRTCP(sender *webrtc.RTPSender) {
 	}
 }
 
-// handleRTCP reports explicit full-refresh requests. NACKs are absent here by
-// design: the interceptor chain answers those with a retransmission before they
-// reach this point, which is the repair that costs the device nothing. PLI is
-// ignored because go2rtc emits it on an unconditional two-second ticker.
+// handleRTCP reports loss the receiver could not recover from: a NACK naming a
+// new loss (see the package doc for why go2rtc cannot use a retransmission) or
+// an explicit FIR. PLI is ignored because go2rtc emits it on an unconditional
+// two-second ticker. The callback is rate-gated by the publisher.
 func (s *Sink) handleRTCP(raw []byte) {
 	packets, err := rtcp.Unmarshal(raw)
 	if err != nil {
 		return
 	}
 	for _, packet := range packets {
-		switch packet.(type) {
+		switch packet := packet.(type) {
 		case *rtcp.FullIntraRequest:
-			if s.onKeyframeNeeded != nil {
-				s.onKeyframeNeeded()
+			s.keyframeNeeded()
+		case *rtcp.TransportLayerNack:
+			if s.newLoss(packet) {
+				s.keyframeNeeded()
 			}
 		}
 	}
+}
+
+func (s *Sink) keyframeNeeded() {
+	if s.onKeyframeNeeded != nil {
+		s.onKeyframeNeeded()
+	}
+}
+
+func (s *Sink) newLoss(nack *rtcp.TransportLayerNack) bool {
+	var newest uint16
+	found := false
+	for _, pair := range nack.Nacks {
+		for _, seq := range pair.PacketList() {
+			if !found || int16(seq-newest) > 0 {
+				newest, found = seq, true
+			}
+		}
+	}
+	if !found {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.haveRepaired && int16(newest-s.repaired) <= 0 {
+		return false
+	}
+	s.repaired, s.haveRepaired = newest, true
+	if s.waitKey {
+		// Already holding for a keyframe that is on its way; asking again
+		// would only queue a second encoder reset behind it.
+		return false
+	}
+	s.waitKey, s.waitSince = true, time.Now()
+	return true
+}
+
+// admit decides whether a packet goes on the wire, and numbers it if so.
+func (s *Sink) admit(packet *rtp.Packet, now time.Time) bool {
+	key := startsKeyframe(packet.Payload)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.waitKey {
+		if !key && now.Sub(s.waitSince) < keyframeWaitMax {
+			return false
+		}
+		s.waitKey = false
+	}
+	packet.SequenceNumber = s.seq
+	if key {
+		// Any loss before this keyframe is repaired by it.
+		if before := s.seq - 1; !s.haveRepaired || int16(before-s.repaired) > 0 {
+			s.repaired, s.haveRepaired = before, true
+		}
+	}
+	s.seq++
+	return true
+}
+
+// startsKeyframe reports whether an RTP payload is the first packet of a
+// keyframe access unit. The lane prepends SPS and PPS to every keyframe
+// (rtspserver prependParams), so that first packet is the SPS on its own or a
+// STAP-A that opens with it. An IDR slice alone is not enough: a multi-slice
+// IDR's second slice also starts an FU-A of type 5, mid access unit.
+func startsKeyframe(payload []byte) bool {
+	if len(payload) == 0 {
+		return false
+	}
+	switch payload[0] & 0x1F {
+	case 7: // SPS
+		return true
+	case 24: // STAP-A: 1-byte header, 2-byte size, then the first NAL
+		return len(payload) > 3 && payload[3]&0x1F == 7
+	}
+	return false
 }
 
 func (s *Sink) exchange(offer string) (string, string, error) {
@@ -538,9 +661,8 @@ func (s *Sink) exchange(offer string) (string, string, error) {
 
 // newAPI builds the media engine.
 //
-// The feedback list mirrors go2rtc's own (pkg/webrtc/api.go): without nack in
-// the offer the receiver has no way to ask for a retransmission, and this
-// transport would then be a more fragile RTSP with extra steps.
+// The feedback list mirrors go2rtc's own (pkg/webrtc/api.go). nack stays in the
+// offer even though nothing retransmits: it is what makes go2rtc report loss.
 func newAPI() (*webrtc.API, error) {
 	engine := &webrtc.MediaEngine{}
 	if err := engine.RegisterCodec(webrtc.RTPCodecParameters{
@@ -560,10 +682,9 @@ func newAPI() (*webrtc.API, error) {
 		return nil, err
 	}
 	registry := &interceptor.Registry{}
-	// Brings the NACK responder, which is the entire point of this transport:
-	// it keeps recently sent packets and retransmits the ones the receiver
-	// reports missing, repairing loss without an encoder reset.
-	if err := webrtc.RegisterDefaultInterceptors(engine, registry); err != nil {
+	// Sender reports only. No NACK responder: go2rtc has no jitter buffer, so a
+	// late retransmission corrupts the next frame instead of repairing this one.
+	if err := webrtc.ConfigureRTCPReports(registry); err != nil {
 		return nil, err
 	}
 	return webrtc.NewAPI(

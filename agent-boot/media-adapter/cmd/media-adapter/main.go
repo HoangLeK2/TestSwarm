@@ -31,8 +31,13 @@ func main() {
 	// survives NATs and firewalls that drop the UDP WebRTC requires.
 	if whip.Handles(publisherCfg.PublishTemplate) {
 		whipCfg := whip.ConfigFromEnv()
-		publisherCfg.NewRemoteSink = func(serial string, url string, onKeyframeNeeded func()) rtspserver.RemoteSink {
-			return whip.NewSink(whipCfg, serial, url, onKeyframeNeeded, logger)
+		publisherCfg.NewRemoteSink = func(
+			serial string,
+			url string,
+			onKeyframeNeeded func(),
+			onConnected func(),
+		) rtspserver.RemoteSink {
+			return whip.NewSink(whipCfg, serial, url, onKeyframeNeeded, onConnected, logger)
 		}
 		// The template can contain WHIP credentials in URL userinfo. The sink logs
 		// a redacted endpoint after connecting; never print the template here.

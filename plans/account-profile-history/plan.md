@@ -308,7 +308,7 @@ GET /api/accounts/{account_id}/events
 
 - `login_screen` / ban OCR → `session_death`, `banned`
 - Gọi `AccountEventRecorder` từ activity qua HTTP internal hoặc shared DB session nhẹ
-- Phụ thuộc fb-crawl stability plan
+- Phụ thuộc crawl stability plan
 
 ---
 
@@ -428,4 +428,4 @@ GET /api/accounts/{account_id}/events
 - `device_farm/db/crud/account_group.py` — `pick_next_batch`
 - `device_farm/services/campaign_dispatch.py` — vars + N×M
 - `device_farm/services/account_manager.py` — usage/cooldown (orphan)
-- `plans/crawling-enhancement/`, `docs/plans/fb-crawl-stability/` — session_death follow-up
+- `plans/crawling-enhancement/`, `docs/plans/crawl-stability/` — session_death follow-up

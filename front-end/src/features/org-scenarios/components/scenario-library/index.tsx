@@ -50,17 +50,10 @@ import {
 } from '../../lib/filter-scenario-library-items';
 
 type LibraryTab = 'org' | 'system';
-const TEMPLATE_CATEGORIES = [
-  'all',
-  'general',
-  'facebook',
-  'tiktok',
-  'utility'
-] as const;
+const TEMPLATE_CATEGORIES = ['all', 'general', 'tiktok', 'utility'] as const;
 const TEMPLATE_CATEGORY_LABEL_KEYS = {
   all: 'templateCategory_all',
   general: 'templateCategory_general',
-  facebook: 'templateCategory_facebook',
   tiktok: 'templateCategory_tiktok',
   utility: 'templateCategory_utility'
 } as const;

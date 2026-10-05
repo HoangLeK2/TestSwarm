@@ -1,0 +1,8 @@
+{
+  "device_id": "bd4c674c-00ca-47fe-bea9-89c07dc3eb76",
+  "protocol_version": "emulator-hygiene-v1",
+  "reason_code": "CLEAN_READBACK_VERIFIED",
+  "state": "verified_clean",
+  "target_type": "emulator",
+  "verification_evidence_ref": "docs/ai-device-lab-week-1/reports/evidence/adl-19a-emulator-2026-10-04/after-reset.json"
+}

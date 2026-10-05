@@ -1,0 +1,8 @@
+{
+  "device_id": "bd4c674c-00ca-47fe-bea9-89c07dc3eb76",
+  "protocol_version": "emulator-hygiene-v1",
+  "reason_code": "ACTIVE_RUN_DRAIN_REQUIRED",
+  "state": "draining",
+  "target_type": "emulator",
+  "verification_evidence_ref": null
+}

@@ -28,7 +28,7 @@ export function shouldHideParentSecondary(
   return false;
 }
 
-/** Collapse repeated domains in Facebook link-preview scrape noise. */
+/** Collapse repeated domains in link-preview scrape noise. */
 export function dedupeLinkPreviewNoise(text: string): string {
   const trimmed = text.trim();
   const match = trimmed.match(/^(Liên kết được chia sẻ|Shared link):\s*(.+)$/i);

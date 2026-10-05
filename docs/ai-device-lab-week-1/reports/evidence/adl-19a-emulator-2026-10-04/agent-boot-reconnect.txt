@@ -1,0 +1,8 @@
+2026-10-04 09:29:35 [INFO] [relay.adb.routes] device route invalidated serial=emulator-5580 old_host=host.docker.internal old_port=5037 reason=gone_from_endpoint
+2026-10-04 09:29:35 [INFO] [relay.agent] device emulator-5580 → offline (retries=1)
+2026-10-04 09:29:51 [INFO] [relay.adb.routes] device route discovered serial=emulator-5580 adb_host=host.docker.internal adb_port=5037 state=device
+2026-10-04 09:29:51 [INFO] [relay.agent] device emulator-5580 → online (retries=0)
+2026-10-04 09:29:59 [INFO] [relay.adb.routes] device route invalidated serial=emulator-5580 old_host=host.docker.internal old_port=5037 reason=gone_from_endpoint
+2026-10-04 09:29:59 [INFO] [relay.agent] device emulator-5580 → offline (retries=1)
+2026-10-04 09:30:01 [INFO] [relay.adb.routes] device route discovered serial=emulator-5580 adb_host=host.docker.internal adb_port=5037 state=device
+2026-10-04 09:30:01 [INFO] [relay.agent] device emulator-5580 → online (retries=0)

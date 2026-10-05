@@ -1,0 +1,33 @@
+{
+  "mode": "SIMULATOR_ONLY",
+  "serial": "emulator-5580",
+  "runs": [
+    {
+      "run": 1,
+      "http_status": 200,
+      "time_total_seconds": 2.607175,
+      "response_bytes": 1001,
+      "success": true,
+      "steps_executed": 2
+    },
+    {
+      "run": 2,
+      "http_status": 200,
+      "time_total_seconds": 1.903436,
+      "response_bytes": 1002,
+      "success": true,
+      "steps_executed": 2
+    },
+    {
+      "run": 3,
+      "http_status": 200,
+      "time_total_seconds": 1.637141,
+      "response_bytes": 1002,
+      "success": true,
+      "steps_executed": 2
+    }
+  ],
+  "all_success": true,
+  "mean_seconds": 2.049251,
+  "max_seconds": 2.607175
+}

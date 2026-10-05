@@ -12,7 +12,7 @@ test('summarizes configured multi-page campaign targets', () => {
       PAGE_ROW_TEXTS: ['Go2Joy Vietnam', 'Booking.com']
     },
     true,
-    'Nuôi Facebook - Kết bạn từ bài post Home đúng keyword 1 — chiến dịch',
+    'Nuôi Instagram - Kết bạn từ bài post Home đúng keyword 1 — chiến dịch',
     ['PAGE_COUNT', 'PAGE_TARGETS', 'PAGE_ROW_TEXTS']
   );
 
@@ -21,7 +21,7 @@ test('summarizes configured multi-page campaign targets', () => {
   assert.equal(summary?.targetInputKind, 'manual');
   assert.equal(
     summary?.contextLabel,
-    'Campaign: Nuôi Facebook - Kết bạn từ bài post Home đúng keyword 1 — chiến dịch: 2 page: Go2Joy Vietnam, Booking.com'
+    'Campaign: Nuôi Instagram - Kết bạn từ bài post Home đúng keyword 1 — chiến dịch: 2 page: Go2Joy Vietnam, Booking.com'
   );
   assert.deepEqual(summary?.bindingKeys, [
     'PAGE_COUNT',
@@ -61,20 +61,20 @@ test('summarizes target-form group selections for multi-group flows', () => {
       GROUP_SEARCHES: ['OpenClaw VN', 'AI Agents VN'],
       GROUP_ROW_TEXTS: ['OpenClaw VN', 'AI Agents VN'],
       _target_form: {
-        platform: 'facebook',
+        platform: 'instagram',
         selected: {
           group: [
             {
               id: 'group-1',
               display_name: 'OpenClaw VN',
               entity_type: 'group',
-              platform: 'facebook'
+              platform: 'instagram'
             },
             {
               id: 'group-2',
               display_name: 'AI Agents VN',
               entity_type: 'group',
-              platform: 'facebook'
+              platform: 'instagram'
             }
           ],
           page: [],

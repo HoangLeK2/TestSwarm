@@ -82,7 +82,7 @@ function shortId(value: string, head = 8): string {
 }
 
 function isCommentContent(detail: ContentDetail): boolean {
-  return detail.content_type === 'fb_comment' || detail.item_level > 0;
+  return detail.content_type.endsWith('comment') || detail.item_level > 0;
 }
 
 export function ContentDetailView({ contentId, shareToken }: Props) {
@@ -437,7 +437,7 @@ function ContentBodyCard({
   const title = detail.title?.trim() ?? '';
   const body = bodyText.trim();
   const isComment =
-    detail.content_type === 'fb_comment' || detail.item_level > 0;
+    detail.content_type.endsWith('comment') || detail.item_level > 0;
 
   if (!body) {
     return (

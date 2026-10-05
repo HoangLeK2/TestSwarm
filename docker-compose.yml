@@ -1,4 +1,4 @@
-# Device Farm — Full Stack
+# Android Platform Tester — Full Stack
 # Usage:
 #   docker compose up -d          # start all services
 #   docker compose logs -f farm   # follow backend logs
@@ -14,29 +14,28 @@
 #   minio      — Optional local S3 (profile `minio`: API :9000, console :9001). Cloud dùng R2.
 #
 # DB config (read from .env in this directory, all have fallbacks):
-#   DB_HOST (default: host.docker.internal — external Postgres on the host)
-#   DB_PORT (5432)
-#   DB_NAME (device_farm)
-#   DB_USER (postgres)
-#   DB_PASSWORD (postgres)
+#   ANDROID_PLATFORM_TESTER_DATABASE_URL (required by backend)
+#   ANDROID_PLATFORM_TESTER_DB_* (dedicated Postgres service settings)
 #
 # agent-boot (local relay): run manually on the machine with ADB:
 #   cd agent-boot && RELAY_MODE=grpc uv run main.py --relay-server <host>:50051 --relay-api-key <KEY>
+
+name: android-platform-tester
 
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${DB_NAME:-device_farm}
-      POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${ANDROID_PLATFORM_TESTER_DB_NAME:-android_platform_tester}
+      POSTGRES_USER: ${ANDROID_PLATFORM_TESTER_DB_USER:-platform_tester}
+      POSTGRES_PASSWORD: ${ANDROID_PLATFORM_TESTER_DB_PASSWORD:-platform_tester}
     ports:
-      - "${DB_PORT_PUBLISHED:-5433}:5432"
+      - "${ANDROID_PLATFORM_TESTER_DB_PORT_PUBLISHED:-55434}:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - android_platform_tester_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      test: ["CMD-SHELL", "pg_isready -U ${ANDROID_PLATFORM_TESTER_DB_USER:-platform_tester} -d ${ANDROID_PLATFORM_TESTER_DB_NAME:-android_platform_tester}"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -49,10 +48,10 @@ services:
         condition: service_healthy
     environment:
       - DB=postgres12
-      - DB_PORT=${DB_PORT:-5432}
-      - POSTGRES_USER=${DB_USER:-postgres}
-      - POSTGRES_PWD=${DB_PASSWORD:-postgres}
-      - POSTGRES_SEEDS=${DB_HOST:-host.docker.internal}
+      - DB_PORT=${ANDROID_PLATFORM_TESTER_DB_PORT:-5432}
+      - POSTGRES_USER=${ANDROID_PLATFORM_TESTER_DB_USER:-platform_tester}
+      - POSTGRES_PWD=${ANDROID_PLATFORM_TESTER_DB_PASSWORD:-platform_tester}
+      - POSTGRES_SEEDS=${ANDROID_PLATFORM_TESTER_DB_HOST:-postgres}
       - SQL_MAX_CONNS=${TEMPORAL_SQL_MAX_CONNS:-5}
       - SQL_MAX_IDLE_CONNS=${TEMPORAL_SQL_MAX_IDLE_CONNS:-5}
       - SQL_VIS_MAX_CONNS=${TEMPORAL_SQL_VIS_MAX_CONNS:-3}
@@ -149,7 +148,7 @@ services:
 
   farm:
     build:
-      context: ./device_farm
+      context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
     logging:
@@ -179,16 +178,9 @@ services:
           cpus: '6.0'
           memory: 6G
     environment:
-      # DATABASE_URL comes from env_file only. Interpolating ${DATABASE_URL}
-      # here let a shell that had the host-side value exported
-      # (localhost:5433 — see README) override .env at `up` time, and inside
-      # the container that address is nothing. DB_HOST/DB_PORT below are the
-      # fallback db/database.py builds from when the URL is absent.
-      DB_HOST: ${DB_HOST:-host.docker.internal}
-      DB_PORT: ${DB_PORT:-5432}
-      DB_NAME: ${DB_NAME:-device_farm}
-      DB_USER: ${DB_USER:-postgres}
-      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      # Required, project-specific DSN. The backend deliberately ignores
+      # DATABASE_URL and DB_* so it cannot attach to a Device Farm database.
+      ANDROID_PLATFORM_TESTER_DATABASE_URL: ${ANDROID_PLATFORM_TESTER_DATABASE_URL:?Set the dedicated Platform Tester database URL}
       TEMPORAL_SERVER_URL: temporal:7233
       # Parallel Temporal worker threads (each has own event loop + activity DB pool).
       # 7 × 20 = 140 slots: 120 target devices plus 20 slots for finalize/control.
@@ -257,7 +249,7 @@ services:
       MIGRATION_RECONCILE_DRIFT: ${MIGRATION_RECONCILE_DRIFT:-1}
     volumes:
       - farm_captures:/app/captures
-      - ./device_farm/config.yaml:/app/config.yaml:ro
+      - ./backend/config.yaml:/app/config.yaml:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8081/api/live"]
       interval: 15s
@@ -361,7 +353,7 @@ services:
   #     start_period: 5s
 
 volumes:
-  pgdata:
+  android_platform_tester_pgdata:
   farm_captures:
   # minio_data:
   redis_data:

@@ -1,0 +1,14 @@
+{
+  "assertion": "concurrent first observations create one hygiene state and ordered audits",
+  "benchmark_only": true,
+  "concurrency": 24,
+  "http_200": 24,
+  "http_errors": 0,
+  "latency_ms": {
+    "max": 211.44,
+    "median": 181.29,
+    "p95": 203.86
+  },
+  "requests": 24,
+  "verified_clean": 24
+}

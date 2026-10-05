@@ -5,8 +5,8 @@
 ### macOS / Linux
 
 ```bash
-tar -xzf agent-boot-docker-0.3.0.tar.gz
-cd agent-boot-docker-0.3.0
+tar -xzf agent-boot-docker-0.3.2.tar.gz
+cd agent-boot-docker-0.3.2
 
 ./scripts/docker-load.sh
 cp .env.example .env          # điền RELAY_API_KEY, RELAY_ENROLLMENT_TOKEN
@@ -17,13 +17,13 @@ docker compose logs -f media-adapter # xem log stream/WebRTC
 
 ### Windows (Docker Desktop, bundle universal)
 
-Phần này áp dụng cho `agent-boot-docker-0.3.0.zip`. Với gói Windows-only
-`agent-boot-docker-windows-0.3.0.zip`, làm theo `INSTALL.md` nằm ngay trong ZIP.
+Phần này áp dụng cho `agent-boot-docker-0.3.2.zip`. Với gói Windows-only
+`agent-boot-docker-windows-0.3.2.zip`, làm theo `INSTALL.md` nằm ngay trong ZIP.
 
 **Dùng file `.cmd`** (khuyến nghị — tránh lỗi `.ps1` mở Notepad khi double-click):
 
 ```bat
-cd agent-boot-docker-0.3.0
+cd agent-boot-docker-0.3.2
 scripts\docker-load.cmd
 copy .env.example .env
 notepad .env                    rem điền 3 giá trị bắt buộc bên dưới
@@ -34,8 +34,8 @@ scripts\docker-up.cmd logs -f
 Hoặc mở **PowerShell** (không double-click file `.ps1`):
 
 ```powershell
-Expand-Archive agent-boot-docker-0.3.0.zip -DestinationPath .
-cd agent-boot-docker-0.3.0
+Expand-Archive agent-boot-docker-0.3.2.zip -DestinationPath .
+cd agent-boot-docker-0.3.2
 powershell -ExecutionPolicy Bypass -File .\scripts\docker-load.ps1
 copy .env.example .env
 notepad .env

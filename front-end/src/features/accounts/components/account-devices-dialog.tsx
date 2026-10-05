@@ -7,7 +7,7 @@ import {
   useMemo,
   type ReactNode
 } from 'react';
-import { LogOut, Search, Smartphone, Unlink, Star } from 'lucide-react';
+import { Search, Smartphone, Unlink, Star } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import {
@@ -15,8 +15,6 @@ import {
   useAssignDeviceToAccount,
   useAvailableAccountDevices,
   useDeviceAccounts,
-  useFacebookPlatformSession,
-  useInvalidateFacebookPlatformSession,
   useSetPrimaryDeviceAccount,
   useUnassignDeviceFromAccount
 } from '../hooks/use-accounts';
@@ -24,7 +22,6 @@ import type { AccountOut, DeviceOut } from '../services/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { TablePaginationControls } from '@/components/ui/table/data-table-pagination';
-import { useConfirm } from '@/providers/modal-provider';
 import {
   Dialog,
   DialogContent,
@@ -37,37 +34,16 @@ function deviceLabel(d: { serial: string; name?: string | null }) {
   return d.name?.trim() || d.serial || '—';
 }
 
-/** `facebook` -> `Facebook`. Platforms are free-form slugs, so no lookup table. */
-function platformLabel(platform: string) {
-  const value = platform.trim();
-  return value ? value[0].toUpperCase() + value.slice(1) : '—';
-}
-
-const SESSION_STATE_KEYS: Record<string, string> = {
-  unknown: 'sessionStates.unknown',
-  active: 'sessionStates.active',
-  login_required: 'sessionStates.login_required',
-  logged_out: 'sessionStates.logged_out',
-  checkpoint: 'sessionStates.checkpoint',
-  failed: 'sessionStates.failed'
-};
-
 const AVAILABLE_DEVICES_PAGE_SIZE = 5;
 
 function LinkedDeviceRow({
-  accountId,
-  accountPlatform,
   link,
   device,
   canUpdate,
   unassigning,
-  invalidating,
   t,
-  onRemove,
-  onInvalidate
+  onRemove
 }: {
-  accountId: string;
-  accountPlatform: string;
   link: {
     id: string;
     device_id: string;
@@ -77,20 +53,9 @@ function LinkedDeviceRow({
   device?: { serial: string; name?: string | null };
   canUpdate: boolean;
   unassigning: boolean;
-  invalidating: boolean;
   t: (key: string, values?: Record<string, string | number>) => string;
   onRemove: () => void;
-  onInvalidate: (version: number) => Promise<void>;
 }) {
-  const { data: session } = useFacebookPlatformSession(
-    accountPlatform === 'facebook' ? link.device_id : ''
-  );
-  const ownsSession = session?.account_id === accountId;
-  const sessionStateKey = session ? SESSION_STATE_KEYS[session.state] : null;
-  const sessionStateLabel = sessionStateKey
-    ? t(sessionStateKey)
-    : session?.state || '';
-
   return (
     <li className='space-y-3 rounded-lg border bg-background p-3 text-xs'>
       <div className='flex items-start gap-2'>
@@ -114,45 +79,8 @@ function LinkedDeviceRow({
           </span>
         )}
       </div>
-      <div className='rounded-md bg-muted/40 p-2'>
-        <p className='font-medium'>
-          {t('sessionPlatform', {
-            platform: platformLabel(session?.platform || accountPlatform)
-          })}
-        </p>
-        <p className='mt-0.5 text-muted-foreground'>
-          {ownsSession
-            ? t('sessionState', { state: sessionStateLabel })
-            : t('sessionMissing')}
-        </p>
-        {ownsSession && session.app_package ? (
-          <p className='text-[10px] text-muted-foreground'>
-            {session.app_package}
-          </p>
-        ) : null}
-        {ownsSession && session.display_name_observed ? (
-          <p className='mt-0.5 text-muted-foreground'>
-            {t('sessionObservedName', {
-              name: session.display_name_observed
-            })}
-          </p>
-        ) : null}
-      </div>
       {canUpdate ? (
-        <div className='flex flex-wrap gap-2'>
-          {ownsSession ? (
-            <Button
-              type='button'
-              size='sm'
-              variant='outline'
-              className='h-8 gap-1.5 text-xs text-destructive'
-              disabled={invalidating}
-              onClick={() => onInvalidate(session.version)}
-            >
-              <LogOut size={13} />
-              {t('invalidateAction')}
-            </Button>
-          ) : null}
+        <div>
           <Button
             type='button'
             size='sm'
@@ -180,7 +108,6 @@ export function AccountDevicesDialog({
   trigger?: ReactNode;
 }) {
   const t = useTranslations('accountsFeature.devicesDialog');
-  const confirm = useConfirm();
   const [open, setOpen] = useState(false);
   const [selectedDeviceId, setSelectedDeviceId] = useState('');
   const [makePrimary, setMakePrimary] = useState(true);
@@ -206,7 +133,6 @@ export function AccountDevicesDialog({
   const { mutateAsync: assignDevice, isPending: assigning } =
     useAssignDeviceToAccount();
   const setPrimary = useSetPrimaryDeviceAccount();
-  const invalidateSession = useInvalidateFacebookPlatformSession();
   const { mutate: unassignDevice, isPending: unassigning } =
     useUnassignDeviceFromAccount();
 
@@ -306,12 +232,9 @@ export function AccountDevicesDialog({
                 {links.map((link) => (
                   <LinkedDeviceRow
                     key={link.id}
-                    accountId={account.id}
-                    accountPlatform={account.platform}
                     link={link}
                     canUpdate={canUpdate}
                     unassigning={unassigning}
-                    invalidating={invalidateSession.isPending}
                     t={t}
                     onRemove={() =>
                       unassignDevice(
@@ -322,26 +245,6 @@ export function AccountDevicesDialog({
                         }
                       )
                     }
-                    onInvalidate={async (version) => {
-                      const ok = await confirm({
-                        title: t('invalidateTitle'),
-                        description: t('invalidateDescription'),
-                        confirmText: t('invalidateConfirm'),
-                        cancelText: t('cancel'),
-                        confirmVariant: 'destructive',
-                        zIndex: 10_000
-                      });
-                      if (!ok) return;
-                      try {
-                        await invalidateSession.mutateAsync({
-                          deviceId: link.device_id,
-                          expectedVersion: version
-                        });
-                        toast.success(t('invalidateSuccess'));
-                      } catch {
-                        toast.error(t('invalidateError'));
-                      }
-                    }}
                   />
                 ))}
               </ul>

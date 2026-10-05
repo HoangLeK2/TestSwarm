@@ -46,7 +46,8 @@ function CommentParentLine({
 }) {
   const tList = useTranslations('contentFeature.list');
   const parentLabels = useCommentParentLabels();
-  if (item.content_type !== 'fb_comment' && item.item_level <= 0) return null;
+  if (!item.content_type.endsWith('comment') && item.item_level <= 0)
+    return null;
   const summary = commentParentSummary(item, parentLabels);
   if (!summary) return null;
   const content = (
@@ -109,7 +110,6 @@ function CommentParentLine({
 }
 
 const PLATFORM_STYLES: Record<string, string> = {
-  facebook: 'bg-blue-500/10 text-blue-700 ring-blue-500/20 dark:text-blue-300',
   instagram: 'bg-pink-500/10 text-pink-700 ring-pink-500/20 dark:text-pink-300',
   tiktok:
     'bg-neutral-900/10 text-neutral-900 ring-neutral-900/20 dark:bg-neutral-50/10 dark:text-neutral-100',

@@ -9,8 +9,8 @@
 // The schema comes from generate/scenario-schema.json, which the backend writes
 // from get_scenario_schema() — not from source regexes, so catalog-owned
 // metadata is checked after the same overlay production uses, and not from a
-// Python subprocess, so this runs without a built device_farm venv.
-// device_farm/tests/test_scenario_schema_snapshot.py keeps that file current.
+// Python subprocess, so this runs without a built backend venv.
+// backend/tests/test_scenario_schema_snapshot.py keeps that file current.
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -35,7 +35,7 @@ const schemaPath = path.join(root, 'generate/scenario-schema.json');
 if (!fs.existsSync(schemaPath)) {
   console.error(`${schemaPath} is missing. Regenerate it with:`);
   console.error(
-    '  cd device_farm && UPDATE_SCENARIO_SCHEMA_SNAPSHOT=1 .venv/bin/python -m pytest tests/test_scenario_schema_snapshot.py'
+    '  cd backend && UPDATE_SCENARIO_SCHEMA_SNAPSHOT=1 .venv/bin/python -m pytest tests/test_scenario_schema_snapshot.py'
   );
   process.exit(1);
 }

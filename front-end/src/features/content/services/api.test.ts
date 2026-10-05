@@ -25,7 +25,7 @@ test('contentApi.list sends run_id as execution_id for backend filtering', async
 
   await contentApi.list({
     collection: 'crawl',
-    content_type: 'fb_post',
+    content_type: 'ig_media',
     search: 'openclaw',
     run_id: 'exec-123',
     limit: 25,

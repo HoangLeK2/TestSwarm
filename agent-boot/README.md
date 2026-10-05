@@ -137,7 +137,7 @@ UNKNOWN ──► CONNECTING ──► ONLINE ◄──► BUSY
 ## Regenerate proto stubs
 
 ```bash
-cd ../device_farm
+cd ../backend
 bash proto/generate.sh
 cp proto/generated/adb_relay_pb2*.py ../agent-boot/proto/
 ```

@@ -1,0 +1,23 @@
+{
+  "items": [
+    {
+      "adb_ip": null,
+      "adb_port": 5555,
+      "adb_serial": null,
+      "android_version": "",
+      "current_session_id": null,
+      "db_id": "bd4c674c-00ca-47fe-bea9-89c07dc3eb76",
+      "device_serial": "emulator-5580",
+      "group_ids": [],
+      "last_seen_at": "2026-10-04T10:05:05Z",
+      "model": "",
+      "name": "ADL approved emulator",
+      "owner_id": null,
+      "owner_type": null,
+      "relay_serial": null,
+      "state": "online"
+    }
+  ],
+  "next_cursor": null,
+  "total": 1
+}

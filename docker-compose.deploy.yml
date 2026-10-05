@@ -1,4 +1,4 @@
-# Device Farm — Full Stack
+# Android Platform Tester — production stack
 # Usage:
 #   docker compose up -d          # start all services
 #   docker compose logs -f farm   # follow backend logs
@@ -13,14 +13,13 @@
 #                Uncomment block below to run a local Postgres.
 #
 # DB config (read from .env in this directory, all have fallbacks):
-#   DB_HOST (default: host.docker.internal — external Postgres on the host)
-#   DB_PORT (5432)
-#   DB_NAME (device_farm)
-#   DB_USER (postgres)
-#   DB_PASSWORD (postgres)
+#   ANDROID_PLATFORM_TESTER_DATABASE_URL (required, dedicated database)
+#   ANDROID_PLATFORM_TESTER_DB_* (Postgres/Temporal connection settings)
 #
 # agent-boot (local relay): run manually on the machine with ADB:
 #   cd agent-boot && RELAY_MODE=grpc uv run main.py --relay-server <host>:50051 --relay-api-key <KEY>
+
+name: android-platform-tester
 
 services:
   # ─── Local Postgres (DISABLED — bring your own) ───────────────────────────
@@ -29,15 +28,15 @@ services:
   #   image: postgres:16-alpine
   #   restart: unless-stopped
   #   environment:
-  #     POSTGRES_DB: ${DB_NAME:-device_farm}
-  #     POSTGRES_USER: ${DB_USER:-postgres}
-  #     POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+  #     POSTGRES_DB: ${ANDROID_PLATFORM_TESTER_DB_NAME:-android_platform_tester}
+  #     POSTGRES_USER: ${ANDROID_PLATFORM_TESTER_DB_USER:-platform_tester}
+  #     POSTGRES_PASSWORD: ${ANDROID_PLATFORM_TESTER_DB_PASSWORD:-platform_tester}
   #   ports:
-  #     - "${DB_PORT_PUBLISHED:-5433}:5432"
+  #     - "${ANDROID_PLATFORM_TESTER_DB_PORT_PUBLISHED:-55434}:5432"
   #   volumes:
-  #     - pgdata:/var/lib/postgresql/data
+  #     - android_platform_tester_pgdata:/var/lib/postgresql/data
   #   healthcheck:
-  #     test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+  #     test: ["CMD-SHELL", "pg_isready -U ${ANDROID_PLATFORM_TESTER_DB_USER:-platform_tester} -d ${ANDROID_PLATFORM_TESTER_DB_NAME:-android_platform_tester}"]
   #     interval: 5s
   #     timeout: 3s
   #     retries: 5
@@ -47,10 +46,10 @@ services:
     restart: unless-stopped
     environment:
       - DB=postgres12
-      - DB_PORT=${DB_PORT:-5432}
-      - POSTGRES_USER=${DB_USER:-postgres}
-      - POSTGRES_PWD=${DB_PASSWORD:-postgres}
-      - POSTGRES_SEEDS=${DB_HOST:-host.docker.internal}
+      - DB_PORT=${ANDROID_PLATFORM_TESTER_DB_PORT:-5432}
+      - POSTGRES_USER=${ANDROID_PLATFORM_TESTER_DB_USER:-platform_tester}
+      - POSTGRES_PWD=${ANDROID_PLATFORM_TESTER_DB_PASSWORD:-platform_tester}
+      - POSTGRES_SEEDS=${ANDROID_PLATFORM_TESTER_DB_HOST:-host.docker.internal}
       - SQL_MAX_CONNS=${TEMPORAL_SQL_MAX_CONNS:-5}
       - SQL_MAX_IDLE_CONNS=${TEMPORAL_SQL_MAX_IDLE_CONNS:-5}
       - SQL_VIS_MAX_CONNS=${TEMPORAL_SQL_VIS_MAX_CONNS:-3}
@@ -118,7 +117,7 @@ services:
 
   farm:
     build:
-      context: ./device_farm
+      context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
     logging:
@@ -147,14 +146,9 @@ services:
           cpus: '6.0'
           memory: 6G
     environment:
-      # DATABASE_URL comes from env_file only — see the note in
-      # docker-compose.yml: interpolating it here let an exported host-side
-      # value (localhost:5433) win over .env and break the container.
-      DB_HOST: ${DB_HOST:-host.docker.internal}
-      DB_PORT: ${DB_PORT:-5432}
-      DB_NAME: ${DB_NAME:-device_farm}
-      DB_USER: ${DB_USER:-postgres}
-      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      # Required, project-specific DSN. Generic DATABASE_URL and DB_* are
+      # intentionally ignored by the backend.
+      ANDROID_PLATFORM_TESTER_DATABASE_URL: ${ANDROID_PLATFORM_TESTER_DATABASE_URL:?Set the dedicated Platform Tester database URL}
       TEMPORAL_SERVER_URL: temporal:7233
       # Parallel Temporal worker threads (each has own event loop + activity DB pool).
       # 7 × 20 = 140 slots: 120 target devices plus 20 slots for finalize/control.
@@ -188,8 +182,8 @@ services:
       ACCOUNT_ACTION_LEDGER_MODE: ${ACCOUNT_ACTION_LEDGER_MODE:-disabled}
       ACCOUNT_ACTION_RECONCILE_INTERVAL_SECONDS: ${ACCOUNT_ACTION_RECONCILE_INTERVAL_SECONDS:-60}
       ACCOUNT_ACTION_RECONCILE_STALE_AFTER_SECONDS: ${ACCOUNT_ACTION_RECONCILE_STALE_AFTER_SECONDS:-3600}
-      FACEBOOK_VERIFICATION_PACKAGE: ${FACEBOOK_VERIFICATION_PACKAGE:-com.facebook.katana}
-      FACEBOOK_VERIFICATION_RESOURCE_ID: ${FACEBOOK_VERIFICATION_RESOURCE_ID:-}
+      PLATFORM_VERIFICATION_PACKAGE: ${PLATFORM_VERIFICATION_PACKAGE:-}
+      PLATFORM_VERIFICATION_RESOURCE_ID: ${PLATFORM_VERIFICATION_RESOURCE_ID:-}
       # Web/API pool: 12 persistent + 3 burst connections.
       DB_POOL_SIZE: ${DB_POOL_SIZE:-12}
       EDGE_INGEST_POOL_SIZE: ${EDGE_INGEST_POOL_SIZE:-4}
@@ -212,7 +206,7 @@ services:
       EXECUTION_EVENT_OUTBOX_LEASE_SECONDS: ${EXECUTION_EVENT_OUTBOX_LEASE_SECONDS:-30}
       DB_IDLE_TRANSACTION_TIMEOUT_MS: ${DB_IDLE_TRANSACTION_TIMEOUT_MS:-30000}
     volumes:
-      - ./device_farm/config.yaml:/app/config.yaml:ro
+      - ./backend/config.yaml:/app/config.yaml:ro
       - farm_captures:/app/captures
       # scenario-trace.log — the account activity trail. Without this it was
       # written inside the container and lost on every recreate, leaving
@@ -275,7 +269,7 @@ services:
   #     start_period: 5s
 
 volumes:
-  pgdata:
+  android_platform_tester_pgdata:
   farm_captures:
   farm_logs:
   # minio_data:

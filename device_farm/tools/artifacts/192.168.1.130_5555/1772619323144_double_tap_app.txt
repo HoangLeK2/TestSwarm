@@ -1,1 +1,0 @@
-{'package': 'com.ss.android.ugc.trill', 'activity': 'com.ss.android.ugc.aweme.splash.SplashActivity', 'pid': 15863}

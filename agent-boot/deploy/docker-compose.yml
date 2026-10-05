@@ -5,7 +5,7 @@ name: agent-boot
 
 services:
   agent-boot:
-    image: agent-boot:0.3.0
+    image: agent-boot:0.3.2
     container_name: agent-boot
     restart: unless-stopped
     env_file:
@@ -41,7 +41,7 @@ services:
     #   - ./assets:/app/assets:ro
 
   media-adapter:
-    image: agent-boot:0.3.0
+    image: agent-boot:0.3.2
     container_name: media-adapter
     restart: unless-stopped
     command: ["/app/bin/media-adapter"]
@@ -89,9 +89,9 @@ services:
       MEDIA_ADAPTER_LANE_IDLE_S: ${MEDIA_ADAPTER_LANE_IDLE_S:-120}
       # WHIP alternative: point the template above at go2rtc's WebRTC ingest
       # (http://.../api/webrtc?dst=STREAM) and the adapter publishes over WebRTC
-      # instead. Transport is chosen by URL scheme. Buys nack — lost packets are
-      # retransmitted rather than leaving the picture broken until the next
-      # keyframe — at the cost of needing UDP out, which RTSP does not.
+      # instead. Transport is chosen by URL scheme. Buys a loss signal — each
+      # NACK triggers one gated keyframe rather than leaving the picture broken
+      # until the next one — at the cost of needing UDP out, which RTSP does not.
       MEDIA_ADAPTER_WHIP_ICE_SERVERS: ${MEDIA_ADAPTER_WHIP_ICE_SERVERS:-stun:stun.l.google.com:19302}
       MEDIA_ADAPTER_WHIP_TIMEOUT_MS: ${MEDIA_ADAPTER_WHIP_TIMEOUT_MS:-5000}
       MEDIA_ADAPTER_WHIP_REDIAL_MS: ${MEDIA_ADAPTER_WHIP_REDIAL_MS:-2000}

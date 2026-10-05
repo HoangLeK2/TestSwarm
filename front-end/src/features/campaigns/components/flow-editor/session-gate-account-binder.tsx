@@ -40,8 +40,8 @@ function Notice({ children }: { children: React.ReactNode }) {
 /**
  * Bind a primary account to the previewed phone, from inside the step editor.
  *
- * The session gate fails at run time with `facebook_ready_without_matching_provenance`
- * when the phone carries no account the farm knows about. Reading "Phone chưa có
+ * The session gate fails at run time when the phone carries no account the farm
+ * knows about. Reading "Phone chưa có
  * tài khoản chính" and being left with no control meant leaving the scenario
  * half-edited to go find the device page.
  */

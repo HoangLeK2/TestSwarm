@@ -10,7 +10,7 @@ Gói **Windows only** (linux/amd64). Chạy trên PC Windows với **Docker Desk
 
 ## Cài nhanh
 
-Giải nén `agent-boot-docker-windows-0.3.0.zip`, mở **CMD** hoặc **PowerShell** trong thư mục đó:
+Giải nén `agent-boot-docker-windows-0.3.2.zip`, mở **CMD** hoặc **PowerShell** trong thư mục đó:
 
 ```bat
 scripts\docker-load.cmd
@@ -31,11 +31,11 @@ hàng không cần — và không nhận — PostgreSQL credential nào. Các en
 lại đã có đầy đủ giá trị mặc định trong `.env.example`. Script khởi động sẽ từ
 chối chạy nếu hai giá trị bắt buộc chưa được điền.
 
-WebRTC video dùng đường publish RTSP outbound từ media-adapter trên máy Windows
-lên go2rtc của farm. Trong `.env`, điền
-`MEDIA_ADAPTER_GO2RTC_RTSP_PUBLISH_TEMPLATE` với origin và credential RTSP của
-farm, ví dụ `rtsp://USER:PASS@farm-origin.example.com:8554/{stream_raw}`.
-Không dùng hostname chỉ proxy qua Cloudflare cho port RTSP `8554`.
+WebRTC video dùng WHIP outbound từ media-adapter trên máy Windows lên go2rtc của
+farm. `.env.example` đã đặt
+`MEDIA_ADAPTER_GO2RTC_RTSP_PUBLISH_TEMPLATE=https://webrtc-device-farm.tommadethis.app/api/webrtc?dst={stream_raw}`.
+Giữ `MEDIA_ADAPTER_GO2RTC_REGISTER_ENABLED=0`. Nếu mạng khách hàng chặn UDP,
+operator có thể đổi lại URL RTSP được cấp riêng rồi recreate `media-adapter`.
 
 Media-adapter cũng mở control gRPC outbound tới farm qua
 `MEDIA_ADAPTER_CONTROL_GRPC_SERVER`; mặc định giá trị này đã có trong

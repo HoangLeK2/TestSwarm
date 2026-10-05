@@ -9,22 +9,22 @@ import {
 
 test('source pool options group catalog rows by generic platform and type', () => {
   const options = listSourcePoolOptions([
-    { platform: 'facebook', entity_type: 'group' },
-    { platform: 'facebook', entity_type: 'group' },
-    { platform: 'facebook', entity_type: 'profile' },
+    { platform: 'instagram', entity_type: 'group' },
+    { platform: 'instagram', entity_type: 'group' },
+    { platform: 'instagram', entity_type: 'profile' },
     { platform: 'zalo', entity_type: 'group' }
   ]);
 
   assert.deepEqual(options, [
     {
-      key: 'facebook::group',
-      platform: 'facebook',
+      key: 'instagram::group',
+      platform: 'instagram',
       entityType: 'group',
       count: 2
     },
     {
-      key: 'facebook::profile',
-      platform: 'facebook',
+      key: 'instagram::profile',
+      platform: 'instagram',
       entityType: 'profile',
       count: 1
     },
@@ -46,8 +46,8 @@ test('allocatable statuses match the backend source-pool default', () => {
 });
 
 test('source pool input trims search and keeps the contract platform-neutral', () => {
-  assert.deepEqual(buildSourcePoolInput('facebook::group', ' OpenClaw '), {
-    platform: 'facebook',
+  assert.deepEqual(buildSourcePoolInput('instagram::group', ' OpenClaw '), {
+    platform: 'instagram',
     entity_type: 'group',
     search: 'OpenClaw'
   });

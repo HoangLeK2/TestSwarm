@@ -1,4 +1,0 @@
-{
-  "_comment": "Canonical scenario templates and steps are in device_farm/db/seeds/scenario_templates.py (API seed) and device_farm/scenarios/*.json. This file is not loaded by the front-end app.",
-  "_extract_inline_save": "Use extract steps with collection/platform/content_type/dedupe_field/tags (and save_parent_id_var + item_level for fb_comments) instead of separate save_extraction where possible."
-}

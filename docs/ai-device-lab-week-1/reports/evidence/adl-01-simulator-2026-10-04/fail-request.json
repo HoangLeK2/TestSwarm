@@ -1,0 +1,18 @@
+{
+  "steps": [
+    {
+      "id": "sim-launch-settings",
+      "type": "launch_app",
+      "package": "com.android.settings",
+      "wait_after": 1
+    },
+    {
+      "id": "sim-assert-missing",
+      "type": "assert_element",
+      "by": "text",
+      "value": "__ADL_ELEMENT_THAT_MUST_NOT_EXIST__",
+      "timeout": 3
+    }
+  ],
+  "variables": {}
+}

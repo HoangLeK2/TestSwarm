@@ -72,7 +72,6 @@ from relay.runtime         import (
     cpu_executor,
     dumps,
     dumps_maybe_offload,
-    extra_data_sem,
     init_executors,
     init_semaphores,
     cv_executor,
@@ -86,43 +85,6 @@ from relay.runtime         import (
 )
 
 logger = logging.getLogger("relay.agent")
-
-
-def _extra_data_reply_messages(reply: dict[str, Any]) -> list[dict[str, Any]]:
-    """Split a farm-persist batch into bounded messages on the existing stream."""
-    ingest = reply.get("ingest")
-    batch = ingest.get("persist_batch") if isinstance(ingest, dict) else None
-    if not isinstance(batch, dict) or not isinstance(batch.get("items"), list):
-        return [reply]
-    target = max(16_384, int(os.getenv("AGENT_BOOT_CONTENT_UPLINK_CHUNK_BYTES", "524288")))
-    encoded = dumps(batch).encode("utf-8")
-    # Base64 expands by 4/3. Leave room for the JSON message envelope.
-    raw_chunk_size = max(4096, (target - 2048) * 3 // 4)
-    chunks = [encoded[offset:offset + raw_chunk_size] for offset in range(0, len(encoded), raw_chunk_size)] or [b""]
-
-    request_id = str(reply.get("id") or "")
-    messages = [
-        {
-            "type": "extra_data_result_chunk",
-            "id": request_id,
-            "index": index,
-            "total": len(chunks),
-            "data_b64": base64.b64encode(chunk).decode("ascii"),
-        }
-        for index, chunk in enumerate(chunks)
-    ]
-    final = dict(reply)
-    final_ingest = dict(ingest)
-    manifest = {
-        "schema_version": batch.get("schema_version"),
-        "kind": batch.get("kind"),
-        "chunk_count": len(chunks),
-    }
-    final_ingest.pop("persist_batch", None)
-    final_ingest["persist_batch_manifest"] = manifest
-    final["ingest"] = final_ingest
-    messages.append(final)
-    return messages
 
 
 async def _await_executor_completion(future: asyncio.Future[Any]) -> Any:
@@ -508,7 +470,6 @@ class RelayAgent:
         enrollment_token: Optional[str] = None,
         grpc_tls: bool = False,
         grpc_root_cert_file: str = "",
-        extra_ingest: Any = None,
     ) -> None:
         self._api_key   = api_key
         self._relay_id  = relay_id
@@ -589,7 +550,6 @@ class RelayAgent:
         self._adb_connect_retry_after: dict[str, float] = {}
         self._adb_connect_retry_base_s = _env_float("ADB_CONNECT_RETRY_BASE_S", 2.0)
         self._adb_connect_retry_max_s = _env_float("ADB_CONNECT_RETRY_MAX_S", 30.0)
-        self._extra_ingest = extra_ingest
         # A11y control-plane workers
         self._a11y_max_queue = int(os.getenv("A11Y_MAX_QUEUE_PER_DEVICE", "100"))
         self._a11y_state: dict[str, dict[str, Any]] = {}
@@ -691,8 +651,6 @@ class RelayAgent:
         # registry exists so `_handle_*` paths can spawn tasks before the
         # first stream is established (e.g. during the brief startup window).
         self._stream_tasks: TaskRegistry = TaskRegistry()
-        self._extra_data_tasks: dict[str, asyncio.Task] = {}
-        self._extra_data_cancel_events: dict[str, asyncio.Event] = {}
         self._ocr_tasks: dict[str, asyncio.Task] = {}
         self._ocr_cancel_events: dict[str, asyncio.Event] = {}
         self._image_match_tasks: dict[str, asyncio.Task] = {}
@@ -2097,36 +2055,6 @@ class RelayAgent:
         elif mtype == "u2_flow_cancel":
             self._cancel_u2_flow(str(message_get(msg, "id", "") or ""))
 
-        elif mtype == "extra_data":
-            msg_dict = message_to_dict(msg)
-            req_id = str(msg_dict.get("id", "") or "")
-            if req_id:
-                context = msg_dict.get("context") if isinstance(msg_dict.get("context"), dict) else {}
-                context = dict(context)
-                cancel_event = asyncio.Event()
-                context["_cancel_event"] = cancel_event
-                msg_dict["context"] = context
-                self._extra_data_cancel_events[req_id] = cancel_event
-            task = self._stream_tasks.add(
-                self._guarded(
-                    extra_data_sem(),
-                    self._handle_extra_data(msg_dict, send_queue),
-                    label="extra_data",
-                ),
-                name="extra-data",
-            )
-            if req_id:
-                self._extra_data_tasks[req_id] = task
-                task.add_done_callback(
-                    lambda _task, _req_id=req_id: (
-                        self._extra_data_tasks.pop(_req_id, None),
-                        self._extra_data_cancel_events.pop(_req_id, None),
-                    )
-                )
-
-        elif mtype == "extra_data_cancel":
-            self._cancel_extra_data_task(str(message_get(msg, "id", "") or ""))
-
         elif mtype == "ocr":
             msg_dict = message_to_dict(msg)
             req_id = str(msg_dict.get("id", "") or "")
@@ -3436,203 +3364,6 @@ class RelayAgent:
             send_queue, payload, serial=serial, label="u2_flow_result"
         )
 
-    async def _handle_extra_data(self, msg: dict, send_queue: asyncio.Queue) -> None:
-        """PA B: u2 dump + in-process ingest; reply extra_data_result."""
-        loop = asyncio.get_running_loop()
-        req_id = str(msg.get("id", "") or "")
-        serial = str(msg.get("serial", "") or "")
-        strategy = str(msg.get("strategy", "fb_posts") or "fb_posts")
-        context = msg.get("context") if isinstance(msg.get("context"), dict) else {}
-        reply: dict[str, Any] = {
-            "type": "extra_data_result",
-            "id": req_id,
-            "ok": False,
-            "route": "relay_u2",
-            "error": "",
-        }
-        if not serial:
-            reply["error"] = "serial_required"
-            await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
-            return
-        if self._u2_executor is None:
-            reply["error"] = "u2_batch_not_enabled"
-            await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
-            return
-        if self._extra_ingest is None:
-            reply["error"] = "extra_data_not_configured"
-            await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
-            return
-
-        from relay.extra_data.collector import (
-            build_ingest_payload,
-            collect_fb_comment_filter_apply,
-            collect_comment_target_with_tap,
-            collect_xml_snapshots,
-            strip_private_context,
-        )
-        from relay.extra_data.ingest import _parse_items
-
-        expand_on = bool(context.get("expand_see_more"))
-        logger.info(
-            "extra_data start serial=%s strategy=%s expand_see_more=%s",
-            serial,
-            strategy,
-            expand_on,
-        )
-
-        def _attach_collect_error_diagnostic() -> None:
-            diagnostic = context.get("open_post_detail_diagnostic")
-            if not isinstance(diagnostic, dict):
-                return
-            reply["diagnostic"] = diagnostic
-            reply["ingest"] = {"ok": False, "diagnostic": diagnostic}
-
-        try:
-            if strategy == "fb_comment_filter_apply":
-                report, collect_err = await collect_fb_comment_filter_apply(
-                    self._u2_executor,
-                    serial,
-                    context,
-                )
-                if collect_err:
-                    reply["error"] = collect_err
-                else:
-                    reply["ok"] = True
-                    reply["ingest"] = {"ok": True, "diagnostic": report}
-                await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
-                return
-
-            if strategy == "fb_comment_target_tap":
-                snapshots, collect_err, agent_tapped, diagnostic = (
-                    await collect_comment_target_with_tap(
-                        self._u2_executor,
-                        serial,
-                        context,
-                    )
-                )
-                if collect_err:
-                    reply["error"] = collect_err
-                    await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
-                    return
-                reply["ok"] = True
-                reply["ingest"] = {"ok": True, "diagnostic": diagnostic}
-                if agent_tapped:
-                    reply["agent_tapped"] = True
-                await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
-                return
-
-            if strategy in {"fb_comment_target", "fb_comment_filter_next"}:
-                snapshots, collect_err = await collect_xml_snapshots(
-                    self._u2_executor,
-                    serial,
-                    strategy,
-                    context,
-                )
-                if collect_err:
-                    reply["error"] = collect_err
-                    await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
-                    return
-                primary = snapshots[0] if snapshots else ""
-                parse_strategy = (
-                    "fb_comment_target"
-                    if strategy == "fb_comment_target"
-                    else strategy
-                )
-                # lxml parsing for ~MB hierarchies is pure-CPU; keep it off
-                # the event loop so heartbeats / gRPC sends are not delayed.
-                _, diagnostic = await loop.run_in_executor(
-                    cpu_executor(), _parse_items, parse_strategy, primary, strip_private_context(context),
-                )
-                reply["ok"] = True
-                reply["ingest"] = {"ok": True, "diagnostic": diagnostic}
-                await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
-                return
-
-            snapshots, collect_err = await collect_xml_snapshots(
-                self._u2_executor,
-                serial,
-                strategy,
-                context,
-            )
-            if collect_err:
-                reply["error"] = collect_err
-                _attach_collect_error_diagnostic()
-                await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
-                return
-
-            from relay.extra_data.collector import (
-                _capture_screenshot_b64,
-                should_capture_screenshot,
-            )
-
-            evidence: dict[str, Any] = {}
-            if snapshots:
-                evidence["hierarchy_xml"] = snapshots[-1]
-            screenshot_b64 = str(context.pop("_ingest_screenshot_b64", "") or "").strip()
-            if not screenshot_b64 and should_capture_screenshot(context):
-                screenshot_b64 = await _capture_screenshot_b64(self._u2_executor, serial) or ""
-            if screenshot_b64:
-                evidence["screenshot_b64"] = screenshot_b64
-
-            ingest_context = strip_private_context(context)
-            payload = build_ingest_payload(
-                serial=serial,
-                strategy=strategy,
-                context=ingest_context,
-                snapshots=snapshots,
-                request_id=req_id,
-            )
-            if evidence:
-                payload["evidence"] = evidence
-            ingest = await self._extra_ingest.process_payload(payload)
-            ingest_diag = ingest.get("diagnostic") if isinstance(ingest.get("diagnostic"), dict) else {}
-            logger.info(
-                "extra_data ingest done serial=%s strategy=%s ok=%s parsed=%s inserted=%s duplicate=%s "
-                "post_stats_found=%s post_stats_persisted=%s parent_stats_skip=%s "
-                "comments_returned=%s snapshots=%s xml_bytes=%s elapsed_ms=%s",
-                serial,
-                strategy,
-                bool(ingest.get("ok")),
-                ingest.get("parsed_count"),
-                ingest.get("inserted_count"),
-                ingest.get("duplicate_count"),
-                ingest_diag.get("post_stats_found"),
-                ingest_diag.get("post_stats_persisted"),
-                ingest_diag.get("parent_stats_update_skipped_reason"),
-                ingest_diag.get("comments_returned"),
-                ingest.get("snapshot_count"),
-                ingest.get("xml_bytes"),
-                ingest.get("elapsed_ms"),
-            )
-            if ingest.get("ok"):
-                reply["ok"] = True
-                reply_ingest = dict(ingest)
-                reply_ingest.pop("evidence_pending", None)
-                if screenshot_b64:
-                    reply_ingest["screenshot_b64"] = screenshot_b64
-                if not bool(ingest_context.get("return_items")):
-                    reply_ingest.pop("items", None)
-                reply["ingest"] = reply_ingest
-            else:
-                reply["error"] = str(ingest.get("error") or "ingest_failed")
-                reply["ingest"] = ingest
-        except Exception as exc:
-            # Several exceptions on this path carry no message at all — a bare
-            # asyncio.TimeoutError being the common one. Falling back to str(exc)
-            # alone sends ok=false with an empty error, which the farm renders as
-            # the useless "extra_data_failed". Name the type when there is
-            # nothing else to say.
-            detail = str(exc) or type(exc).__name__
-            logger.warning("extra_data failed serial=%s strategy=%s: %s", serial, strategy, detail)
-            reply["error"] = detail
-        for message in _extra_data_reply_messages(reply):
-            await bounded_put(
-                send_queue,
-                await dumps_maybe_offload(message),
-                serial=serial,
-                label=str(message.get("type") or "extra_data_result"),
-            )
-
     async def _handle_ocr(
         self,
         msg: dict,
@@ -3920,19 +3651,6 @@ class RelayAgent:
             return event is not None
         task.cancel()
         logger.info("ocr cancelled request_id=%s", req_id)
-        return True
-
-    def _cancel_extra_data_task(self, req_id: str) -> bool:
-        if not req_id:
-            return False
-        event = self._extra_data_cancel_events.pop(req_id, None)
-        if event is not None:
-            event.set()
-        task = self._extra_data_tasks.pop(req_id, None)
-        if task is None or task.done():
-            return event is not None
-        task.cancel()
-        logger.info("extra_data cancelled request_id=%s", req_id)
         return True
 
     def _cancel_u2_batch(self, req_id: str) -> bool:
@@ -4539,13 +4257,6 @@ class RelayAgent:
                 if worker is not None and not worker.done():
                     worker.cancel()
 
-        # Per-serial collect lock (extra_data) — keep map small across cycles.
-        try:
-            from relay.extra_data.collector import release_collect_lock
-            release_collect_lock(serial)
-        except Exception:
-            pass
-
         warm_task = self._u2_warm_tasks.pop(serial, None)
         if warm_task is not None and not warm_task.done():
             warm_task.cancel()
@@ -4609,7 +4320,7 @@ class RelayAgent:
     async def _guarded(self, sem: asyncio.Semaphore, coro, *, label: str = "work") -> Any:
         """
         Run `coro` while holding a global semaphore so total concurrency for
-        this class of work (extra_data / u2_batch / u2_flow / ocr) is bounded
+        this class of work (u2_batch / u2_flow / ocr) is bounded
         regardless of how many phones the farm fans out to.
 
         Without this, a burst of 50 farm requests can spawn 50 parallel u2

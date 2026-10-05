@@ -1,8 +1,4 @@
 import { farmApi } from '@/lib/farm-api';
-export {
-  externalEntitiesApi,
-  type ExternalEntityCatalogItem
-} from '@/features/external-entities/services/api';
 import type {
   CampaignDispatchIn as GeneratedCampaignDispatchIn,
   CampaignDispatchOut,
@@ -33,12 +29,6 @@ import type {
   ExecutionEventOut,
   ExecutionTaskLog
 } from '../types';
-import type {
-  ContinuousCrawlControl,
-  ContinuousCrawlPreflight,
-  ContinuousCrawlProgress,
-  ContinuousCrawlStartResponse
-} from '../lib/continuous-crawl-monitor';
 import type { NodeCapabilityRegistry } from '../lib/node-capabilities';
 
 export type CampaignEntityUpdate = Omit<
@@ -529,33 +519,6 @@ export const campaignsApi = {
       .put<ScenarioDeviceVariablesOut>(
         `/campaigns/${campaignId}/scenarios/${scenarioId}/devices/${deviceId}/variables`,
         body
-      )
-      .then((r) => r.data)
-};
-
-export const continuousCrawlApi = {
-  preflight: (campaignId: string) =>
-    farmApi
-      .post<ContinuousCrawlPreflight>(
-        `/campaigns/${encodeURIComponent(campaignId)}/continuous-crawl/preflight`
-      )
-      .then((r) => r.data),
-  start: (campaignId: string) =>
-    farmApi
-      .post<ContinuousCrawlStartResponse>(
-        `/campaigns/${encodeURIComponent(campaignId)}/continuous-crawl/start`
-      )
-      .then((r) => r.data),
-  progress: (campaignId: string) =>
-    farmApi
-      .get<ContinuousCrawlProgress>(
-        `/campaigns/${encodeURIComponent(campaignId)}/continuous-crawl/progress`
-      )
-      .then((r) => r.data),
-  control: (campaignId: string, control: ContinuousCrawlControl) =>
-    farmApi
-      .post<ContinuousCrawlProgress>(
-        `/campaigns/${encodeURIComponent(campaignId)}/continuous-crawl/${control}`
       )
       .then((r) => r.data)
 };

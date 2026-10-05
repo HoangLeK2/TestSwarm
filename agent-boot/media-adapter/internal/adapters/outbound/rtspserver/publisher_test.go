@@ -20,6 +20,7 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
 	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
+	"github.com/bluenviron/gortsplib/v5/pkg/liberrors"
 	"github.com/pion/rtp"
 )
 
@@ -231,6 +232,8 @@ func TestRTSPSinkUsesTheAnnouncedMediaNotTheLocalOne(t *testing.T) {
 		slog.New(slog.NewTextHandler(os.Stderr, nil)),
 	)
 	sink.retryAttempt = 4
+	var reconnects atomic.Int64
+	sink.onReconnected = func() { reconnects.Add(1) }
 	state := &streamState{
 		serial:    "SERIAL-1",
 		media:     localMedia,
@@ -256,6 +259,23 @@ func TestRTSPSinkUsesTheAnnouncedMediaNotTheLocalOne(t *testing.T) {
 		t.Fatalf("successful publish kept retry attempt=%d, want reset to 0", sink.retryAttempt)
 	}
 
+	if reconnects.Load() != 0 {
+		t.Fatal("first connect asked for a repair IDR; nothing was lost yet")
+	}
+
+	// A full gortsplib write queue is a momentary uplink stall, not a dead
+	// session. Tearing the session down turned every burst into a re-dial.
+	realWrite := sink.writePacket
+	sink.writePacket = func(*gortsplib.Client, *description.Media, *rtp.Packet) error {
+		return liberrors.ErrClientWriteQueueFull{}
+	}
+	if err := sink.WriteRTP(packet); err == nil {
+		t.Fatal("dropped packet must still be reported so the lane asks for an IDR")
+	}
+	if sink.client == nil || sink.retryAttempt != 0 {
+		t.Fatal("a full write queue tore down the RTSP session")
+	}
+
 	sink.writePacket = func(*gortsplib.Client, *description.Media, *rtp.Packet) error {
 		return errors.New("forced write failure")
 	}
@@ -269,6 +289,17 @@ func TestRTSPSinkUsesTheAnnouncedMediaNotTheLocalOne(t *testing.T) {
 	retryIn := sink.nextDial.Sub(started)
 	if retryIn < 800*time.Millisecond || retryIn > 1200*time.Millisecond {
 		t.Fatalf("write failure retry=%s, want 800ms..1.2s", retryIn)
+	}
+
+	// Packets sent while the session was down are gone, so the reconnect must
+	// ask for a fresh IDR or the remote picture stays broken.
+	sink.writePacket = realWrite
+	sink.nextDial = time.Time{}
+	if err := sink.WriteRTP(packet); err != nil {
+		t.Fatalf("write after reconnect: %v", err)
+	}
+	if got := reconnects.Load(); got != 1 {
+		t.Fatalf("reconnect repair requests=%d, want 1", got)
 	}
 	sink.Close()
 }
@@ -697,40 +728,51 @@ func TestPerSerialStatsIsolateDevices(t *testing.T) {
 	}
 }
 
-// An explicit FIR asks for a full MediaCodec refresh. Even explicit remote
-// feedback must pass through the same gate as a local drop so a noisy receiver
-// cannot reconfigure the phone encoder continuously.
-func TestRemoteFeedbackGoesThroughTheKeyframeRateLimit(t *testing.T) {
+// The WHIP handshake can finish after the startup SPS/PPS and IDR have already
+// passed. A recent queue-drop request may have spent the shared rate-limit
+// budget, but the post-connect repair still has to reach the encoder: it is the
+// first request made when the remote peer can actually receive the replacement
+// IDR.
+func TestRemoteConnectKeyframeBypassesSpentRateLimit(t *testing.T) {
 	publisher, recorder := newTestPublisher(Config{
-		QueueMax: 2, StalePacketAge: time.Second, InputFPS: 15, IDRMinInterval: time.Hour,
+		QueueMax: 2, StalePacketAge: time.Second, InputFPS: 15, IDRMinInterval: 40 * time.Millisecond,
 	})
-	addTestLane(publisher, "SERIAL-1")
+	lane := addTestLane(publisher, "SERIAL-1")
 
-	for i := 0; i < 30; i++ {
-		publisher.laneDrop("SERIAL-1", dropRemoteFeedback)
-	}
-
+	publisher.requestIDR(lane)
 	recorder.waitFor(t, 1)
-	time.Sleep(50 * time.Millisecond)
-	if got := recorder.count(); got != 1 {
-		t.Fatalf("keyframe requests=%d, want exactly 1", got)
+	for i := 0; i < 20; i++ {
+		publisher.requestIDRAfterRemoteConnect("SERIAL-1")
 	}
-	// Nothing was dropped on this side, so no drop counter should move: the
-	// peer reported its own loss.
-	stats := publisher.Stats().PerSerial["SERIAL-1"]
-	if stats.QueueDrops != 0 || stats.StaleDrops != 0 || stats.RemoteResyncs != 0 {
-		t.Fatalf("remote feedback raised a local drop counter: %+v", stats)
+	if got := recorder.count(); got != 1 {
+		t.Fatalf("post-connect repair ignored the rate limit: requests=%d, want 1 before delay", got)
+	}
+	recorder.waitFor(t, 2)
+	time.Sleep(60 * time.Millisecond)
+	if got := recorder.count(); got != 2 {
+		t.Fatalf("duplicate post-connect repairs=%d, want exactly 2 total requests", got)
+	}
+
+	if got := publisher.Stats().PerSerial["SERIAL-1"].IDRRequests; got != 2 {
+		t.Fatalf("keyframe requests=%d, want startup plus post-connect repair", got)
 	}
 }
 
 func TestNewRemoteSinkOverrideReplacesTheRTSPTransport(t *testing.T) {
 	var gotSerial, gotURL string
+	var gotOnConnected func()
 	sink := &fakeRemoteSink{}
 	publisher := New(Config{
 		RTSPAddress:     "127.0.0.1:0",
 		PublishTemplate: "http://go2rtc:1984/api/webrtc?dst={stream_raw}",
-		NewRemoteSink: func(serial string, url string, onKeyframeNeeded func()) RemoteSink {
+		NewRemoteSink: func(
+			serial string,
+			url string,
+			onKeyframeNeeded func(),
+			onConnected func(),
+		) RemoteSink {
 			gotSerial, gotURL = serial, url
+			gotOnConnected = onConnected
 			return sink
 		},
 	}, slog.New(slog.NewTextHandler(os.Stderr, nil)))
@@ -746,6 +788,9 @@ func TestNewRemoteSinkOverrideReplacesTheRTSPTransport(t *testing.T) {
 	}
 	if gotURL != "http://go2rtc:1984/api/webrtc?dst=device-SERIAL-1" {
 		t.Fatalf("sink built for url=%q", gotURL)
+	}
+	if gotOnConnected == nil {
+		t.Fatal("sink did not receive the post-connect keyframe callback")
 	}
 	if err := state.writeRemote(&rtp.Packet{Payload: []byte{0x41}}); err != nil {
 		t.Fatalf("writeRemote: %v", err)

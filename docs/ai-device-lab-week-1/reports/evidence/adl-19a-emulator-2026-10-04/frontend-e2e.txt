@@ -1,0 +1,3 @@
+command: pnpm test:e2e:ai-device-lab
+ADL_20A_PERF {"domNodes":454,"hasHorizontalOverflow":false,"navigationMs":243.70000004768372,"transferBytes":6368050}
+[1A[2K  11 passed (51.4s)

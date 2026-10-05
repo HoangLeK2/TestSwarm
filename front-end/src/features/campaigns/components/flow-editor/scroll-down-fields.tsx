@@ -23,7 +23,7 @@ type ScrollDownStep = FlowStep & {
 };
 
 const X_PRESETS = [
-  { id: 'facebook', value: 0.18 },
+  { id: 'left', value: 0.18 },
   { id: 'center', value: 0.5 },
   { id: 'right', value: 0.82 }
 ] as const;

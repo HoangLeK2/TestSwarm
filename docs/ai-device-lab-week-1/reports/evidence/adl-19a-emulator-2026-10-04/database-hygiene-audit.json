@@ -1,0 +1,53 @@
+{
+  "audit_count": 27,
+  "benchmark_audits": 24,
+  "device": {
+    "id": "bd4c674c-00ca-47fe-bea9-89c07dc3eb76",
+    "name": "ADL approved emulator",
+    "serial": "emulator-5580"
+  },
+  "state": {
+    "completed_at": "2026-10-04T09:39:31.510348+00:00",
+    "device_id": "bd4c674c-00ca-47fe-bea9-89c07dc3eb76",
+    "protocol_version": "emulator-hygiene-v1",
+    "reason_code": "CLEAN_READBACK_VERIFIED",
+    "state": "verified_clean",
+    "updated_at": "2026-10-04T09:39:31.512848+00:00",
+    "verification_evidence_ref": "docs/ai-device-lab-week-1/reports/evidence/adl-19a-emulator-2026-10-04/after-reset.json"
+  },
+  "transition_samples": [
+    {
+      "created_at": "2026-10-04T09:29:24.823576+00:00",
+      "details": {
+        "readback_clean": false,
+        "reset_succeeded": false,
+        "target_type": "emulator"
+      },
+      "from_state": "dirty",
+      "reason_code": "RESET_FAILED",
+      "to_state": "quarantined"
+    },
+    {
+      "created_at": "2026-10-04T09:29:25.128037+00:00",
+      "details": {
+        "readback_clean": true,
+        "reset_succeeded": true,
+        "target_type": "emulator"
+      },
+      "from_state": "quarantined",
+      "reason_code": "ACTIVE_RUN_DRAIN_REQUIRED",
+      "to_state": "draining"
+    },
+    {
+      "created_at": "2026-10-04T09:31:02.634143+00:00",
+      "details": {
+        "readback_clean": true,
+        "reset_succeeded": true,
+        "target_type": "emulator"
+      },
+      "from_state": "draining",
+      "reason_code": "CLEAN_READBACK_VERIFIED",
+      "to_state": "verified_clean"
+    }
+  ]
+}

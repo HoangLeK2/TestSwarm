@@ -1,0 +1,20 @@
+services:
+  ai-phone-agent:
+    build:
+      context: ./ai-phone-agent-service
+    image: ai-phone-agent-service:local
+    container_name: ai-phone-agent-service
+    ports:
+      - "8095:8095"
+    environment:
+      AI_PHONE_AGENT_ENV: local
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8095/health/ready', timeout=2).read()"
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s

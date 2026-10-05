@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bluenviron/gortsplib/v5/pkg/format/rtph264"
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
@@ -49,7 +50,7 @@ func TestExchangePostsSDPOfferAndReturnsAnswer(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sink := NewSink(Config{}, "SERIAL-1", server.URL, nil, nil)
+	sink := NewSink(Config{}, "SERIAL-1", server.URL, nil, nil, nil)
 	answer, sessionURL, err := sink.exchange("v=0\r\noffer\r\n")
 	if err != nil {
 		t.Fatalf("exchange: %v", err)
@@ -76,7 +77,7 @@ func TestExchangeReportsRejectionAndEmptyAnswer(t *testing.T) {
 	defer rejecting.Close()
 	// go2rtc refuses a dst it has not been told about, so this is the shape of a
 	// misconfigured stream name rather than a transport fault.
-	if _, _, err := NewSink(Config{}, "S", rejecting.URL, nil, nil).exchange("v=0"); err == nil {
+	if _, _, err := NewSink(Config{}, "S", rejecting.URL, nil, nil, nil).exchange("v=0"); err == nil {
 		t.Fatal("expected an error for a rejected WHIP offer")
 	} else if !strings.Contains(err.Error(), "stream not found") {
 		t.Fatalf("error=%v, want the server's explanation", err)
@@ -86,7 +87,7 @@ func TestExchangeReportsRejectionAndEmptyAnswer(t *testing.T) {
 		w.WriteHeader(http.StatusCreated)
 	}))
 	defer empty.Close()
-	if _, _, err := NewSink(Config{}, "S", empty.URL, nil, nil).exchange("v=0"); err == nil {
+	if _, _, err := NewSink(Config{}, "S", empty.URL, nil, nil, nil).exchange("v=0"); err == nil {
 		t.Fatal("expected an error for an empty WHIP answer")
 	}
 }
@@ -112,7 +113,7 @@ func TestCloseDeletesTheWHIPSessionResource(t *testing.T) {
 	defer server.Close()
 
 	endpoint := strings.Replace(server.URL, "http://", "http://farm:secret@", 1)
-	sink := NewSink(Config{Timeout: time.Second}, "SERIAL-1", endpoint, nil, nil)
+	sink := NewSink(Config{Timeout: time.Second}, "SERIAL-1", endpoint, nil, nil, nil)
 	_, sessionURL, err := sink.exchange("v=0\r\n")
 	if err != nil {
 		t.Fatalf("exchange: %v", err)
@@ -131,6 +132,7 @@ func TestCloseDeletesTheWHIPSessionResource(t *testing.T) {
 func TestSinkPublishesOnlyAfterPeerConnectionIsConnected(t *testing.T) {
 	received := make(chan *rtp.Packet, 1)
 	var deletes atomic.Int64
+	var keyframeRequests atomic.Int64
 	var serverState atomic.Value
 	var answerSize atomic.Int64
 	var serverPC *webrtc.PeerConnection
@@ -205,21 +207,32 @@ func TestSinkPublishesOnlyAfterPeerConnectionIsConnected(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
 	sink := NewSink(Config{Timeout: 3 * time.Second, RedialBackoff: time.Hour},
-		"SERIAL-LOCAL", server.URL, nil, logger)
+		"SERIAL-LOCAL", server.URL, nil, func() { keyframeRequests.Add(1) }, logger)
 	packet := &rtp.Packet{
 		Header:  rtp.Header{Version: 2, PayloadType: 96, SequenceNumber: 7, Timestamp: 9000, Marker: true},
-		Payload: []byte{0x65, 0x01},
+		Payload: []byte{0x41, 0x01},
 	}
 	if err := sink.WriteRTP(packet); err != nil {
 		t.Fatalf("publish packet: %v", err)
 	}
-	// A real source keeps producing after ICE reaches Connected. Send a short
-	// burst so this test does not depend on whether the first SRTP packet races
-	// the receiver track callback.
-	for i := 1; i <= 5; i++ {
-		packet.SequenceNumber++
+	// A real source keeps producing after ICE reaches Connected: P-frames
+	// first, then the keyframe the connect callback asked for. Only the
+	// keyframe may reach the receiver first — anything before it has no
+	// reference and paints green. Several keyframe packets so the test does
+	// not depend on the first SRTP packet racing the receiver track callback.
+	for i := 1; i <= 3; i++ {
 		if err := sink.WriteRTP(packet); err != nil {
-			t.Fatalf("publish packet %d: %v", i, err)
+			t.Fatalf("publish P-frame %d: %v", i, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	for i := 1; i <= 5; i++ {
+		keyframe := &rtp.Packet{
+			Header:  rtp.Header{Version: 2, PayloadType: 96, Timestamp: 18000, Marker: true},
+			Payload: []byte{0x67, 0x42, 0x00, 0x0a},
+		}
+		if err := sink.WriteRTP(keyframe); err != nil {
+			t.Fatalf("publish keyframe %d: %v", i, err)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -228,9 +241,15 @@ func TestSinkPublishesOnlyAfterPeerConnectionIsConnected(t *testing.T) {
 		if got.PayloadType != packet.PayloadType {
 			t.Fatalf("payload type=%d, want %d", got.PayloadType, packet.PayloadType)
 		}
+		if !startsKeyframe(got.Payload) {
+			t.Fatalf("receiver's first packet %x is not the keyframe; P-frames leaked before it", got.Payload)
+		}
 	case <-time.After(3 * time.Second):
 		t.Fatalf("connected WHIP peer did not receive RTP; server_state=%v answer_size=%d logs=%s",
 			serverState.Load(), answerSize.Load(), logs.String())
+	}
+	if got := keyframeRequests.Load(); got != 1 {
+		t.Fatalf("keyframe requests after WHIP connect=%d, want exactly 1", got)
 	}
 
 	sink.Close()
@@ -258,7 +277,7 @@ func TestGo2RTCWHIPIntegration(t *testing.T) {
 		Timeout:       5 * time.Second,
 		RedialBackoff: time.Hour,
 		RedialMax:     time.Hour,
-	}, "SERIAL-GO2RTC-CANARY", endpoint, func() { keyframeRequests.Add(1) }, nil)
+	}, "SERIAL-GO2RTC-CANARY", endpoint, func() { keyframeRequests.Add(1) }, nil, nil)
 	defer sink.Close()
 
 	packet := &rtp.Packet{
@@ -275,6 +294,12 @@ func TestGo2RTCWHIPIntegration(t *testing.T) {
 	// Keep the publisher alive past go2rtc's two-second PLI ticker. The source
 	// must continue flowing while those synthetic PLIs remain local to the sink.
 	for i := 0; i < 150; i++ {
+		// An SPS-led keyframe every ten frames, P-frames between: the sink
+		// holds everything until the first keyframe after connect.
+		packet.Payload = []byte{0x41, 0x9a, 0x02}
+		if i%10 == 0 {
+			packet.Payload = []byte{0x67, 0x42, 0x00, 0x0a}
+		}
 		if err := sink.WriteRTP(packet); err != nil {
 			t.Fatalf("publish packet %d: %v", i, err)
 		}
@@ -283,13 +308,12 @@ func TestGo2RTCWHIPIntegration(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
+	// The farm declares every stream with a placeholder source before the
+	// adapter pushes, so the WHIP session is one producer among others.
 	state := readGo2RTCStreamState(t, streamURL)
-	if len(state.Producers) != 1 {
-		t.Fatalf("go2rtc producers=%d, want 1: %+v", len(state.Producers), state.Producers)
-	}
-	producer := state.Producers[0]
-	if producer.FormatName != "webrtc" || !strings.Contains(producer.Protocol, "udp") {
-		t.Fatalf("go2rtc producer=%+v, want WebRTC over UDP", producer)
+	producer, found := webrtcProducer(state)
+	if !found || !strings.Contains(producer.Protocol, "udp") {
+		t.Fatalf("go2rtc producers=%+v, want one WebRTC over UDP", state.Producers)
 	}
 	if producer.BytesRecv == 0 {
 		t.Fatalf("go2rtc producer received no RTP: %+v", producer)
@@ -301,7 +325,7 @@ func TestGo2RTCWHIPIntegration(t *testing.T) {
 	sink.Close()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		if len(readGo2RTCStreamState(t, streamURL).Producers) == 0 {
+		if _, found := webrtcProducer(readGo2RTCStreamState(t, streamURL)); !found {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -311,12 +335,23 @@ func TestGo2RTCWHIPIntegration(t *testing.T) {
 	}
 }
 
+type go2RTCProducer struct {
+	FormatName string `json:"format_name"`
+	Protocol   string `json:"protocol"`
+	BytesRecv  int    `json:"bytes_recv"`
+}
+
 type go2RTCStreamState struct {
-	Producers []struct {
-		FormatName string `json:"format_name"`
-		Protocol   string `json:"protocol"`
-		BytesRecv  int    `json:"bytes_recv"`
-	} `json:"producers"`
+	Producers []go2RTCProducer `json:"producers"`
+}
+
+func webrtcProducer(state go2RTCStreamState) (go2RTCProducer, bool) {
+	for _, producer := range state.Producers {
+		if producer.FormatName == "webrtc" {
+			return producer, true
+		}
+	}
+	return go2RTCProducer{}, false
 }
 
 func readGo2RTCStreamState(t *testing.T, streamURL string) go2RTCStreamState {
@@ -339,11 +374,10 @@ func readGo2RTCStreamState(t *testing.T, streamURL string) go2RTCStreamState {
 
 // go2rtc sends PLI every two seconds for every passive WebRTC producer whether
 // or not a viewer lost the picture. Forwarding that ticker to the phone would
-// continuously reset MediaCodec. FIR remains an explicit full-refresh request;
-// NACK is repaired by the interceptor without touching the encoder.
-func TestHandleRTCPIgnoresPeriodicPLIAndOnlyForwardsFIR(t *testing.T) {
+// continuously reset MediaCodec. FIR is an explicit full-refresh request.
+func TestHandleRTCPForwardsFIRButNotPeriodicPLI(t *testing.T) {
 	var calls atomic.Int64
-	sink := NewSink(Config{}, "SERIAL-1", "http://example/whip", func() { calls.Add(1) }, nil)
+	sink := NewSink(Config{}, "SERIAL-1", "http://example/whip", func() { calls.Add(1) }, nil, nil)
 
 	for _, tc := range []struct {
 		name   string
@@ -353,23 +387,134 @@ func TestHandleRTCPIgnoresPeriodicPLIAndOnlyForwardsFIR(t *testing.T) {
 		{"pli", &rtcp.PictureLossIndication{MediaSSRC: 1}, 0},
 		{"fir", &rtcp.FullIntraRequest{MediaSSRC: 1, FIR: []rtcp.FIREntry{{SSRC: 1}}}, 1},
 		{"receiver report", &rtcp.ReceiverReport{SSRC: 1}, 0},
-		{"nack", &rtcp.TransportLayerNack{MediaSSRC: 1, Nacks: []rtcp.NackPair{{PacketID: 7}}}, 0},
 	} {
-		raw, err := rtcp.Marshal([]rtcp.Packet{tc.packet})
-		if err != nil {
-			t.Fatalf("%s: marshal: %v", tc.name, err)
-		}
 		calls.Store(0)
-		sink.handleRTCP(raw)
+		sendRTCP(t, sink, tc.packet)
 		if got := calls.Load(); got != tc.want {
 			t.Errorf("%s: keyframe requests=%d, want %d", tc.name, got, tc.want)
 		}
 	}
 }
 
+// go2rtc has no jitter buffer, so a NACK is a picture it already painted
+// wrong. The sink must ask for exactly one IDR per loss, hold P-frames until
+// it arrives instead of feeding the smear, and ignore go2rtc's ~100ms repeats
+// of the same NACK as well as NACKs the keyframe has already repaired.
+func TestNACKHoldsPFramesUntilTheRepairKeyframe(t *testing.T) {
+	var calls atomic.Int64
+	sink := NewSink(Config{}, "SERIAL-1", "http://example/whip", func() { calls.Add(1) }, nil, nil)
+	key, delta := encodedFrames(t)
+	now := time.Now()
+	send := func(packets []*rtp.Packet) (sent []uint16) {
+		for _, packet := range packets {
+			clone := packet.Clone()
+			if sink.admit(clone, now) {
+				sent = append(sent, clone.SequenceNumber)
+			}
+		}
+		return sent
+	}
+	nack := func(seq uint16) int64 {
+		calls.Store(0)
+		sendRTCP(t, sink, &rtcp.TransportLayerNack{MediaSSRC: 1, Nacks: []rtcp.NackPair{{PacketID: seq}}})
+		return calls.Load()
+	}
+
+	first := send(key)
+	send(delta)
+	if len(first) != len(key) || first[0] != 0 {
+		t.Fatalf("keyframe sent as %v, want %d packets from seq 0", first, len(key))
+	}
+	lost := first[len(first)-1]
+	if got := nack(lost); got != 1 {
+		t.Fatalf("new loss: keyframe requests=%d, want 1", got)
+	}
+	if got := nack(lost); got != 0 {
+		t.Fatalf("repeated NACK: keyframe requests=%d, want 0", got)
+	}
+	if sent := send(delta); len(sent) != 0 {
+		t.Fatalf("P-frame after loss went out as %v; it paints over a broken reference", sent)
+	}
+	repair := send(key)
+	if len(repair) != len(key) {
+		t.Fatalf("repair keyframe held back: sent %v", repair)
+	}
+	// Held packets were never numbered, so go2rtc sees no gap to NACK.
+	if want := first[len(first)-1] + uint16(len(delta)) + 1; repair[0] != want {
+		t.Fatalf("repair keyframe starts at seq %d, want %d (no gap)", repair[0], want)
+	}
+	if sent := send(delta); len(sent) != len(delta) {
+		t.Fatalf("P-frame after repair held back: sent %v", sent)
+	}
+	if got := nack(repair[0] - 1); got != 0 {
+		t.Fatalf("NACK from before the repair keyframe: keyframe requests=%d, want 0", got)
+	}
+	if got := nack(repair[0]); got != 1 {
+		t.Fatalf("loss inside the new keyframe: keyframe requests=%d, want 1", got)
+	}
+}
+
+// If the IDR never arrives, a smeared moving picture beats a frozen one.
+func TestKeyframeHoldGivesUp(t *testing.T) {
+	sink := NewSink(Config{}, "SERIAL-1", "http://example/whip", nil, nil, nil)
+	_, delta := encodedFrames(t)
+	now := time.Now()
+	sink.waitKey, sink.waitSince = true, now
+	if sink.admit(delta[0].Clone(), now.Add(keyframeWaitMax/2)) {
+		t.Fatal("P-frame admitted while the repair IDR is still due")
+	}
+	if !sink.admit(delta[0].Clone(), now.Add(keyframeWaitMax)) {
+		t.Fatal("hold never released after keyframeWaitMax")
+	}
+}
+
+func TestStartsKeyframeMatchesTheLanePacketizer(t *testing.T) {
+	key, delta := encodedFrames(t)
+	if !startsKeyframe(key[0].Payload) {
+		t.Fatalf("first keyframe packet %x not recognised", key[0].Payload[:4])
+	}
+	for i, packet := range append(key[1:], delta...) {
+		if startsKeyframe(packet.Payload) {
+			t.Fatalf("packet %d (%x) mistaken for a keyframe start", i, packet.Payload[:2])
+		}
+	}
+}
+
+// encodedFrames packetises a keyframe the way the lane does (SPS and PPS
+// prepended, rtph264 at the lane's 1200-byte payload limit) plus one P-frame.
+func encodedFrames(t *testing.T) (key []*rtp.Packet, delta []*rtp.Packet) {
+	t.Helper()
+	encoder := &rtph264.Encoder{PayloadType: 96, PacketizationMode: 1, PayloadMaxSize: 1200}
+	if err := encoder.Init(); err != nil {
+		t.Fatalf("encoder: %v", err)
+	}
+	sps := []byte{0x67, 0x42, 0x00, 0x0a, 0xf8, 0x41, 0xa2}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	idr := append([]byte{0x65}, bytes.Repeat([]byte{0x88}, 4000)...)
+	pFrame := append([]byte{0x41}, bytes.Repeat([]byte{0x9a}, 2500)...)
+	key, err := encoder.Encode([][]byte{sps, pps, idr})
+	if err != nil {
+		t.Fatalf("encode keyframe: %v", err)
+	}
+	delta, err = encoder.Encode([][]byte{pFrame})
+	if err != nil {
+		t.Fatalf("encode P-frame: %v", err)
+	}
+	return key, delta
+}
+
+func sendRTCP(t *testing.T, sink *Sink, packet rtcp.Packet) {
+	t.Helper()
+	raw, err := rtcp.Marshal([]rtcp.Packet{packet})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	sink.handleRTCP(raw)
+}
+
 func TestHandleRTCPIgnoresGarbage(t *testing.T) {
 	var calls atomic.Int64
-	sink := NewSink(Config{}, "S", "http://example/whip", func() { calls.Add(1) }, nil)
+	sink := NewSink(Config{}, "S", "http://example/whip", func() { calls.Add(1) }, nil, nil)
 	sink.handleRTCP([]byte{0xff, 0x00, 0x13})
 	if calls.Load() != 0 {
 		t.Fatal("malformed RTCP must not reach the device")
@@ -388,7 +533,7 @@ func TestWriteRTPBeforeConnectIsNotAnErrorAndBacksOff(t *testing.T) {
 	defer refusing.Close()
 
 	sink := NewSink(Config{Timeout: 2 * time.Second, RedialBackoff: time.Hour},
-		"SERIAL-1", refusing.URL, nil, nil)
+		"SERIAL-1", refusing.URL, nil, nil, nil)
 	defer sink.Close()
 
 	packet := &rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 96}, Payload: []byte{0x41}}
@@ -440,7 +585,7 @@ func TestStaleTrackFailureDoesNotResetReplacementConnection(t *testing.T) {
 		t.Fatalf("new track: %v", err)
 	}
 
-	sink := NewSink(Config{}, "SERIAL-1", "http://example/whip", nil, nil)
+	sink := NewSink(Config{}, "SERIAL-1", "http://example/whip", nil, nil, nil)
 	sink.track = newTrack
 	sink.reset(oldTrack, io.ErrClosedPipe)
 
@@ -466,7 +611,7 @@ func TestConcurrentPacketsStartOnlyOneWHIPHandshake(t *testing.T) {
 	defer server.Close()
 
 	sink := NewSink(Config{Timeout: 2 * time.Second, RedialBackoff: time.Hour},
-		"SERIAL-1", server.URL, nil, nil)
+		"SERIAL-1", server.URL, nil, nil, nil)
 	defer sink.Close()
 	packet := &rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 96}, Payload: []byte{0x41}}
 
@@ -510,7 +655,7 @@ func TestWHIPHandshakesAreLimitedAcrossDevices(t *testing.T) {
 	sinks := make([]*Sink, 0, 3)
 	for i := 0; i < 3; i++ {
 		sink := NewSink(Config{Timeout: 2 * time.Second, RedialBackoff: time.Hour},
-			"SERIAL-"+strconv.Itoa(i), server.URL, nil, nil)
+			"SERIAL-"+strconv.Itoa(i), server.URL, nil, nil, nil)
 		sinks = append(sinks, sink)
 		go func() {
 			_ = sink.WriteRTP(packet)
@@ -550,7 +695,7 @@ func TestWriteRTPNeverLogsWHIPCredentials(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
 	sink := NewSink(Config{Timeout: time.Second, RedialBackoff: time.Hour},
-		"SERIAL-1", endpoint, nil, logger)
+		"SERIAL-1", endpoint, nil, nil, logger)
 	defer sink.Close()
 
 	packet := &rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 96}, Payload: []byte{0x41}}

@@ -1,0 +1,7 @@
+{
+  "event_id": "adl16-slot-reducer-sync-current-20261004",
+  "job_id": "8efdb2f9-9a73-498c-b523-226e93043afb",
+  "job_status": "succeeded",
+  "terminal_reason": "ASSERTIONS_PASSED",
+  "verdict": "pass"
+}

@@ -10,12 +10,12 @@ import {
 test('deviceDisplayName prefers user alias over model and serial', () => {
   const device = {
     serial: 'ZY22H7ABCDEF',
-    name: 'FB-01',
+    name: 'PT-01',
     brand: 'samsung',
     model: 'SM-N975F'
   };
 
-  assert.equal(deviceDisplayName(device), 'FB-01');
+  assert.equal(deviceDisplayName(device), 'PT-01');
   assert.equal(deviceSecondarySerial(device), 'ZY22H7ABCDEF');
 });
 

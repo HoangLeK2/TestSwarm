@@ -56,7 +56,7 @@ test('localizes post scan cards with keyword arrays and empty keywords', () => {
   }
 });
 
-test('localizes the platform session node without exposing Facebook internals', () => {
+test('localizes the platform session node without exposing Instagram internals', () => {
   assert.equal(
     getStepTypeName('platform_session_gate', t),
     'KIỂM TRA PHIÊN NỀN TẢNG'

@@ -26,14 +26,17 @@ const REASON_KEY: Record<string, string> = {
   checkpoint_visible: 'sessionGateCheckpoint',
   login_surface_visible: 'sessionGateLoggedOut',
   app_unresponsive: 'sessionGateAppUnresponsive',
-  facebook_package_not_visible: 'sessionGateAppNotVisible',
   hierarchy_unavailable: 'sessionGateScreenUnreadable',
   invalid_hierarchy: 'sessionGateScreenUnreadable',
   readiness_markers_not_found: 'sessionGateScreenUnknown',
-  platform_readiness_not_implemented: 'sessionGateUnsupportedPlatform',
-  facebook_session_account_mismatch: 'sessionGateAccountMismatch',
-  facebook_ready_without_matching_provenance: 'sessionGateUntrustedSession',
-  facebook_login_provenance_missing: 'sessionGateLoginNotConfirmed'
+  platform_readiness_not_implemented: 'sessionGateUnsupportedPlatform'
+};
+
+const REASON_SUFFIX_KEY: Record<string, string> = {
+  _package_not_visible: 'sessionGateAppNotVisible',
+  _session_account_mismatch: 'sessionGateAccountMismatch',
+  _ready_without_matching_provenance: 'sessionGateUntrustedSession',
+  _login_provenance_missing: 'sessionGateLoginNotConfirmed'
 };
 
 /** Exceptions raised while resolving the run's org / device / account. */
@@ -69,7 +72,11 @@ export function humanizeSessionGateMessage(
 
   const blocked = message.match(BLOCKED_RE);
   if (blocked) {
-    const key = REASON_KEY[blocked[2].toLowerCase()];
+    const reason = blocked[2].toLowerCase();
+    const suffixKey = Object.entries(REASON_SUFFIX_KEY).find(([suffix]) =>
+      reason.endsWith(suffix)
+    )?.[1];
+    const key = REASON_KEY[reason] ?? suffixKey;
     return key ? t(key) : t('sessionGateBlockedOther', { reason: blocked[2] });
   }
 

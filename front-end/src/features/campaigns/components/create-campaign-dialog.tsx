@@ -49,12 +49,11 @@ import { CampaignOrgScenarioPicker } from './campaign-org-scenario-picker';
 import { RecoveryPolicyEditor } from './recovery-policy-editor';
 import type { CampaignScenarioRefIn, RecoveryPolicy } from '../types';
 import { normalizeCampaignScenarioRefs, scenarioRefRunCount } from '../types';
-import { ContinuousCrawlSettings } from './continuous-crawl-settings';
 import { CaptureModeSettings } from './capture-mode-settings';
 import {
   campaignVariablesForEditor,
   mergeCampaignEditorVariables
-} from '../lib/continuous-crawl-monitor';
+} from '../lib/campaign-editor-variables';
 
 type FormData = {
   name: string;
@@ -527,18 +526,11 @@ export function CreateCampaignDialog({
                 <TabsContent value='settings' className='m-0'>
                   <div className='space-y-5'>
                     <Section icon={Settings2} title={t('automationLabel')}>
-                      <ContinuousCrawlSettings
+                      <CaptureModeSettings
                         variables={variables}
                         onChange={handleVariablesChange}
                         disabled={effectiveScenarioIds.length === 0}
                       />
-                      <div className='mt-4'>
-                        <CaptureModeSettings
-                          variables={variables}
-                          onChange={handleVariablesChange}
-                          disabled={effectiveScenarioIds.length === 0}
-                        />
-                      </div>
                     </Section>
                     <Separator />
                     <Section icon={Variable} title={t('tagsLabel')}>

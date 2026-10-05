@@ -24,17 +24,17 @@ test('maps every readiness and verdict reason the gate can block on', () => {
   const cases: [string, string][] = [
     ['login_surface_visible', 'sessionGateLoggedOut'],
     ['app_unresponsive', 'sessionGateAppUnresponsive'],
-    ['facebook_package_not_visible', 'sessionGateAppNotVisible'],
+    ['android_package_not_visible', 'sessionGateAppNotVisible'],
     ['hierarchy_unavailable', 'sessionGateScreenUnreadable'],
     ['invalid_hierarchy', 'sessionGateScreenUnreadable'],
     ['readiness_markers_not_found', 'sessionGateScreenUnknown'],
     ['platform_readiness_not_implemented', 'sessionGateUnsupportedPlatform'],
-    ['facebook_session_account_mismatch', 'sessionGateAccountMismatch'],
+    ['android_session_account_mismatch', 'sessionGateAccountMismatch'],
     [
-      'facebook_ready_without_matching_provenance',
+      'android_ready_without_matching_provenance',
       'sessionGateUntrustedSession'
     ],
-    ['facebook_login_provenance_missing', 'sessionGateLoginNotConfirmed']
+    ['android_login_provenance_missing', 'sessionGateLoginNotConfirmed']
   ];
   for (const [reason, key] of cases) {
     assert.equal(
@@ -60,14 +60,14 @@ test('keeps an unmapped reason visible instead of dropping it', () => {
 test('maps gate resolution failures to their cause', () => {
   assert.equal(
     humanizeSessionGateMessage(
-      'platform_session_gate failed: Facebook session gate requires an execution account',
+      'platform_session_gate failed: Platform session gate requires an execution account',
       t
     ),
     'sessionGateNoRunAccount'
   );
   assert.equal(
     humanizeSessionGateMessage(
-      'platform_session_gate failed: Facebook session gate device is not part of the execution',
+      'platform_session_gate failed: Platform session gate device is not part of the execution',
       t
     ),
     'sessionGateDeviceNotInRun'
@@ -94,14 +94,14 @@ test('maps the unsupported platform message', () => {
 test('maps the non-blocking outcomes', () => {
   assert.equal(
     humanizeSessionGateMessage(
-      'platform_session_gate preflight: ready (facebook_session_ready)',
+      'platform_session_gate preflight: ready (android_session_ready)',
       t
     ),
     'sessionGateReady'
   );
   assert.equal(
     humanizeSessionGateMessage(
-      'platform_session_gate preflight: login required (facebook_login_required)',
+      'platform_session_gate preflight: login required (android_login_required)',
       t
     ),
     'sessionGateLoginRequired'

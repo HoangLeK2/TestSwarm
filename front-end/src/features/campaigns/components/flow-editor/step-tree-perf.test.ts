@@ -27,7 +27,7 @@ function loadSteps(): FlowStep[] {
     readFileSync(
       join(
         REPO_ROOT,
-        'front-end/src/features/campaigns/components/flow-editor/fixtures/crawl-group-3.json'
+        'front-end/src/features/campaigns/components/flow-editor/fixtures/platform-workflow.json'
       ),
       'utf8'
     )

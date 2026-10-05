@@ -51,6 +51,111 @@ export interface AIExtractBody {
   region?: Record<string, number> | null;
 }
 
+/** AcceptanceCandidateOut */
+export interface AcceptanceCandidateOut {
+  /** Id */
+  id: string;
+  /** Version */
+  version: string;
+  /** Source Kind */
+  source_kind: string;
+  /** Environment */
+  environment: string;
+  /** Commit Sha */
+  commit_sha: string;
+  /** Schema Version */
+  schema_version: string;
+  /** Status */
+  status: string;
+  /** Rollback Owner */
+  rollback_owner: string | null;
+  /** Oncall Owner */
+  oncall_owner: string | null;
+  /** Frozen At */
+  frozen_at: string | null;
+}
+
+/** AcceptanceDecisionOut */
+export interface AcceptanceDecisionOut {
+  /** Id */
+  id: string;
+  /** Candidate Id */
+  candidate_id: string;
+  /** Evaluation Key */
+  evaluation_key: string;
+  /** Verdict */
+  verdict: string;
+  /** Blockers */
+  blockers: Record<string, any>[];
+  /** Requirement Summary */
+  requirement_summary: Record<string, any>;
+  /** Pack Sha256 */
+  pack_sha256: string;
+  /** Signer Snapshot */
+  signer_snapshot: Record<string, any>;
+  /** Rationale */
+  rationale: string;
+  /**
+   * Evaluated At
+   * @format date-time
+   */
+  evaluated_at: string;
+}
+
+/** AcceptanceRequirementIn */
+export interface AcceptanceRequirementIn {
+  /**
+   * Requirement Key
+   * @minLength 1
+   * @maxLength 128
+   */
+  requirement_key: string;
+  /**
+   * Adl Id
+   * @minLength 6
+   * @maxLength 16
+   */
+  adl_id: string;
+  /**
+   * Acceptance Id
+   * @minLength 1
+   * @maxLength 32
+   */
+  acceptance_id: string;
+  /**
+   * Test Id
+   * @minLength 1
+   * @maxLength 32
+   */
+  test_id: string;
+  /**
+   * Expected
+   * @minLength 1
+   * @maxLength 4000
+   */
+  expected: string;
+  /**
+   * Observed
+   * @minLength 1
+   * @maxLength 4000
+   */
+  observed: string;
+  /** Status */
+  status: string;
+  /** Required Evidence Level */
+  required_evidence_level: string;
+  /** Observed Evidence Level */
+  observed_evidence_level: string;
+  /** Evidence Refs */
+  evidence_refs: string[];
+  /** Reviewer Id */
+  reviewer_id?: string | null;
+  /** Executed At */
+  executed_at?: string | null;
+  /** Blocker */
+  blocker?: string | null;
+}
+
 /** AccountActionListOut */
 export interface AccountActionListOut {
   /** Items */
@@ -71,6 +176,8 @@ export interface AccountActionOut {
   status: string;
   /** Action */
   action: string;
+  /** Platform */
+  platform?: string | null;
   /** Target Type */
   target_type?: string | null;
   /** Target Id */
@@ -83,6 +190,14 @@ export interface AccountActionOut {
   error_code?: string | null;
   /** Error Message */
   error_message?: string | null;
+  /** Device Serial */
+  device_serial?: string | null;
+  /** Execution Id */
+  execution_id?: string | null;
+  /** Step Id */
+  step_id?: string | null;
+  /** Artifact Refs */
+  artifact_refs?: any[];
   /** Details */
   details: Record<string, any>;
   /** Started At */
@@ -115,6 +230,18 @@ export interface AccountActionSummaryOut {
   failed: number;
   /** Current Activity */
   current_activity?: string | null;
+}
+
+/** AccountAvailableDevicesOut */
+export interface AccountAvailableDevicesOut {
+  /** Items */
+  items?: DeviceOut[];
+  /** Total */
+  total: number;
+  /** Offset */
+  offset: number;
+  /** Limit */
+  limit: number;
 }
 
 /** AccountCreate */
@@ -362,6 +489,130 @@ export interface AccountGroupUpdate {
   rotation_strategy?: string | null;
 }
 
+/** AccountImportFormatCreate */
+export interface AccountImportFormatCreate {
+  /**
+   * Slug
+   * @minLength 3
+   * @maxLength 100
+   */
+  slug: string;
+  /**
+   * Name
+   * @minLength 1
+   * @maxLength 255
+   */
+  name: string;
+  /**
+   * Description
+   * @maxLength 2000
+   * @default ""
+   */
+  description?: string;
+  /**
+   * Delimiter
+   * @minLength 1
+   * @maxLength 10
+   * @default "|"
+   */
+  delimiter?: string;
+  /**
+   * Platform
+   * @minLength 1
+   * @maxLength 50
+   */
+  platform: string;
+  /**
+   * Fields
+   * @maxItems 50
+   * @minItems 1
+   */
+  fields: string[];
+  /**
+   * Is Active
+   * @default true
+   */
+  is_active?: boolean;
+}
+
+/** AccountImportFormatListOut */
+export interface AccountImportFormatListOut {
+  /** Items */
+  items: AccountImportFormatOut[];
+}
+
+/** AccountImportFormatOut */
+export interface AccountImportFormatOut {
+  /** Id */
+  id: string;
+  /** Slug */
+  slug: string;
+  /** Name */
+  name: string;
+  /**
+   * Description
+   * @default ""
+   */
+  description?: string;
+  /**
+   * Delimiter
+   * @default "|"
+   */
+  delimiter?: string;
+  /** Platform */
+  platform: string;
+  /** Fields */
+  fields: string[];
+  /**
+   * Is Active
+   * @default true
+   */
+  is_active?: boolean;
+  /**
+   * Is Builtin
+   * @default false
+   */
+  is_builtin?: boolean;
+  /** Created By User Id */
+  created_by_user_id?: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Updated At
+   * @format date-time
+   */
+  updated_at: string;
+}
+
+/** AccountImportFormatUpdate */
+export interface AccountImportFormatUpdate {
+  /** Name */
+  name?: string | null;
+  /** Description */
+  description?: string | null;
+  /** Delimiter */
+  delimiter?: string | null;
+  /** Platform */
+  platform?: string | null;
+  /** Fields */
+  fields?: string[] | null;
+  /** Is Active */
+  is_active?: boolean | null;
+}
+
+/** AccountLoginScenarioEnsureIn */
+export interface AccountLoginScenarioEnsureIn {
+  /**
+   * Platform
+   * @minLength 1
+   * @maxLength 100
+   */
+  platform: string;
+}
+
 /** AccountOut */
 export interface AccountOut {
   /** Id */
@@ -414,6 +665,11 @@ export interface AccountOut {
   friends_count?: number | null;
   /** Friends Observed At */
   friends_observed_at?: string | null;
+  /** Assigned Device Name */
+  assigned_device_name?: string | null;
+  verification_hold?: AccountVerificationHoldOut | null;
+  /** Verification Hold Until */
+  verification_hold_until?: string | null;
 }
 
 /** AccountStateTransitionBody */
@@ -434,6 +690,8 @@ export interface AccountStateTransitionBody {
    * Optimistic lock: must match current state_changed_at
    */
   expected_state_changed_at?: string | null;
+  /** Optional reminder window when moving an account into suspended/verification-required state. */
+  verification_hold?: AccountVerificationHoldBody | null;
 }
 
 /** AccountStateTransitionOut */
@@ -450,6 +708,7 @@ export interface AccountStateTransitionOut {
   state_changed_at: string | null;
   /** Cooldown Until */
   cooldown_until: string | null;
+  verification_hold?: AccountVerificationHoldOut | null;
 }
 
 /**
@@ -480,6 +739,52 @@ export interface AccountUpdate {
   proxy_id?: string | null;
   /** Account Metadata */
   account_metadata?: Record<string, any> | null;
+}
+
+/** AccountVerificationHoldBody */
+export interface AccountVerificationHoldBody {
+  /**
+   * Preset
+   * @default "one_week"
+   */
+  preset?: "one_week" | "two_weeks" | "custom";
+  /** Remind At */
+  remind_at?: string | null;
+  /**
+   * Notify Web
+   * @default true
+   */
+  notify_web?: boolean;
+  /**
+   * Notify Telegram
+   * @default true
+   */
+  notify_telegram?: boolean;
+}
+
+/** AccountVerificationHoldOut */
+export interface AccountVerificationHoldOut {
+  /** Preset */
+  preset: string;
+  /**
+   * Remind At
+   * @format date-time
+   */
+  remind_at: string;
+  /**
+   * Notify Web
+   * @default true
+   */
+  notify_web?: boolean;
+  /**
+   * Notify Telegram
+   * @default true
+   */
+  notify_telegram?: boolean;
+  /** Created At */
+  created_at?: string | null;
+  /** Created By User Id */
+  created_by_user_id?: string | null;
 }
 
 /** AccountVerificationOut */
@@ -552,6 +857,17 @@ export interface AccountWithLinksOut {
   usage_today_minutes: number;
   /** Usage Reset Date */
   usage_reset_date: string | null;
+  /** Observed Display Name */
+  observed_display_name?: string | null;
+  /** Friends Count */
+  friends_count?: number | null;
+  /** Friends Observed At */
+  friends_observed_at?: string | null;
+  /** Assigned Device Name */
+  assigned_device_name?: string | null;
+  verification_hold?: AccountVerificationHoldOut | null;
+  /** Verification Hold Until */
+  verification_hold_until?: string | null;
   /**
    * Device Links
    * @default []
@@ -684,6 +1000,638 @@ export interface AddDevicesToGroupBody {
   device_ids: string[];
 }
 
+/** AdminAccountListOut */
+export interface AdminAccountListOut {
+  /** Items */
+  items: AdminAccountOut[];
+  /** Total */
+  total: number;
+  /** Offset */
+  offset: number;
+  /** Limit */
+  limit: number;
+  /** Byworkspace */
+  byWorkspace?: AdminWorkspaceMetricOut[];
+}
+
+/** AdminAccountOut */
+export interface AdminAccountOut {
+  /** Id */
+  id: string;
+  /** Platform */
+  platform: string;
+  /** Username */
+  username: string;
+  /** Display Name */
+  display_name: string;
+  /** Status */
+  status: string;
+  /** State */
+  state: string;
+  /** State Reason */
+  state_reason?: string | null;
+  /** State Changed At */
+  state_changed_at?: string | null;
+  /** Cooldown Until */
+  cooldown_until: string | null;
+  /** Proxy Id */
+  proxy_id: string | null;
+  /** Notes */
+  notes: string;
+  /** Tags */
+  tags: string;
+  /** User Id */
+  user_id: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Updated At
+   * @format date-time
+   */
+  updated_at: string;
+  /** Last Used At */
+  last_used_at: string | null;
+  /** Total Usage Minutes */
+  total_usage_minutes: number;
+  /** Usage Today Minutes */
+  usage_today_minutes: number;
+  /** Usage Reset Date */
+  usage_reset_date: string | null;
+  /** Observed Display Name */
+  observed_display_name?: string | null;
+  /** Friends Count */
+  friends_count?: number | null;
+  /** Friends Observed At */
+  friends_observed_at?: string | null;
+  /** Assigned Device Name */
+  assigned_device_name?: string | null;
+  verification_hold?: AccountVerificationHoldOut | null;
+  /** Verification Hold Until */
+  verification_hold_until?: string | null;
+  /** Workspaceid */
+  workspaceId: string;
+  /** Workspacename */
+  workspaceName?: string | null;
+}
+
+/** AdminAgentListOut */
+export interface AdminAgentListOut {
+  /** Items */
+  items: AdminAgentOut[];
+  /** Total */
+  total: number;
+  /** Offset */
+  offset: number;
+  /** Limit */
+  limit: number;
+}
+
+/** AdminAgentOut */
+export interface AdminAgentOut {
+  /** Relay Id */
+  relay_id: string;
+  /** Workspaceid */
+  workspaceId: string;
+  /** Workspacename */
+  workspaceName?: string | null;
+  /**
+   * Workspacekind
+   * @default "tenant"
+   */
+  workspaceKind?: string;
+  /** User Id */
+  user_id?: string | null;
+  /** Enrollment Token Id */
+  enrollment_token_id?: string | null;
+  /**
+   * Name
+   * @default ""
+   */
+  name?: string;
+  /**
+   * Hostname
+   * @default ""
+   */
+  hostname?: string;
+  /**
+   * Ip
+   * @default ""
+   */
+  ip?: string;
+  /**
+   * Version
+   * @default ""
+   */
+  version?: string;
+  /** Serials */
+  serials?: string[];
+  /**
+   * Status
+   * @default "unknown"
+   */
+  status?: string;
+  /**
+   * Health
+   * @default "offline"
+   */
+  health?: string;
+  /**
+   * Connected
+   * @default false
+   */
+  connected?: boolean;
+  /**
+   * Devicecount
+   * @default 0
+   */
+  deviceCount?: number;
+  /** Connected At */
+  connected_at?: string | null;
+  /** Last Heartbeat At */
+  last_heartbeat_at?: string | null;
+  /** Disconnected At */
+  disconnected_at?: string | null;
+  /** Created At */
+  created_at?: string | null;
+}
+
+/** AdminAgentPhoneAssign */
+export interface AdminAgentPhoneAssign {
+  /**
+   * Targetworkspaceid
+   * @minLength 1
+   */
+  targetWorkspaceId: string;
+  /**
+   * Serials
+   * @minItems 1
+   */
+  serials: string[];
+}
+
+/** AdminAgentPhoneAssignOut */
+export interface AdminAgentPhoneAssignOut {
+  /** Items */
+  items: AdminAgentPhoneOut[];
+  /** Total */
+  total: number;
+}
+
+/** AdminAgentPhoneListOut */
+export interface AdminAgentPhoneListOut {
+  /** Items */
+  items: AdminAgentPhoneOut[];
+  /** Total */
+  total: number;
+  /**
+   * Offset
+   * @default 0
+   */
+  offset?: number;
+  /**
+   * Limit
+   * @default 100
+   */
+  limit?: number;
+}
+
+/** AdminAgentPhoneOut */
+export interface AdminAgentPhoneOut {
+  /** Serial */
+  serial: string;
+  /** Deviceid */
+  deviceId?: string | null;
+  /**
+   * Registered
+   * @default false
+   */
+  registered?: boolean;
+  /**
+   * Name
+   * @default ""
+   */
+  name?: string;
+  /**
+   * Brand
+   * @default ""
+   */
+  brand?: string;
+  /**
+   * Model
+   * @default ""
+   */
+  model?: string;
+  /**
+   * Status
+   * @default "ready"
+   */
+  status?: string;
+  /**
+   * State
+   * @default "unknown"
+   */
+  state?: string;
+  /** Last Seen */
+  last_seen?: string | null;
+  /** Managedbyworkspaceid */
+  managedByWorkspaceId?: string | null;
+  /** Managedbyworkspacename */
+  managedByWorkspaceName?: string | null;
+  /** Assignedworkspaceid */
+  assignedWorkspaceId?: string | null;
+  /** Assignedworkspacename */
+  assignedWorkspaceName?: string | null;
+  /**
+   * Pooled
+   * @default true
+   */
+  pooled?: boolean;
+}
+
+/** AdminAgentPhoneUnassign */
+export interface AdminAgentPhoneUnassign {
+  /**
+   * Serials
+   * @minItems 1
+   */
+  serials: string[];
+}
+
+/** AdminAgentTokenCreate */
+export interface AdminAgentTokenCreate {
+  /**
+   * Workspaceid
+   * @minLength 1
+   */
+  workspaceId: string;
+  /**
+   * Name
+   * @maxLength 255
+   * @default ""
+   */
+  name?: string;
+  /** Owneruserid */
+  ownerUserId?: string | null;
+}
+
+/** AdminAgentTokenCreated */
+export interface AdminAgentTokenCreated {
+  /** Id */
+  id: string;
+  /** Workspaceid */
+  workspaceId: string;
+  /** Workspacename */
+  workspaceName?: string | null;
+  /** User Id */
+  user_id: string;
+  /** Name */
+  name: string;
+  /** Prefix */
+  prefix: string;
+  /** Status */
+  status: string;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /** Last Used At */
+  last_used_at?: string | null;
+  /** Revoked At */
+  revoked_at?: string | null;
+  /** Token */
+  token: string;
+}
+
+/** AdminAgentTokenOut */
+export interface AdminAgentTokenOut {
+  /** Id */
+  id: string;
+  /** Workspaceid */
+  workspaceId: string;
+  /** Workspacename */
+  workspaceName?: string | null;
+  /** User Id */
+  user_id: string;
+  /** Name */
+  name: string;
+  /** Prefix */
+  prefix: string;
+  /** Status */
+  status: string;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /** Last Used At */
+  last_used_at?: string | null;
+  /** Revoked At */
+  revoked_at?: string | null;
+}
+
+/** AdminAgentUpdate */
+export interface AdminAgentUpdate {
+  /** Name */
+  name?: string | null;
+  /** Status */
+  status?: string | null;
+  /** Workspaceid */
+  workspaceId?: string | null;
+}
+
+/** AdminAssignableWorkspaceListOut */
+export interface AdminAssignableWorkspaceListOut {
+  /** Items */
+  items: AdminAssignableWorkspaceOut[];
+  /** Total */
+  total: number;
+  /** Offset */
+  offset: number;
+  /** Limit */
+  limit: number;
+}
+
+/** AdminAssignableWorkspaceOut */
+export interface AdminAssignableWorkspaceOut {
+  /** Id */
+  id: string;
+  /** Businessname */
+  businessName: string;
+  /** Status */
+  status: string;
+}
+
+/** AdminContentItemOut */
+export interface AdminContentItemOut {
+  /** Id */
+  id: string;
+  /** Collection */
+  collection: string;
+  /** Platform */
+  platform?: string | null;
+  /** Content Type */
+  content_type: string;
+  /** Title */
+  title?: string | null;
+  /** Body */
+  body?: string | null;
+  /** Author */
+  author?: string | null;
+  /** Author Id */
+  author_id?: string | null;
+  /** Url */
+  url?: string | null;
+  /** Likes Count */
+  likes_count?: number | null;
+  /** Comments Count */
+  comments_count?: number | null;
+  /** Shares Count */
+  shares_count?: number | null;
+  /** Views Count */
+  views_count?: number | null;
+  /**
+   * Media Urls
+   * @default []
+   */
+  media_urls?: string[];
+  /** Screenshot Path */
+  screenshot_path?: string | null;
+  /**
+   * Tags
+   * @default ""
+   */
+  tags?: string;
+  /** Raw Data */
+  raw_data?: Record<string, any> | null;
+  /** Device Serial */
+  device_serial?: string | null;
+  /** Campaign Id */
+  campaign_id?: string | null;
+  /** Execution Id */
+  execution_id?: string | null;
+  /** Scenario Name */
+  scenario_name?: string | null;
+  /** Extracted At */
+  extracted_at?: string | null;
+  /** Content Date */
+  content_date?: string | null;
+  /** Created At */
+  created_at?: string | null;
+  /** Content Hash */
+  content_hash?: string | null;
+  /** Parent Id */
+  parent_id?: string | null;
+  /** Parent Item Id */
+  parent_item_id?: string | null;
+  /** Parent Item Hash */
+  parent_item_hash?: string | null;
+  /** Parent Item Author */
+  parent_item_author?: string | null;
+  /** Parent Item Body */
+  parent_item_body?: string | null;
+  /** Parent Item Content Type */
+  parent_item_content_type?: string | null;
+  /**
+   * Item Level
+   * @default 0
+   */
+  item_level?: number;
+  /** Workspaceid */
+  workspaceId: string;
+  /** Workspacename */
+  workspaceName?: string | null;
+}
+
+/** AdminContentListOut */
+export interface AdminContentListOut {
+  /** Items */
+  items: AdminContentItemOut[];
+  /** Total */
+  total: number;
+  /** Offset */
+  offset: number;
+  /** Limit */
+  limit: number;
+  /** Byworkspace */
+  byWorkspace?: AdminWorkspaceMetricOut[];
+}
+
+/** AdminDashboardSummaryOut */
+export interface AdminDashboardSummaryOut {
+  /**
+   * Totalworkspaces
+   * @default 0
+   */
+  totalWorkspaces?: number;
+  /**
+   * Activeworkspaces
+   * @default 0
+   */
+  activeWorkspaces?: number;
+  /**
+   * Suspendedworkspaces
+   * @default 0
+   */
+  suspendedWorkspaces?: number;
+  /**
+   * Archivedworkspaces
+   * @default 0
+   */
+  archivedWorkspaces?: number;
+  /**
+   * Totalagents
+   * @default 0
+   */
+  totalAgents?: number;
+  /**
+   * Onlineagents
+   * @default 0
+   */
+  onlineAgents?: number;
+  /**
+   * Offlineagents
+   * @default 0
+   */
+  offlineAgents?: number;
+  /**
+   * Staleagents
+   * @default 0
+   */
+  staleAgents?: number;
+  /**
+   * Totaldevices
+   * @default 0
+   */
+  totalDevices?: number;
+  /**
+   * Assigneddevices
+   * @default 0
+   */
+  assignedDevices?: number;
+  /**
+   * Unassigneddevices
+   * @default 0
+   */
+  unassignedDevices?: number;
+  /** Devicesbyworkspace */
+  devicesByWorkspace?: Record<string, any>[];
+  /** Agentsbyworkspace */
+  agentsByWorkspace?: Record<string, any>[];
+}
+
+/** AdminDeviceListOut */
+export interface AdminDeviceListOut {
+  /** Items */
+  items: AdminDeviceOut[];
+  /** Total */
+  total: number;
+  /** Offset */
+  offset: number;
+  /** Limit */
+  limit: number;
+}
+
+/** AdminDeviceOut */
+export interface AdminDeviceOut {
+  /** Id */
+  id: string;
+  /** Serial */
+  serial: string;
+  /**
+   * Device Serial
+   * @default ""
+   */
+  device_serial?: string;
+  /**
+   * Name
+   * @default ""
+   */
+  name?: string;
+  /** Workspaceid */
+  workspaceId: string;
+  /** Workspacename */
+  workspaceName?: string | null;
+  /** Managedbyworkspaceid */
+  managedByWorkspaceId?: string | null;
+  /** Managedbyworkspacename */
+  managedByWorkspaceName?: string | null;
+  /** User Id */
+  user_id?: string | null;
+  /**
+   * Brand
+   * @default ""
+   */
+  brand?: string;
+  /**
+   * Model
+   * @default ""
+   */
+  model?: string;
+  /**
+   * Android Version
+   * @default ""
+   */
+  android_version?: string;
+  /** Adb Serial */
+  adb_serial?: string | null;
+  /** Relay Serial */
+  relay_serial?: string | null;
+  /** Adb Ip */
+  adb_ip?: string | null;
+  /**
+   * Adb Port
+   * @default 5555
+   */
+  adb_port?: number;
+  /**
+   * Status
+   * @default "paired"
+   */
+  status?: string;
+  /**
+   * State
+   * @default "unknown"
+   */
+  state?: string;
+  /**
+   * Assigned
+   * @default false
+   */
+  assigned?: boolean;
+  /**
+   * Transferable
+   * @default true
+   */
+  transferable?: boolean;
+  /**
+   * Pooled
+   * @default true
+   */
+  pooled?: boolean;
+  /** Last Seen */
+  last_seen?: string | null;
+  /** Paired At */
+  paired_at?: string | null;
+  /** Unpaired At */
+  unpaired_at?: string | null;
+  /** Created At */
+  created_at?: string | null;
+  /** Updated At */
+  updated_at?: string | null;
+}
+
+/** AdminDeviceTransfer */
+export interface AdminDeviceTransfer {
+  /** Workspaceid */
+  workspaceId?: string | null;
+  /** Userid */
+  userId?: string | null;
+}
+
 /** AdminForceReleaseBody */
 export interface AdminForceReleaseBody {
   /**
@@ -716,6 +1664,51 @@ export interface AdminOverrideOut {
   actor: string;
 }
 
+/** AdminOwnerOut */
+export interface AdminOwnerOut {
+  /** User Id */
+  user_id: string;
+  /** Email */
+  email: string;
+  /** Name */
+  name: string;
+  /** Role */
+  role: string;
+  /**
+   * Is Active
+   * @default true
+   */
+  is_active?: boolean;
+  /**
+   * Mustchangepassword
+   * @default false
+   */
+  mustChangePassword?: boolean;
+  /** Created At */
+  created_at?: string | null;
+}
+
+/** AdminOwnerPasswordReset */
+export interface AdminOwnerPasswordReset {
+  /** Password */
+  password?: string | null;
+}
+
+/** AdminOwnerPasswordResetOut */
+export interface AdminOwnerPasswordResetOut {
+  owner: AdminOwnerOut;
+  /** Temporarypassword */
+  temporaryPassword: string;
+}
+
+/** AdminOwnerUpdate */
+export interface AdminOwnerUpdate {
+  /** Is Active */
+  is_active?: boolean | null;
+  /** Mustchangepassword */
+  mustChangePassword?: boolean | null;
+}
+
 /** AdminResetStateBody */
 export interface AdminResetStateBody {
   /**
@@ -729,6 +1722,464 @@ export interface AdminResetStateBody {
    * connecting or online; default depends on current state
    */
   target_state?: string | null;
+}
+
+/** AdminUserCreate */
+export interface AdminUserCreate {
+  /**
+   * Email
+   * @minLength 3
+   * @maxLength 255
+   */
+  email: string;
+  /**
+   * Name
+   * @minLength 1
+   * @maxLength 255
+   */
+  name: string;
+  /** Password */
+  password?: string | null;
+  /**
+   * Workspaceids
+   * @maxItems 200
+   */
+  workspaceIds?: string[];
+}
+
+/** AdminUserCreated */
+export interface AdminUserCreated {
+  /** User Id */
+  user_id: string;
+  /** Email */
+  email: string;
+  /** Name */
+  name: string;
+  /** Platformrole */
+  platformRole: string;
+  /**
+   * Is Active
+   * @default true
+   */
+  is_active?: boolean;
+  /**
+   * Adminworkspacecount
+   * @default 0
+   */
+  adminWorkspaceCount?: number;
+  /** Adminworkspaces */
+  adminWorkspaces?: AdminUserWorkspaceOut[];
+  /** Created At */
+  created_at?: string | null;
+  /** Temporarypassword */
+  temporaryPassword?: string | null;
+}
+
+/** AdminUserListOut */
+export interface AdminUserListOut {
+  /** Items */
+  items: AdminUserOut[];
+  /** Total */
+  total: number;
+  /** Offset */
+  offset: number;
+  /** Limit */
+  limit: number;
+}
+
+/** AdminUserOut */
+export interface AdminUserOut {
+  /** User Id */
+  user_id: string;
+  /** Email */
+  email: string;
+  /** Name */
+  name: string;
+  /** Platformrole */
+  platformRole: string;
+  /**
+   * Is Active
+   * @default true
+   */
+  is_active?: boolean;
+  /**
+   * Adminworkspacecount
+   * @default 0
+   */
+  adminWorkspaceCount?: number;
+  /** Adminworkspaces */
+  adminWorkspaces?: AdminUserWorkspaceOut[];
+  /** Created At */
+  created_at?: string | null;
+}
+
+/** AdminUserPasswordResetOut */
+export interface AdminUserPasswordResetOut {
+  admin: AdminUserOut;
+  /** Temporarypassword */
+  temporaryPassword: string;
+}
+
+/** AdminUserUpdate */
+export interface AdminUserUpdate {
+  /** Name */
+  name?: string | null;
+  /** Is Active */
+  is_active?: boolean | null;
+}
+
+/** AdminUserWorkspaceBulkOut */
+export interface AdminUserWorkspaceBulkOut {
+  admin: AdminUserOut;
+  /** Assigned */
+  assigned?: AdminUserWorkspaceBulkResult[];
+  /** Removed */
+  removed?: AdminUserWorkspaceBulkResult[];
+  /** Skipped */
+  skipped?: AdminUserWorkspaceBulkResult[];
+}
+
+/** AdminUserWorkspaceBulkResult */
+export interface AdminUserWorkspaceBulkResult {
+  /** Workspaceid */
+  workspaceId: string;
+  /** Workspacename */
+  workspaceName?: string | null;
+  /** Status */
+  status: string;
+  /** Reason */
+  reason?: string | null;
+}
+
+/** AdminUserWorkspaceBulkUpdate */
+export interface AdminUserWorkspaceBulkUpdate {
+  /**
+   * Workspaceids
+   * @maxItems 200
+   * @minItems 1
+   */
+  workspaceIds: string[];
+}
+
+/** AdminUserWorkspaceOut */
+export interface AdminUserWorkspaceOut {
+  /** Id */
+  id: string;
+  /** Businessname */
+  businessName: string;
+  /** Status */
+  status: string;
+  /** Joined At */
+  joined_at?: string | null;
+}
+
+/** AdminWorkspaceAccessAdminOut */
+export interface AdminWorkspaceAccessAdminOut {
+  /** User Id */
+  user_id: string;
+  /** Email */
+  email: string;
+  /** Name */
+  name: string;
+  /**
+   * Role
+   * @default "admin"
+   */
+  role?: string;
+  /**
+   * Is Active
+   * @default true
+   */
+  is_active?: boolean;
+  /** Created At */
+  created_at?: string | null;
+  /** Joined At */
+  joined_at?: string | null;
+  /** Workspaceid */
+  workspaceId: string;
+  /** Workspacename */
+  workspaceName: string;
+}
+
+/** AdminWorkspaceAccessMemberOut */
+export interface AdminWorkspaceAccessMemberOut {
+  /** Id */
+  id: string;
+  /** Userid */
+  userId: string;
+  /** Email */
+  email: string;
+  /** Name */
+  name: string;
+  /** Role */
+  role: string;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /** Workspaceid */
+  workspaceId: string;
+  /** Workspacename */
+  workspaceName: string;
+}
+
+/** AdminWorkspaceAccessOut */
+export interface AdminWorkspaceAccessOut {
+  /** Members */
+  members?: AdminWorkspaceAccessMemberOut[];
+  /** Admins */
+  admins?: AdminWorkspaceAccessAdminOut[];
+}
+
+/** AdminWorkspaceAdminAssign */
+export interface AdminWorkspaceAdminAssign {
+  /**
+   * Userid
+   * @minLength 1
+   */
+  userId: string;
+}
+
+/** AdminWorkspaceAdminOut */
+export interface AdminWorkspaceAdminOut {
+  /** User Id */
+  user_id: string;
+  /** Email */
+  email: string;
+  /** Name */
+  name: string;
+  /**
+   * Role
+   * @default "admin"
+   */
+  role?: string;
+  /**
+   * Is Active
+   * @default true
+   */
+  is_active?: boolean;
+  /** Created At */
+  created_at?: string | null;
+  /** Joined At */
+  joined_at?: string | null;
+}
+
+/** AdminWorkspaceCreate */
+export interface AdminWorkspaceCreate {
+  /**
+   * Businessname
+   * @minLength 1
+   * @maxLength 255
+   */
+  businessName: string;
+  /** Kind */
+  kind?: string | null;
+  /** Description */
+  description?: string | null;
+  /** Businessemail */
+  businessEmail?: string | null;
+  /** Businesslogo */
+  businessLogo?: string | null;
+  /** Owneruserid */
+  ownerUserId?: string | null;
+  /** Owneremail */
+  ownerEmail?: string | null;
+  /** Ownername */
+  ownerName?: string | null;
+  /** Ownerpassword */
+  ownerPassword?: string | null;
+  /** Adminuserids */
+  adminUserIds?: string[];
+}
+
+/** AdminWorkspaceCreated */
+export interface AdminWorkspaceCreated {
+  /** Id */
+  id: string;
+  /** Businessname */
+  businessName: string;
+  /**
+   * Description
+   * @default ""
+   */
+  description?: string;
+  /** Businessemail */
+  businessEmail?: string | null;
+  /** Businesslogo */
+  businessLogo?: string | null;
+  /** Slug */
+  slug?: string | null;
+  /** Status */
+  status: string;
+  /** Plan */
+  plan: string;
+  /**
+   * Kind
+   * @default "tenant"
+   */
+  kind?: string;
+  owner?: AdminOwnerOut | null;
+  /** Workspaceadmins */
+  workspaceAdmins?: AdminWorkspaceAdminOut[];
+  /**
+   * Agentcount
+   * @default 0
+   */
+  agentCount?: number;
+  /**
+   * Devicecount
+   * @default 0
+   */
+  deviceCount?: number;
+  /**
+   * Membercount
+   * @default 0
+   */
+  memberCount?: number;
+  /**
+   * Admincount
+   * @default 0
+   */
+  adminCount?: number;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /** Updated At */
+  updated_at?: string | null;
+  /** Temporarypassword */
+  temporaryPassword?: string | null;
+}
+
+/** AdminWorkspaceDependenciesOut */
+export interface AdminWorkspaceDependenciesOut {
+  /**
+   * Agents
+   * @default 0
+   */
+  agents?: number;
+  /**
+   * Devices
+   * @default 0
+   */
+  devices?: number;
+  /**
+   * Members
+   * @default 0
+   */
+  members?: number;
+}
+
+/** AdminWorkspaceListOut */
+export interface AdminWorkspaceListOut {
+  /** Items */
+  items: AdminWorkspaceOut[];
+  /** Total */
+  total: number;
+  /** Offset */
+  offset: number;
+  /** Limit */
+  limit: number;
+}
+
+/** AdminWorkspaceMetricOut */
+export interface AdminWorkspaceMetricOut {
+  /** Workspaceid */
+  workspaceId: string;
+  /** Workspacename */
+  workspaceName?: string | null;
+  /**
+   * Count
+   * @default 0
+   */
+  count?: number;
+}
+
+/** AdminWorkspaceOut */
+export interface AdminWorkspaceOut {
+  /** Id */
+  id: string;
+  /** Businessname */
+  businessName: string;
+  /**
+   * Description
+   * @default ""
+   */
+  description?: string;
+  /** Businessemail */
+  businessEmail?: string | null;
+  /** Businesslogo */
+  businessLogo?: string | null;
+  /** Slug */
+  slug?: string | null;
+  /** Status */
+  status: string;
+  /** Plan */
+  plan: string;
+  /**
+   * Kind
+   * @default "tenant"
+   */
+  kind?: string;
+  owner?: AdminOwnerOut | null;
+  /** Workspaceadmins */
+  workspaceAdmins?: AdminWorkspaceAdminOut[];
+  /**
+   * Agentcount
+   * @default 0
+   */
+  agentCount?: number;
+  /**
+   * Devicecount
+   * @default 0
+   */
+  deviceCount?: number;
+  /**
+   * Membercount
+   * @default 0
+   */
+  memberCount?: number;
+  /**
+   * Admincount
+   * @default 0
+   */
+  adminCount?: number;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /** Updated At */
+  updated_at?: string | null;
+}
+
+/** AdminWorkspaceTransferOwner */
+export interface AdminWorkspaceTransferOwner {
+  /**
+   * Userid
+   * @minLength 1
+   */
+  userId: string;
+}
+
+/** AdminWorkspaceUpdate */
+export interface AdminWorkspaceUpdate {
+  /** Businessname */
+  businessName?: string | null;
+  /** Description */
+  description?: string | null;
+  /** Businessemail */
+  businessEmail?: string | null;
+  /** Businesslogo */
+  businessLogo?: string | null;
+  /** Status */
+  status?: string | null;
+  /** Plan */
+  plan?: string | null;
+  /** Kind */
+  kind?: string | null;
 }
 
 /** AnalyticsAdhocOut */
@@ -779,6 +2230,28 @@ export interface AnalyticsSummaryOut {
 export interface AnalyticsTimeseriesOut {
   /** Points */
   points: AnalyticsPointOut[];
+}
+
+/** ApproveWizardScenarioIn */
+export interface ApproveWizardScenarioIn {
+  /**
+   * Operation Id
+   * @minLength 8
+   * @maxLength 128
+   */
+  operation_id: string;
+  /**
+   * Scenario Version Id
+   * @minLength 1
+   * @maxLength 64
+   */
+  scenario_version_id: string;
+  /**
+   * Expected Content Hash
+   * @minLength 64
+   * @maxLength 64
+   */
+  expected_content_hash: string;
 }
 
 /** ArtifactUrlOut */
@@ -832,25 +2305,38 @@ export interface BodyBulkImportCsvApiAccountsImportCsvPost {
    * File
    * CSV file with columns: platform, username, password, display_name, tags, notes, email, totp_secret, cookies, token
    */
-  file: string;
+  file: File | Blob;
+}
+
+/** Body_bulk_import_txt_api_accounts_import_txt_post */
+export interface BodyBulkImportTxtApiAccountsImportTxtPost {
+  /**
+   * File
+   * TXT file containing one account per line
+   */
+  file: File | Blob;
+  /** Format Id */
+  format_id?: string | null;
+  /** Format Slug */
+  format_slug?: string | null;
 }
 
 /** Body_import_scenario_body_into_existing_route_api_scenarios__scenario_id__import_body_post */
 export interface BodyImportScenarioBodyIntoExistingRouteApiScenariosScenarioIdImportBodyPost {
   /** File */
-  file: string;
+  file: File | Blob;
 }
 
 /** Body_import_scenario_route_api_scenarios_import_post */
 export interface BodyImportScenarioRouteApiScenariosImportPost {
   /** File */
-  file: string;
+  file: File | Blob;
 }
 
 /** Body_upload_step_template_route_api_scenarios__scenario_id__image_templates_post */
 export interface BodyUploadStepTemplateRouteApiScenariosScenarioIdImageTemplatesPost {
   /** File */
-  file: string;
+  file: File | Blob;
 }
 
 /** BootstrapAllResult */
@@ -865,6 +2351,42 @@ export interface BootstrapAllResult {
   failed: number;
   /** Results */
   results: Record<string, any>[];
+}
+
+/** BuildAcceptanceCandidateIn */
+export interface BuildAcceptanceCandidateIn {
+  /**
+   * Version
+   * @minLength 1
+   * @maxLength 64
+   */
+  version: string;
+  /** Source Kind */
+  source_kind: string;
+  /**
+   * Environment
+   * @minLength 1
+   * @maxLength 64
+   */
+  environment: string;
+  /**
+   * Commit Sha
+   * @minLength 1
+   * @maxLength 64
+   */
+  commit_sha: string;
+  /**
+   * Schema Version
+   * @minLength 1
+   * @maxLength 64
+   */
+  schema_version: string;
+  /** Rollback Owner */
+  rollback_owner?: string | null;
+  /** Oncall Owner */
+  oncall_owner?: string | null;
+  /** Requirements */
+  requirements: AcceptanceRequirementIn[];
 }
 
 /**
@@ -1264,6 +2786,20 @@ export interface CampaignForceTransitionOut {
   reason?: string | null;
 }
 
+/** CampaignFunnelOut */
+export interface CampaignFunnelOut {
+  /** Service Campaign Id */
+  service_campaign_id: string;
+  /** Acquisition Id */
+  acquisition_id: string;
+  /** Completed Steps */
+  completed_steps: number;
+  /** Next Step */
+  next_step: string | null;
+  /** Events */
+  events: FunnelEventOut[];
+}
+
 /** CampaignMonitorExecutionOut */
 export interface CampaignMonitorExecutionOut {
   /** Execution Id */
@@ -1411,13 +2947,20 @@ export interface CampaignSourcePoolIn {
   statuses?: string[];
 }
 
-/** CancelFacebookLoginAttemptBody */
-export interface CancelFacebookLoginAttemptBody {
+/** CancelServiceCampaignIn */
+export interface CancelServiceCampaignIn {
+  /**
+   * Idempotency Key
+   * @minLength 8
+   * @maxLength 128
+   */
+  idempotency_key: string;
   /**
    * Reason
-   * @default "operator_cancelled"
+   * @minLength 3
+   * @maxLength 1000
    */
-  reason?: string;
+  reason: string;
 }
 
 /** CapacityGroupBreakdownOut */
@@ -1520,6 +3063,28 @@ export interface ChangePasswordRequest {
   new_password: string;
 }
 
+/** ClientFunnelEventIn */
+export interface ClientFunnelEventIn {
+  /**
+   * Event Id
+   * @minLength 8
+   * @maxLength 128
+   */
+  event_id: string;
+  /**
+   * Event Name
+   * @pattern ^(landing_view|start_click)$
+   */
+  event_name: string;
+  /**
+   * Occurred At
+   * @format date-time
+   */
+  occurred_at: string;
+  /** Attribution */
+  attribution?: Record<string, string>;
+}
+
 /** ClipboardSetRequest */
 export interface ClipboardSetRequest {
   /** Text */
@@ -1570,31 +3135,14 @@ export interface CompileScenarioBody {
   device_context?: Record<string, any> | null;
 }
 
-/** CompleteFacebookLoginAttemptBody */
-export interface CompleteFacebookLoginAttemptBody {
+/** ComputeKpiSnapshotIn */
+export interface ComputeKpiSnapshotIn {
   /**
-   * Operator Confirmed
-   * @default false
+   * Query Version
+   * @minLength 1
+   * @maxLength 64
    */
-  operator_confirmed?: boolean;
-  /** Evidence */
-  evidence?: Record<string, any>;
-}
-
-/** ConfirmPlatformSessionBody */
-export interface ConfirmPlatformSessionBody {
-  /** Account Id */
-  account_id: string;
-  /** Reason */
-  reason: string;
-  /** Expected Version */
-  expected_version?: number | null;
-  /** Display Name Observed */
-  display_name_observed?: string | null;
-  /** App Version */
-  app_version?: string | null;
-  /** Evidence */
-  evidence?: Record<string, any>;
+  query_version: string;
 }
 
 /**
@@ -1609,6 +3157,15 @@ export interface ConnectByIpBody {
    * @default 5555
    */
   port?: number;
+}
+
+/** ConnectLocalEmulatorBody */
+export interface ConnectLocalEmulatorBody {
+  /**
+   * Serial
+   * @pattern ^emulator-[0-9]{4,5}$
+   */
+  serial: string;
 }
 
 /** ContentArtifactOut */
@@ -1746,141 +3303,103 @@ export interface ContentStatsOut {
   latest_extraction?: string | null;
 }
 
-/** ContinuousCrawlDeviceLaneOut */
-export interface ContinuousCrawlDeviceLaneOut {
-  /** Device Serial */
-  device_serial: string;
-  /** Status */
-  status: "idle" | "running" | "paused" | "offline" | "failed";
-  /** Target Id */
-  target_id?: string | null;
-  /** Target Label */
-  target_label?: string | null;
+/** CreateFarmRunIn */
+export interface CreateFarmRunIn {
   /**
-   * Completed
-   * @default 0
+   * Lane Id
+   * @minLength 1
+   * @maxLength 64
    */
-  completed?: number;
+  lane_id: string;
   /**
-   * Failed
-   * @default 0
+   * Slot Id
+   * @minLength 1
+   * @maxLength 64
    */
-  failed?: number;
-  /** Message */
-  message?: string | null;
+  slot_id: string;
+  /**
+   * Execution Id
+   * @minLength 1
+   * @maxLength 64
+   */
+  execution_id: string;
+  /**
+   * Scenario Version Id
+   * @minLength 1
+   * @maxLength 64
+   */
+  scenario_version_id: string;
+  /**
+   * App Build Id
+   * @minLength 1
+   * @maxLength 64
+   */
+  app_build_id: string;
+  /**
+   * Reservation Id
+   * @minLength 1
+   * @maxLength 64
+   */
+  reservation_id: string;
+  /**
+   * Approval Id
+   * @minLength 1
+   * @maxLength 64
+   */
+  approval_id: string;
+  /**
+   * Idempotency Key
+   * @minLength 8
+   * @maxLength 128
+   */
+  idempotency_key: string;
+  /**
+   * Deadline At
+   * @format date-time
+   */
+  deadline_at: string;
+  /**
+   * Reason
+   * @minLength 1
+   * @maxLength 64
+   * @default "scheduled"
+   */
+  reason?: string;
 }
 
-/** ContinuousCrawlDeviceTargetsOut */
-export interface ContinuousCrawlDeviceTargetsOut {
-  /** Device Id */
-  device_id: string;
-  /** Device Serial */
-  device_serial: string;
-  /** Device Name */
-  device_name: string;
-  /** Target Count */
-  target_count: number;
-}
-
-/** ContinuousCrawlPreflightOut */
-export interface ContinuousCrawlPreflightOut {
-  /** Ready */
-  ready: boolean;
-  /** Target Count */
-  target_count?: number | null;
-  /** Device Count */
-  device_count: number;
-  /** Max Concurrency */
-  max_concurrency: number;
-  /** Device Targets */
-  device_targets?: ContinuousCrawlDeviceTargetsOut[];
-  /** Warnings */
-  warnings?: string[];
-  /** Errors */
-  errors?: string[];
-}
-
-/** ContinuousCrawlProgressOut */
-export interface ContinuousCrawlProgressOut {
-  /** Campaign Id */
-  campaign_id: string;
-  /** Dispatch Id */
-  dispatch_id?: string | null;
-  /** Status */
-  status: string;
-  /** Health */
-  health: "healthy" | "degraded" | "critical";
+/** CreateIssueIn */
+export interface CreateIssueIn {
   /**
-   * Loaded
-   * @default 0
+   * Source Attempt Id
+   * @minLength 1
+   * @maxLength 64
    */
-  loaded?: number;
+  source_attempt_id: string;
   /**
-   * Active
-   * @default 0
+   * Severity
+   * @pattern ^(minor|major|critical)$
    */
-  active?: number;
+  severity: string;
   /**
-   * Succeeded
-   * @default 0
+   * Assertion Key
+   * @minLength 1
+   * @maxLength 255
    */
-  succeeded?: number;
+  assertion_key: string;
   /**
-   * Failed
-   * @default 0
+   * Expected
+   * @minLength 1
+   * @maxLength 4000
    */
-  failed?: number;
+  expected: string;
   /**
-   * Consecutive Failures
-   * @default 0
+   * Actual
+   * @minLength 1
+   * @maxLength 4000
    */
-  consecutive_failures?: number;
-  /**
-   * Exhausted
-   * @default false
-   */
-  exhausted?: boolean;
-  /**
-   * Generation
-   * @default 0
-   */
-  generation?: number;
-  /** Max Targets */
-  max_targets?: number | null;
-  /** Message */
-  message?: string | null;
-  /** Updated At */
-  updated_at?: string | null;
-  /** Device Lanes */
-  device_lanes?: ContinuousCrawlDeviceLaneOut[];
-  /** Recent Targets */
-  recent_targets?: ContinuousCrawlTargetSummaryOut[];
-}
-
-/** ContinuousCrawlStartOut */
-export interface ContinuousCrawlStartOut {
-  /** Campaign Id */
-  campaign_id: string;
-  /** Dispatch Id */
-  dispatch_id: string;
-  /** Workflow Id */
-  workflow_id: string;
-  /** Status */
-  status: string;
-}
-
-/** ContinuousCrawlTargetSummaryOut */
-export interface ContinuousCrawlTargetSummaryOut {
-  /** Target Id */
-  target_id: string;
-  /** Label */
-  label?: string | null;
-  /** Status */
-  status: "queued" | "running" | "succeeded" | "failed";
-  /** Device Serial */
-  device_serial?: string | null;
-  /** Message */
-  message?: string | null;
+  actual: string;
+  /** Reproduction */
+  reproduction: Record<string, any>;
 }
 
 /** DLQBulkRetryBody */
@@ -2086,6 +3605,18 @@ export interface DeviceCreate {
   user_id?: string | null;
 }
 
+/** DeviceGroupAvailableDevicesOut */
+export interface DeviceGroupAvailableDevicesOut {
+  /** Items */
+  items: DeviceOut[];
+  /** Total */
+  total: number;
+  /** Offset */
+  offset: number;
+  /** Limit */
+  limit: number;
+}
+
 /** DeviceGroupCreate */
 export interface DeviceGroupCreate {
   /** Name */
@@ -2172,6 +3703,50 @@ export interface DeviceGroupUpdate {
   color?: string | null;
 }
 
+/** DeviceHygieneResultIn */
+export interface DeviceHygieneResultIn {
+  /**
+   * Target Type
+   * @pattern ^(physical|emulator)$
+   */
+  target_type: string;
+  /**
+   * Protocol Version
+   * @minLength 1
+   * @maxLength 64
+   */
+  protocol_version: string;
+  /** Reset Succeeded */
+  reset_succeeded: boolean;
+  /** Readback Clean */
+  readback_clean: boolean;
+  /** Evidence Ref */
+  evidence_ref?: string | null;
+  /**
+   * Active Run
+   * @default false
+   */
+  active_run?: boolean;
+  /** Service Campaign Id */
+  service_campaign_id?: string | null;
+}
+
+/** DeviceHygieneResultOut */
+export interface DeviceHygieneResultOut {
+  /** Device Id */
+  device_id: string;
+  /** Target Type */
+  target_type: string;
+  /** State */
+  state: string;
+  /** Protocol Version */
+  protocol_version: string;
+  /** Reason Code */
+  reason_code: string;
+  /** Verification Evidence Ref */
+  verification_evidence_ref: string | null;
+}
+
 /** DeviceIdBreakdownOut */
 export interface DeviceIdBreakdownOut {
   /** Db Id */
@@ -2182,6 +3757,16 @@ export interface DeviceIdBreakdownOut {
   adb_serial?: string | null;
   /** Relay Serial */
   relay_serial?: string | null;
+}
+
+/** DeviceNameUpdate */
+export interface DeviceNameUpdate {
+  /**
+   * Name
+   * @maxLength 255
+   * @default ""
+   */
+  name?: string;
 }
 
 /** DeviceOut */
@@ -2226,6 +3811,16 @@ export interface DeviceOut {
   adb_serial?: string | null;
   /** Relay Serial */
   relay_serial?: string | null;
+  /** Managed By Org Id */
+  managed_by_org_id?: string | null;
+  /** Managed By Relay Id */
+  managed_by_relay_id?: string | null;
+  /** Managed By Relay Name */
+  managed_by_relay_name?: string | null;
+  /** Managed By Relay Hostname */
+  managed_by_relay_hostname?: string | null;
+  /** Managed By Relay Label */
+  managed_by_relay_label?: string | null;
   /** Adb Ip */
   adb_ip?: string | null;
   /**
@@ -2240,6 +3835,11 @@ export interface DeviceOut {
   tags?: string;
   /** Relay Id */
   relay_id?: string | null;
+  /**
+   * Transport Online
+   * @default false
+   */
+  transport_online?: boolean;
   /**
    * State
    * @default "unknown"
@@ -2259,48 +3859,6 @@ export interface DeviceOut {
    * @default ""
    */
   notes?: string;
-}
-
-/** DevicePlatformLoginAttemptOut */
-export interface DevicePlatformLoginAttemptOut {
-  /** Id */
-  id: string;
-  /** Org Id */
-  org_id: string;
-  /** Device Id */
-  device_id: string;
-  /** Platform */
-  platform: string;
-  /** Account Id */
-  account_id: string;
-  /** State */
-  state: string;
-  /** Reason */
-  reason?: string | null;
-  /** Reserve Session Id */
-  reserve_session_id?: string | null;
-  /** Created By User Id */
-  created_by_user_id?: string | null;
-  /** Started At */
-  started_at?: string | null;
-  /** Completed At */
-  completed_at?: string | null;
-  /** Cancelled At */
-  cancelled_at?: string | null;
-  /** Evidence */
-  evidence?: Record<string, any>;
-  /** Version */
-  version: number;
-  /**
-   * Created At
-   * @format date-time
-   */
-  created_at: string;
-  /**
-   * Updated At
-   * @format date-time
-   */
-  updated_at: string;
 }
 
 /** DevicePlatformSessionOut */
@@ -2515,6 +4073,47 @@ export interface DragRequest {
 export interface EndSessionRequest {
   /** Session Id */
   session_id: string;
+}
+
+/** EvaluateAcceptanceCandidateIn */
+export interface EvaluateAcceptanceCandidateIn {
+  /**
+   * Evaluation Key
+   * @minLength 8
+   * @maxLength 128
+   */
+  evaluation_key: string;
+}
+
+/** EvidenceDownloadOut */
+export interface EvidenceDownloadOut {
+  /** Url */
+  url: string;
+  /** Expires At */
+  expires_at: string;
+  /** Content Type */
+  content_type: string;
+}
+
+/** EvidenceSummaryOut */
+export interface EvidenceSummaryOut {
+  /** Id */
+  id: string;
+  /** Step Path */
+  step_path: string;
+  /** Step Attempt Index */
+  step_attempt_index: number;
+  /** Kind */
+  kind: string;
+  /** Status */
+  status: string;
+  /**
+   * Captured At
+   * @format date-time
+   */
+  captured_at: string;
+  /** Capture Error Code */
+  capture_error_code: string | null;
 }
 
 /** ExecutionArtifactOut */
@@ -2951,52 +4550,67 @@ export interface ExecutionTraceContextOut {
   account_platform?: string | null;
 }
 
-/** ExternalEntityAuthorSyncIn */
-export interface ExternalEntityAuthorSyncIn {
-  /** Collection */
-  collection?: string | null;
-  /** Campaign Id */
-  campaign_id?: string | null;
-  /** Execution Id */
-  execution_id?: string | null;
+/** ExtendServiceCampaignIn */
+export interface ExtendServiceCampaignIn {
   /**
-   * Content Types
-   * @maxItems 10
-   * @minItems 1
+   * Order Id
+   * @minLength 1
+   * @maxLength 64
    */
-  content_types?: string[];
+  order_id: string;
   /**
-   * Dry Run
-   * @default false
+   * Entitlement Id
+   * @minLength 1
+   * @maxLength 64
    */
-  dry_run?: boolean;
+  entitlement_id: string;
   /**
-   * Limit
-   * @min 1
-   * @max 5000
-   * @default 2000
+   * Idempotency Key
+   * @minLength 8
+   * @maxLength 128
    */
-  limit?: number;
+  idempotency_key: string;
+  /**
+   * Added Service Days
+   * @exclusiveMin 0
+   * @max 365
+   */
+  added_service_days: number;
+  consent: ExtensionConsentIn;
 }
 
-/** ExternalEntityAuthorSyncOut */
-export interface ExternalEntityAuthorSyncOut {
-  /** Scanned Count */
-  scanned_count: number;
-  /** Valid Count */
-  valid_count: number;
-  /** Created Count */
-  created_count: number;
-  /** Existing Count */
-  existing_count: number;
-  /** Skipped Existing Count */
-  skipped_existing_count: number;
-  /** Skipped Count */
-  skipped_count: number;
-  /** Skipped Anonymous Count */
-  skipped_anonymous_count: number;
-  /** Skipped Invalid Count */
-  skipped_invalid_count: number;
+/** ExtensionConsentIn */
+export interface ExtensionConsentIn {
+  /** Accepted */
+  accepted: boolean;
+  /**
+   * Accepted At
+   * @format date-time
+   */
+  accepted_at: string;
+  /**
+   * Policy Version
+   * @minLength 1
+   * @maxLength 64
+   */
+  policy_version: string;
+  /**
+   * Pricing Version
+   * @minLength 1
+   * @maxLength 64
+   */
+  pricing_version: string;
+  /**
+   * Amount Minor
+   * @exclusiveMin 0
+   */
+  amount_minor: number;
+  /**
+   * Currency
+   * @minLength 3
+   * @maxLength 3
+   */
+  currency: string;
 }
 
 /** ExternalEntityBulkObserveIn */
@@ -3136,547 +4750,107 @@ export interface ExternalEntityOut {
   updated_at: string;
 }
 
-/** FacebookCandidateDetailOut */
-export interface FacebookCandidateDetailOut {
-  /** Id */
-  id: string;
-  /** Org Id */
-  org_id: string;
-  /** Account Id */
-  account_id: string;
-  /** External Entity Id */
-  external_entity_id: string;
-  /** External Entity Display Name */
-  external_entity_display_name: string;
-  /** External Entity Status */
-  external_entity_status: string;
-  /** Status */
-  status:
-    | "discovered"
-    | "review_required"
-    | "approved"
-    | "rejected"
-    | "deferred"
-    | "warming_up"
-    | "ready_to_connect"
-    | "request_pending"
-    | "connected"
-    | "blocked";
-  /** Relationship Score */
-  relationship_score: number;
-  /** Keyword Score */
-  keyword_score: number;
-  /** Semantic Score */
-  semantic_score: number;
-  /** Final Score */
-  final_score: number;
-  /** Reasons */
-  reasons?: Record<string, any>[];
-  /** Matched Keywords */
-  matched_keywords?: string[];
-  /** Negative Keywords */
-  negative_keywords?: string[];
-  /** Evidence Count */
-  evidence_count: number;
-  /** Next Eligible At */
-  next_eligible_at?: string | null;
-  /** Reviewed By */
-  reviewed_by?: string | null;
-  /** Reviewed At */
-  reviewed_at?: string | null;
-  /** Review Note */
-  review_note?: string | null;
+/** FarmEventIn */
+export interface FarmEventIn {
   /**
-   * First Observed At
-   * @format date-time
+   * Schema Version
+   * @pattern ^adl-farm-event-v1$
    */
-  first_observed_at: string;
+  schema_version: string;
   /**
-   * Last Observed At
-   * @format date-time
-   */
-  last_observed_at: string;
-  /**
-   * Created At
-   * @format date-time
-   */
-  created_at: string;
-  /**
-   * Updated At
-   * @format date-time
-   */
-  updated_at: string;
-  /** Evidence */
-  evidence: FacebookCandidateEvidenceOut[];
-  /** Keyword Matches */
-  keyword_matches: FacebookCandidateKeywordOut[];
-  /** Embeddings */
-  embeddings: FacebookCandidateEmbeddingOut[];
-  /** Reviews */
-  reviews: FacebookCandidateReviewOut[];
-}
-
-/** FacebookCandidateEmbeddingIn */
-export interface FacebookCandidateEmbeddingIn {
-  /**
-   * Values
-   * @maxItems 4096
-   * @minItems 1
-   */
-  values: number[];
-  /** Model */
-  model?: string | null;
-  /** Dimensions */
-  dimensions?: number | null;
-  /**
-   * Source Hash
-   * @pattern ^[a-fA-F0-9]{64}$
-   */
-  source_hash: string;
-}
-
-/** FacebookCandidateEmbeddingOut */
-export interface FacebookCandidateEmbeddingOut {
-  /** Id */
-  id: string;
-  /** Embedding */
-  embedding: number[];
-  /** Model */
-  model: string;
-  /** Dimensions */
-  dimensions: number;
-  /** Source Hash */
-  source_hash: string;
-  /**
-   * Created At
-   * @format date-time
-   */
-  created_at: string;
-}
-
-/** FacebookCandidateEvidenceIn */
-export interface FacebookCandidateEvidenceIn {
-  /**
-   * Evidence Type
+   * Execution Id
    * @minLength 1
-   * @maxLength 64
+   * @maxLength 36
    */
-  evidence_type: string;
+  execution_id: string;
   /**
    * Source
    * @minLength 1
+   * @maxLength 64
+   */
+  source: string;
+  /**
+   * Event Id
+   * @minLength 1
    * @maxLength 128
    */
-  source: string;
+  event_id: string;
   /**
-   * Text
-   * @maxLength 100000
-   * @default ""
+   * Event Type
+   * @pattern ^(accepted|running|step|assertion|uncertain|blocked|deadline|cancelled|completed)$
    */
-  text?: string;
-  /** Payload */
-  payload?: Record<string, any>;
-  /** Observed At */
-  observed_at?: string | null;
-  /** Source Hash */
-  source_hash?: string | null;
-}
-
-/** FacebookCandidateEvidenceOut */
-export interface FacebookCandidateEvidenceOut {
-  /** Id */
-  id: string;
-  /** Evidence Type */
-  evidence_type: string;
-  /** Source */
-  source: string;
-  /** Source Hash */
-  source_hash: string;
-  /** Text */
-  text: string;
-  /** Payload */
-  payload: Record<string, any>;
+  event_type: string;
   /**
-   * Observed At
+   * Occurred At
    * @format date-time
    */
-  observed_at: string;
+  occurred_at: string;
+  /** Sequence */
+  sequence?: number | null;
+  /** Reason Code */
+  reason_code?: string | null;
+  /** Assertion Passed */
+  assertion_passed?: boolean | null;
+  /** Step Path */
+  step_path?: string | null;
+  /** Step Attempt Index */
+  step_attempt_index?: number | null;
   /**
-   * Created At
-   * @format date-time
-   */
-  created_at: string;
-}
-
-/** FacebookCandidateKeywordOut */
-export interface FacebookCandidateKeywordOut {
-  /** Keyword */
-  keyword: string;
-  /** Normalized Keyword */
-  normalized_keyword: string;
-  /** Keyword Type */
-  keyword_type: "positive" | "negative";
-  /** Match Count */
-  match_count: number;
-  /**
-   * First Matched At
-   * @format date-time
-   */
-  first_matched_at: string;
-  /**
-   * Last Matched At
-   * @format date-time
-   */
-  last_matched_at: string;
-}
-
-/** FacebookCandidateListOut */
-export interface FacebookCandidateListOut {
-  /** Items */
-  items: FacebookCandidateOut[];
-  /** Total */
-  total: number;
-  /** Limit */
-  limit: number;
-  /** Offset */
-  offset: number;
-}
-
-/** FacebookCandidateObserveIn */
-export interface FacebookCandidateObserveIn {
-  /**
-   * Account Id
-   * @minLength 1
-   * @maxLength 36
-   */
-  account_id: string;
-  /**
-   * External Entity Id
-   * @minLength 1
-   * @maxLength 36
-   */
-  external_entity_id: string;
-  /** Relationship Score */
-  relationship_score?: number | null;
-  /** Semantic Score */
-  semantic_score?: number | null;
-  /**
-   * Evidence
+   * Artifact Refs
    * @maxItems 100
    */
-  evidence?: FacebookCandidateEvidenceIn[];
-  embedding?: FacebookCandidateEmbeddingIn | null;
+  artifact_refs?: string[];
 }
 
-/** FacebookCandidateObserveOut */
-export interface FacebookCandidateObserveOut {
-  candidate: FacebookCandidateOut;
-  /** Created */
-  created: boolean;
+/** FarmEventOut */
+export interface FarmEventOut {
+  /** Event Id */
+  event_id: string;
+  /** Job Id */
+  job_id: string;
+  /** Job Status */
+  job_status: string;
+  /** Verdict */
+  verdict: string | null;
+  /** Terminal Reason */
+  terminal_reason: string | null;
 }
 
-/** FacebookCandidateOut */
-export interface FacebookCandidateOut {
-  /** Id */
-  id: string;
-  /** Org Id */
-  org_id: string;
-  /** Account Id */
-  account_id: string;
-  /** External Entity Id */
-  external_entity_id: string;
-  /** External Entity Display Name */
-  external_entity_display_name: string;
-  /** External Entity Status */
-  external_entity_status: string;
+/** FarmRunOut */
+export interface FarmRunOut {
+  /** Job Id */
+  job_id: string;
+  /** Run Attempt Id */
+  run_attempt_id: string;
+  /** Execution Id */
+  execution_id: string;
+  /** Slot Id */
+  slot_id: string;
+  /** Lane Id */
+  lane_id: string;
+  /** Device Id */
+  device_id: string;
+  /** Reservation Id */
+  reservation_id: string;
+  /** Scenario Version Id */
+  scenario_version_id: string;
+  /** Scenario Hash */
+  scenario_hash: string;
+  /** Policy Version */
+  policy_version: string;
+  /** Schema Version */
+  schema_version: string;
   /** Status */
-  status:
-    | "discovered"
-    | "review_required"
-    | "approved"
-    | "rejected"
-    | "deferred"
-    | "warming_up"
-    | "ready_to_connect"
-    | "request_pending"
-    | "connected"
-    | "blocked";
-  /** Relationship Score */
-  relationship_score: number;
-  /** Keyword Score */
-  keyword_score: number;
-  /** Semantic Score */
-  semantic_score: number;
-  /** Final Score */
-  final_score: number;
-  /** Reasons */
-  reasons?: Record<string, any>[];
-  /** Matched Keywords */
-  matched_keywords?: string[];
-  /** Negative Keywords */
-  negative_keywords?: string[];
-  /** Evidence Count */
-  evidence_count: number;
-  /** Next Eligible At */
-  next_eligible_at?: string | null;
-  /** Reviewed By */
-  reviewed_by?: string | null;
-  /** Reviewed At */
-  reviewed_at?: string | null;
-  /** Review Note */
-  review_note?: string | null;
+  status: string;
+  /** Verdict */
+  verdict: string | null;
+  /** Terminal Reason */
+  terminal_reason: string | null;
   /**
-   * First Observed At
+   * Deadline At
    * @format date-time
    */
-  first_observed_at: string;
-  /**
-   * Last Observed At
-   * @format date-time
-   */
-  last_observed_at: string;
-  /**
-   * Created At
-   * @format date-time
-   */
-  created_at: string;
-  /**
-   * Updated At
-   * @format date-time
-   */
-  updated_at: string;
-}
-
-/** FacebookCandidateRecomputeIn */
-export interface FacebookCandidateRecomputeIn {
-  /** Candidate Ids */
-  candidate_ids?: string[] | null;
-  /** Account Id */
-  account_id?: string | null;
-  /**
-   * Limit
-   * @min 1
-   * @max 500
-   * @default 500
-   */
-  limit?: number;
-  /** After Id */
-  after_id?: string | null;
-}
-
-/** FacebookCandidateRecomputeOut */
-export interface FacebookCandidateRecomputeOut {
-  /** Items */
-  items: FacebookCandidateOut[];
-  /** Recomputed Count */
-  recomputed_count: number;
-  /** Next Cursor */
-  next_cursor?: string | null;
-}
-
-/** FacebookCandidateReviewIn */
-export interface FacebookCandidateReviewIn {
-  /** Status */
-  status: "approved" | "ready_to_connect" | "rejected" | "deferred";
-  /** Note */
-  note?: string | null;
-  /** Next Eligible At */
-  next_eligible_at?: string | null;
-}
-
-/** FacebookCandidateReviewOut */
-export interface FacebookCandidateReviewOut {
-  /** Id */
-  id: string;
-  /** From Status */
-  from_status:
-    | "discovered"
-    | "review_required"
-    | "approved"
-    | "rejected"
-    | "deferred"
-    | "warming_up"
-    | "ready_to_connect"
-    | "request_pending"
-    | "connected"
-    | "blocked";
-  /** To Status */
-  to_status:
-    | "discovered"
-    | "review_required"
-    | "approved"
-    | "rejected"
-    | "deferred"
-    | "warming_up"
-    | "ready_to_connect"
-    | "request_pending"
-    | "connected"
-    | "blocked";
-  /** Reviewer Id */
-  reviewer_id?: string | null;
-  /** Note */
-  note?: string | null;
-  /** Score Snapshot */
-  score_snapshot: Record<string, any>;
-  /**
-   * Created At
-   * @format date-time
-   */
-  created_at: string;
-}
-
-/** FacebookCandidateSettingsIn */
-export interface FacebookCandidateSettingsIn {
-  /**
-   * Relationship Weight
-   * @min 0
-   * @max 1
-   * @default 0.4
-   */
-  relationship_weight?: number;
-  /**
-   * Keyword Weight
-   * @min 0
-   * @max 1
-   * @default 0.35
-   */
-  keyword_weight?: number;
-  /**
-   * Semantic Weight
-   * @min 0
-   * @max 1
-   * @default 0.25
-   */
-  semantic_weight?: number;
-  /**
-   * Review Threshold
-   * @min 0
-   * @max 1
-   * @default 0.55
-   */
-  review_threshold?: number;
-  /**
-   * Auto Ready Enabled
-   * @default true
-   */
-  auto_ready_enabled?: boolean;
-  /**
-   * Auto Ready Threshold
-   * @min 0
-   * @max 1
-   * @default 0.75
-   */
-  auto_ready_threshold?: number;
-  /**
-   * Auto Ready Min Evidence
-   * @min 1
-   * @max 100
-   * @default 2
-   */
-  auto_ready_min_evidence?: number;
-  /**
-   * Positive Keywords
-   * @maxItems 500
-   */
-  positive_keywords?: string[];
-  /**
-   * Negative Keywords
-   * @maxItems 500
-   */
-  negative_keywords?: string[];
-  /**
-   * Embedding Model
-   * @minLength 1
-   * @maxLength 128
-   * @default "multilingual-e5-small"
-   */
-  embedding_model?: string;
-  /**
-   * Embedding Dimensions
-   * @min 1
-   * @max 4096
-   * @default 384
-   */
-  embedding_dimensions?: number;
-}
-
-/** FacebookCandidateSettingsOut */
-export interface FacebookCandidateSettingsOut {
-  /**
-   * Relationship Weight
-   * @min 0
-   * @max 1
-   * @default 0.4
-   */
-  relationship_weight?: number;
-  /**
-   * Keyword Weight
-   * @min 0
-   * @max 1
-   * @default 0.35
-   */
-  keyword_weight?: number;
-  /**
-   * Semantic Weight
-   * @min 0
-   * @max 1
-   * @default 0.25
-   */
-  semantic_weight?: number;
-  /**
-   * Review Threshold
-   * @min 0
-   * @max 1
-   * @default 0.55
-   */
-  review_threshold?: number;
-  /**
-   * Auto Ready Enabled
-   * @default true
-   */
-  auto_ready_enabled?: boolean;
-  /**
-   * Auto Ready Threshold
-   * @min 0
-   * @max 1
-   * @default 0.75
-   */
-  auto_ready_threshold?: number;
-  /**
-   * Auto Ready Min Evidence
-   * @min 1
-   * @max 100
-   * @default 2
-   */
-  auto_ready_min_evidence?: number;
-  /**
-   * Positive Keywords
-   * @maxItems 500
-   */
-  positive_keywords?: string[];
-  /**
-   * Negative Keywords
-   * @maxItems 500
-   */
-  negative_keywords?: string[];
-  /**
-   * Embedding Model
-   * @minLength 1
-   * @maxLength 128
-   * @default "multilingual-e5-small"
-   */
-  embedding_model?: string;
-  /**
-   * Embedding Dimensions
-   * @min 1
-   * @max 4096
-   * @default 384
-   */
-  embedding_dimensions?: number;
-  /** Org Id */
-  org_id: string;
-  /** Updated At */
-  updated_at?: string | null;
+  deadline_at: string;
 }
 
 /** FinishBody */
@@ -3687,6 +4861,40 @@ export interface FinishBody {
    * @pattern ^(completed|failed|cancelled)$
    */
   status?: string;
+}
+
+/** FleetLifecycleOperationOut */
+export interface FleetLifecycleOperationOut {
+  /** Id */
+  id: string;
+  /** Service Campaign Id */
+  service_campaign_id: string;
+  /** Lane Id */
+  lane_id: string | null;
+  /** Operation Type */
+  operation_type: string;
+  /** Status */
+  status: string;
+  /** Checkpoint */
+  checkpoint: string;
+  /** Old Reservation Id */
+  old_reservation_id: string | null;
+  /** New Reservation Id */
+  new_reservation_id: string | null;
+  /** Reason */
+  reason: string;
+  /** Error Code */
+  error_code: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Updated At
+   * @format date-time
+   */
+  updated_at: string;
 }
 
 /** FleetStatsFiltersOut */
@@ -3780,6 +4988,60 @@ export interface FlowNodeModel {
   [key: string]: any;
 }
 
+/** FreezeKpiCohortIn */
+export interface FreezeKpiCohortIn {
+  /**
+   * Cohort Key
+   * @minLength 1
+   * @maxLength 128
+   */
+  cohort_key: string;
+  /** Definition Id */
+  definition_id: string;
+  /** Source Kind */
+  source_kind: string;
+  /**
+   * Window Start
+   * @format date-time
+   */
+  window_start: string;
+  /**
+   * Window End
+   * @format date-time
+   */
+  window_end: string;
+  /**
+   * Timezone
+   * @minLength 1
+   * @maxLength 64
+   */
+  timezone: string;
+  /**
+   * Service Campaign Ids
+   * @minItems 1
+   */
+  service_campaign_ids: string[];
+}
+
+/** FunnelEventOut */
+export interface FunnelEventOut {
+  /** Event Id */
+  event_id: string;
+  /** Event Name */
+  event_name: string;
+  /** Source Type */
+  source_type: string;
+  /** Source Ref */
+  source_ref: string | null;
+  /** Attribution */
+  attribution: Record<string, string>;
+  /**
+   * Source Occurred At
+   * @format date-time
+   */
+  source_occurred_at: string;
+}
+
 /** HTTPValidationError */
 export interface HTTPValidationError {
   /** Detail */
@@ -3837,20 +5099,154 @@ export interface InputTextRequest {
   text: string;
 }
 
-/** InvalidatePlatformSessionBody */
-export interface InvalidatePlatformSessionBody {
-  /** Reason */
-  reason: string;
-  /** Expected Version */
-  expected_version?: number | null;
-  /** Evidence */
-  evidence?: Record<string, any>;
+/** IssueListOut */
+export interface IssueListOut {
+  /** Items */
+  items: IssueSummaryOut[];
+  /** Total */
+  total: number;
+  /** Offset */
+  offset: number;
+  /** Limit */
+  limit: number;
+}
+
+/** IssueSummaryOut */
+export interface IssueSummaryOut {
+  /** Id */
+  id: string;
+  /** Source Attempt Id */
+  source_attempt_id: string;
+  /** Source Build Id */
+  source_build_id: string;
+  /** Source Scenario Version Id */
+  source_scenario_version_id: string;
+  /** Severity */
+  severity: string;
+  /** Assertion Key */
+  assertion_key: string;
+  /** Expected */
+  expected: string;
+  /** Actual */
+  actual: string;
+  /** Reproduction */
+  reproduction: Record<string, any>;
+  /** Fingerprint */
+  fingerprint: string;
+  /** Status */
+  status: string;
+  /**
+   * Retest Count
+   * @default 0
+   */
+  retest_count?: number;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
 }
 
 /** KeyRequest */
 export interface KeyRequest {
   /** Key */
   key: string;
+}
+
+/** KpiAssistanceOut */
+export interface KpiAssistanceOut {
+  /** Id */
+  id: string;
+  /** Event Id */
+  event_id: string;
+  /** Service Campaign Id */
+  service_campaign_id: string;
+  /** Actor Id */
+  actor_id: string;
+  /** Assistance Type */
+  assistance_type: string;
+  /** Classification */
+  classification: string;
+  /** Reason */
+  reason: string;
+  /**
+   * Occurred At
+   * @format date-time
+   */
+  occurred_at: string;
+}
+
+/** KpiCohortOut */
+export interface KpiCohortOut {
+  /** Id */
+  id: string;
+  /** Cohort Key */
+  cohort_key: string;
+  /** Definition Id */
+  definition_id: string;
+  /** Source Kind */
+  source_kind: string;
+  /**
+   * Window Start
+   * @format date-time
+   */
+  window_start: string;
+  /**
+   * Window End
+   * @format date-time
+   */
+  window_end: string;
+  /** Timezone */
+  timezone: string;
+  /** Status */
+  status: string;
+  /** Frozen At */
+  frozen_at: string | null;
+}
+
+/** KpiDefinitionOut */
+export interface KpiDefinitionOut {
+  /** Id */
+  id: string;
+  /** Version */
+  version: string;
+  /** Definitions */
+  definitions: Record<string, any>;
+  /** Status */
+  status: string;
+  /** Signed By */
+  signed_by: string | null;
+  /** Signed At */
+  signed_at: string | null;
+}
+
+/** KpiSnapshotOut */
+export interface KpiSnapshotOut {
+  /** Id */
+  id: string;
+  /** Cohort Id */
+  cohort_id: string;
+  /** Query Version */
+  query_version: string;
+  /** Source Kind */
+  source_kind: string;
+  /** Result Status */
+  result_status: string;
+  /** Self Serve Numerator */
+  self_serve_numerator: number;
+  /** Self Serve Denominator */
+  self_serve_denominator: number;
+  /** Trace Numerator */
+  trace_numerator: number;
+  /** Trace Denominator */
+  trace_denominator: number;
+  /** Details */
+  details: Record<string, any>;
+  /**
+   * Data Freshness At
+   * @format date-time
+   */
+  data_freshness_at: string;
 }
 
 /** LaunchAppRequest */
@@ -3884,6 +5280,20 @@ export interface LongTapRequest {
    * @default 800
    */
   duration_ms?: number;
+}
+
+/** ManagedAgentConnectBody */
+export interface ManagedAgentConnectBody {
+  /** Wsbaseurl */
+  wsBaseUrl?: string | null;
+}
+
+/** MaterializeSlotsOut */
+export interface MaterializeSlotsOut {
+  /** Service Campaign Id */
+  service_campaign_id: string;
+  /** Slot Count */
+  slot_count: number;
 }
 
 /** McpTokenCreate */
@@ -4273,6 +5683,8 @@ export interface OrgScenarioValidateIn {
   edges?: Record<string, any>[] | null;
   /** Variables */
   variables?: Record<string, any> | null;
+  /** Requirements */
+  requirements?: Record<string, any> | null;
   /** Campaign Variables */
   campaign_variables?: Record<string, any> | null;
 }
@@ -4470,6 +5882,96 @@ export interface PairRegistryOut {
   created: boolean;
 }
 
+/** ParticipationListOut */
+export interface ParticipationListOut {
+  /** Items */
+  items: ParticipationSummaryOut[];
+  /** Total */
+  total: number;
+  /** Offset */
+  offset: number;
+  /** Limit */
+  limit: number;
+}
+
+/** ParticipationRecordOut */
+export interface ParticipationRecordOut {
+  participation: ParticipationSummaryOut;
+  /** Event Id */
+  event_id: string;
+  /** Event Type */
+  event_type: string;
+  /** Review State */
+  review_state: string;
+  /**
+   * Observed At
+   * @format date-time
+   */
+  observed_at: string;
+}
+
+/** ParticipationSummaryOut */
+export interface ParticipationSummaryOut {
+  /** Id */
+  id: string;
+  /** Masked Label */
+  masked_label: string;
+  /** Track Name */
+  track_name: string;
+  /** Current Status */
+  current_status: string;
+  /** Evidence Grade */
+  evidence_grade: string;
+  /** Active Segment No */
+  active_segment_no: number;
+  /** Last Observed At */
+  last_observed_at: string | null;
+  /** Gap Reason */
+  gap_reason: string | null;
+}
+
+/** PaymentReconciliationListOut */
+export interface PaymentReconciliationListOut {
+  /** Items */
+  items: PaymentReconciliationOut[];
+  /** Total */
+  total: number;
+  /** Offset */
+  offset: number;
+  /** Limit */
+  limit: number;
+}
+
+/** PaymentReconciliationOut */
+export interface PaymentReconciliationOut {
+  /** Id */
+  id: string;
+  /** Order Id */
+  order_id: string;
+  /** Provider */
+  provider: string;
+  /** Reason Code */
+  reason_code: string;
+  /** Status */
+  status: string;
+  /** Attempts */
+  attempts: number;
+  /** Last Error Code */
+  last_error_code: string | null;
+  /**
+   * Available At
+   * @format date-time
+   */
+  available_at: string;
+  /** Resolved At */
+  resolved_at: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+}
+
 /** PinchRequest */
 export interface PinchRequest {
   /** Cx */
@@ -4486,26 +5988,6 @@ export interface PinchRequest {
    * @default 400
    */
   duration_ms?: number;
-}
-
-/** PlatformFlagBody */
-export interface PlatformFlagBody {
-  /**
-   * Note
-   * @default ""
-   */
-  note?: string;
-}
-
-/** PlatformLifecycleBody */
-export interface PlatformLifecycleBody {
-  /** Version */
-  version?: string | null;
-  /**
-   * Note
-   * @default ""
-   */
-  note?: string;
 }
 
 /** PreviewListItem */
@@ -4594,6 +6076,33 @@ export interface PreviewStartResponse {
   device_id: string;
 }
 
+/** ReadinessCheckOut */
+export interface ReadinessCheckOut {
+  /** Key */
+  key: string;
+  /** Status */
+  status: string;
+  /** Required */
+  required: boolean;
+  /** Reason Code */
+  reason_code: string;
+  /**
+   * Observed At
+   * @format date-time
+   */
+  observed_at: string;
+  /** Source Type */
+  source_type: string;
+  /** Source Ref */
+  source_ref: string | null;
+  /** Source Version */
+  source_version: string | null;
+  /** Owner */
+  owner: string;
+  /** Next Action */
+  next_action: string | null;
+}
+
 /** ReconnectPolicyOut */
 export interface ReconnectPolicyOut {
   /** Org Id */
@@ -4627,6 +6136,93 @@ export interface ReconnectPolicyUpdate {
   max_attempts: number;
   /** Jitter Factor */
   jitter_factor: number;
+}
+
+/** RecordKpiAssistanceIn */
+export interface RecordKpiAssistanceIn {
+  /**
+   * Event Id
+   * @minLength 1
+   * @maxLength 128
+   */
+  event_id: string;
+  /** Service Campaign Id */
+  service_campaign_id: string;
+  /**
+   * Assistance Type
+   * @minLength 1
+   * @maxLength 64
+   */
+  assistance_type: string;
+  /** Classification */
+  classification: string;
+  /**
+   * Reason
+   * @minLength 3
+   * @maxLength 1000
+   */
+  reason: string;
+  /**
+   * Occurred At
+   * @format date-time
+   */
+  occurred_at: string;
+}
+
+/** RecordParticipationIn */
+export interface RecordParticipationIn {
+  /**
+   * Pseudonymous Account Ref
+   * @minLength 1
+   * @maxLength 128
+   */
+  pseudonymous_account_ref: string;
+  /**
+   * Masked Label
+   * @minLength 1
+   * @maxLength 128
+   */
+  masked_label: string;
+  /**
+   * Track Name
+   * @minLength 1
+   * @maxLength 64
+   */
+  track_name: string;
+  /**
+   * Event Type
+   * @pattern ^(invited|opted_in|installed|opened|lost|rejoined|unknown|corrected)$
+   */
+  event_type: string;
+  /**
+   * Source Type
+   * @minLength 1
+   * @maxLength 32
+   */
+  source_type: string;
+  /** Source Ref */
+  source_ref?: string | null;
+  /** Evidence Ref */
+  evidence_ref?: string | null;
+  /**
+   * Evidence Grade
+   * @pattern ^(none|self_attested|operator_attested|provider_verified)$
+   */
+  evidence_grade: string;
+  /**
+   * Observed At
+   * @format date-time
+   */
+  observed_at: string;
+  /**
+   * Approve
+   * @default false
+   */
+  approve?: boolean;
+  /** Correction Of Id */
+  correction_of_id?: string | null;
+  /** Limitations */
+  limitations?: string | null;
 }
 
 /** RefreshRequest */
@@ -4709,6 +6305,11 @@ export interface RelayAgentOut {
   user_id?: string | null;
   /** Enrollment Token Id */
   enrollment_token_id?: string | null;
+  /**
+   * Name
+   * @default ""
+   */
+  name?: string;
   /** Hostname */
   hostname: string;
   /** Ip */
@@ -4918,12 +6519,210 @@ export interface ReorderScenariosBody {
   scenario_id?: string | null;
 }
 
+/** ReplaceLaneDeviceIn */
+export interface ReplaceLaneDeviceIn {
+  /**
+   * New Device Id
+   * @minLength 1
+   * @maxLength 64
+   */
+  new_device_id: string;
+  /**
+   * Idempotency Key
+   * @minLength 8
+   * @maxLength 128
+   */
+  idempotency_key: string;
+  /**
+   * Reason
+   * @minLength 3
+   * @maxLength 1000
+   */
+  reason: string;
+}
+
+/** ReportDownloadOut */
+export interface ReportDownloadOut {
+  /** Url */
+  url: string;
+  /** Expires At */
+  expires_at: string;
+  /** Content Type */
+  content_type: string;
+}
+
+/** ReportListOut */
+export interface ReportListOut {
+  /** Items */
+  items: ReportSummaryOut[];
+  /** Total */
+  total: number;
+  /** Offset */
+  offset: number;
+  /** Limit */
+  limit: number;
+}
+
+/** ReportSummaryOut */
+export interface ReportSummaryOut {
+  /** Id */
+  id: string;
+  /** Version */
+  version: number;
+  /** Schema Version */
+  schema_version: string;
+  /**
+   * Cutoff At
+   * @format date-time
+   */
+  cutoff_at: string;
+  /** Builder Version */
+  builder_version: string;
+  /** Summary */
+  summary: Record<string, any>;
+  /** Manifest Sha256 */
+  manifest_sha256: string;
+  /** Status */
+  status: string;
+  /** Download Available */
+  download_available: boolean;
+  /** Pdf Sha256 */
+  pdf_sha256: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+}
+
+/** RequestRetestIn */
+export interface RequestRetestIn {
+  /**
+   * Target Build Id
+   * @minLength 1
+   * @maxLength 64
+   */
+  target_build_id: string;
+  /**
+   * Target Scenario Version Id
+   * @minLength 1
+   * @maxLength 64
+   */
+  target_scenario_version_id: string;
+  /**
+   * Lane Scope
+   * @maxItems 12
+   * @minItems 1
+   */
+  lane_scope: string[];
+  /**
+   * Idempotency Key
+   * @minLength 8
+   * @maxLength 128
+   */
+  idempotency_key: string;
+  /** Consent */
+  consent: Record<string, any>;
+}
+
+/** ReservationSummaryOut */
+export interface ReservationSummaryOut {
+  /** Id */
+  id: string;
+  /** State */
+  state: string;
+  /**
+   * Starts At
+   * @format date-time
+   */
+  starts_at: string;
+  /**
+   * Ends At
+   * @format date-time
+   */
+  ends_at: string;
+  /** Released At */
+  released_at: string | null;
+}
+
+/** RetestRequestOut */
+export interface RetestRequestOut {
+  /** Id */
+  id: string;
+  /** Issue Id */
+  issue_id: string;
+  /** Source Attempt Id */
+  source_attempt_id: string;
+  /** Target Build Id */
+  target_build_id: string;
+  /** Target Scenario Version Id */
+  target_scenario_version_id: string;
+  /** Lane Scope */
+  lane_scope: string[];
+  /** Status */
+  status: string;
+  /** New Attempt Id */
+  new_attempt_id: string | null;
+  /** Verdict */
+  verdict: string | null;
+  /** Verdict Reason */
+  verdict_reason: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+}
+
 /** RoundRobinBody */
 export interface RoundRobinBody {
   /** Account Ids */
   account_ids: string[];
   /** Device Ids */
   device_ids: string[];
+}
+
+/** RunAttemptSummaryOut */
+export interface RunAttemptSummaryOut {
+  /** Id */
+  id: string;
+  /** Attempt No */
+  attempt_no: number;
+  /** Status */
+  status: string;
+  /** Outcome */
+  outcome: string | null;
+  /** Observed Build */
+  observed_build: Record<string, any>;
+  /** Failure Reason */
+  failure_reason: string | null;
+  /** Started At */
+  started_at: string | null;
+  /** Finished At */
+  finished_at: string | null;
+  /** Evidence */
+  evidence: EvidenceSummaryOut[];
+}
+
+/** RunSlotDetailOut */
+export interface RunSlotDetailOut {
+  /** Id */
+  id: string;
+  /** Service Day */
+  service_day: number;
+  /**
+   * Planned At
+   * @format date-time
+   */
+  planned_at: string;
+  /** Execution Status */
+  execution_status: string;
+  /** App Verdict */
+  app_verdict: string | null;
+  /** Play Participation State */
+  play_participation_state: string;
+  /** Attempts */
+  attempts: RunAttemptSummaryOut[];
 }
 
 /** SaveContentBody */
@@ -4937,11 +6736,8 @@ export interface SaveContentBody {
   collection?: string;
   /** Platform */
   platform?: string | null;
-  /**
-   * Content Type
-   * @default "fb_post"
-   */
-  content_type?: string;
+  /** Content Type */
+  content_type: string;
   /** Dedupe Field */
   dedupe_field?: string | null;
   /**
@@ -4958,6 +6754,36 @@ export interface SaveContentBody {
   device_serial?: string | null;
   /** Campaign Id */
   campaign_id?: string | null;
+}
+
+/** SaveWizardDraftIn */
+export interface SaveWizardDraftIn {
+  /**
+   * Expected Revision
+   * @min 0
+   */
+  expected_revision: number;
+  /**
+   * Package Name
+   * @minLength 3
+   * @maxLength 255
+   */
+  package_name: string;
+  /**
+   * Closed Track Link
+   * @minLength 8
+   * @maxLength 4000
+   */
+  closed_track_link: string;
+  /**
+   * Test Goal
+   * @minLength 1
+   * @maxLength 8000
+   */
+  test_goal: string;
+  /** Test Environment */
+  test_environment?: Record<string, any>;
+  build: WizardDraftBuildIn;
 }
 
 /** ScenarioCreate */
@@ -5083,6 +6909,11 @@ export interface ScenarioPreviewRequest {
   variables?: Record<string, any>;
   /** Scenario Id */
   scenario_id?: string | null;
+  /**
+   * Persist Account Login Execution
+   * @default false
+   */
+  persist_account_login_execution?: boolean;
   /**
    * Scenario Device Vars
    * @default {}
@@ -5277,7 +7108,7 @@ export interface ScheduleCreate {
   description?: string;
   /**
    * Target Type
-   * @pattern ^(campaign|template|fleet)$
+   * @pattern ^(campaign|template|org_scenario|fleet)$
    */
   target_type: string;
   /** Target Id */
@@ -5288,6 +7119,11 @@ export interface ScheduleCreate {
   inline_variables?: Record<string, any>;
   /** Device Group Id */
   device_group_id?: string | null;
+  /**
+   * Device Serials
+   * @maxItems 500
+   */
+  device_serials?: string[];
   /**
    * Filter State
    * @default "READY"
@@ -5382,6 +7218,8 @@ export interface ScheduleOut {
   inline_variables: Record<string, any>;
   /** Device Group Id */
   device_group_id: string | null;
+  /** Device Serials */
+  device_serials: string[];
   /** Filter State */
   filter_state: string;
   /** Filter Model */
@@ -5460,6 +7298,8 @@ export interface SchedulePatch {
   inline_variables?: Record<string, any> | null;
   /** Device Group Id */
   device_group_id?: string | null;
+  /** Device Serials */
+  device_serials?: string[] | null;
   /** Filter State */
   filter_state?: string | null;
   /** Filter Model */
@@ -5502,7 +7342,7 @@ export interface SchedulePatch {
 export interface SchedulePreviewIn {
   /**
    * Target Type
-   * @pattern ^(campaign|template|fleet)$
+   * @pattern ^(campaign|template|org_scenario|fleet)$
    */
   target_type: string;
   /** Target Id */
@@ -5634,6 +7474,150 @@ export interface ScrollRequest {
   distance?: number;
 }
 
+/** ServiceCampaignCreateIn */
+export interface ServiceCampaignCreateIn {
+  /**
+   * Creation Intent Key
+   * @minLength 8
+   * @maxLength 128
+   */
+  creation_intent_key: string;
+  /** Runtime Campaign Id */
+  runtime_campaign_id: string;
+  /**
+   * Package Name
+   * @minLength 3
+   * @maxLength 255
+   */
+  package_name: string;
+  /**
+   * Timezone
+   * @minLength 1
+   * @maxLength 64
+   */
+  timezone: string;
+  /**
+   * Plan Version
+   * @minLength 1
+   * @maxLength 64
+   */
+  plan_version: string;
+  /**
+   * Acquisition Events
+   * @maxItems 2
+   */
+  acquisition_events?: ClientFunnelEventIn[];
+}
+
+/** ServiceCampaignOut */
+export interface ServiceCampaignOut {
+  /** Id */
+  id: string;
+  /** Runtime Campaign Id */
+  runtime_campaign_id: string;
+  /** Package Name */
+  package_name: string;
+  /** Timezone */
+  timezone: string;
+  /** Plan Version */
+  plan_version: string;
+  /** Status */
+  status: string;
+  /** Lane Count */
+  lane_count: number;
+  /** Started At */
+  started_at: string | null;
+  /** End At */
+  end_at: string | null;
+}
+
+/** ServiceExtensionOut */
+export interface ServiceExtensionOut {
+  /** Id */
+  id: string;
+  /** Service Campaign Id */
+  service_campaign_id: string;
+  /**
+   * Previous End At
+   * @format date-time
+   */
+  previous_end_at: string;
+  /**
+   * New End At
+   * @format date-time
+   */
+  new_end_at: string;
+  /** Added Service Days */
+  added_service_days: number;
+  /** Order Id */
+  order_id: string;
+  /** Entitlement Id */
+  entitlement_id: string;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+}
+
+/** ServiceLaneDetailOut */
+export interface ServiceLaneDetailOut {
+  /** Id */
+  id: string;
+  /** Ordinal */
+  ordinal: number;
+  /** Tester Label */
+  tester_label: string;
+  /** Reservations */
+  reservations: ReservationSummaryOut[];
+  /** Slots */
+  slots: RunSlotDetailOut[];
+  /** Slot Total */
+  slot_total: number;
+  /** Slot Offset */
+  slot_offset: number;
+  /** Slot Limit */
+  slot_limit: number;
+}
+
+/** ServiceLaneListOut */
+export interface ServiceLaneListOut {
+  /** Items */
+  items: ServiceLaneSummaryOut[];
+  /** Total */
+  total: number;
+  /** Offset */
+  offset: number;
+  /** Limit */
+  limit: number;
+}
+
+/** ServiceLaneSummaryOut */
+export interface ServiceLaneSummaryOut {
+  /** Id */
+  id: string;
+  /** Ordinal */
+  ordinal: number;
+  /** Tester Label */
+  tester_label: string;
+  /** Planned Slots */
+  planned_slots: number;
+  /** Terminal Slots */
+  terminal_slots: number;
+  /** Active Reservation Count */
+  active_reservation_count: number;
+}
+
+/** ServiceProgressOut */
+export interface ServiceProgressOut {
+  /** Service */
+  service: Record<string, number | string>;
+  /** App Quality */
+  app_quality: Record<string, number>;
+  /** Play Participation */
+  play_participation: Record<string, number>;
+}
+
 /** SessionDescription */
 export interface SessionDescription {
   /**
@@ -5731,12 +7715,44 @@ export interface SetRingerModeRequest {
   mode: string;
 }
 
-/** StartFacebookLoginAttemptBody */
-export interface StartFacebookLoginAttemptBody {
-  /** Account Id */
-  account_id: string;
-  /** Evidence */
-  evidence?: Record<string, any>;
+/** SignKpiDefinitionIn */
+export interface SignKpiDefinitionIn {
+  /**
+   * Version
+   * @minLength 1
+   * @maxLength 64
+   */
+  version: string;
+  /** Definitions */
+  definitions: Record<string, string>;
+}
+
+/** StartCampaignIn */
+export interface StartCampaignIn {
+  /**
+   * Idempotency Key
+   * @minLength 8
+   * @maxLength 128
+   */
+  idempotency_key: string;
+}
+
+/** StartCampaignOut */
+export interface StartCampaignOut {
+  /** Started */
+  started: boolean;
+  /** Campaign Status */
+  campaign_status: string;
+  /** Started At */
+  started_at: string | null;
+  /** Readiness Revision */
+  readiness_revision: number;
+  /** Readiness Status */
+  readiness_status: string;
+  /** Intent Id */
+  intent_id: string | null;
+  /** Checks */
+  checks: ReadinessCheckOut[];
 }
 
 /** StartSessionRequest */
@@ -5745,6 +7761,32 @@ export interface StartSessionRequest {
   device_id: string;
   /** User Id */
   user_id?: string | null;
+}
+
+/** StartWizardCheckoutIn */
+export interface StartWizardCheckoutIn {
+  /**
+   * Approval Id
+   * @minLength 1
+   * @maxLength 36
+   */
+  approval_id: string;
+  /**
+   * Idempotency Key
+   * @minLength 8
+   * @maxLength 128
+   */
+  idempotency_key: string;
+}
+
+/** StartWizardGenerationIn */
+export interface StartWizardGenerationIn {
+  /**
+   * Operation Id
+   * @minLength 8
+   * @maxLength 128
+   */
+  operation_id: string;
 }
 
 /** StatusUpdate */
@@ -5775,6 +7817,16 @@ export interface SummaryOut {
   pending: number;
   /** Error */
   error: number;
+  /**
+   * Cancelled
+   * @default 0
+   */
+  cancelled?: number;
+  /**
+   * Total Device Runs
+   * @default 0
+   */
+  total_device_runs?: number;
   /** Total Content Items */
   total_content_items: number;
   /** Latest Dispatch Id */
@@ -6039,6 +8091,147 @@ export interface WebRTCSessionHeartbeat {
   ttl_seconds?: number;
 }
 
+/** WizardApprovalOut */
+export interface WizardApprovalOut {
+  /** Id */
+  id: string;
+  /** Scenario Version Id */
+  scenario_version_id: string;
+  /** Content Hash */
+  content_hash: string;
+  /** Policy Version */
+  policy_version: string;
+  /** Assertions */
+  assertions: Record<string, any>[];
+  /** Allowed Operations */
+  allowed_operations: string[];
+  /**
+   * Approved At
+   * @format date-time
+   */
+  approved_at: string;
+}
+
+/** WizardCheckoutOut */
+export interface WizardCheckoutOut {
+  /** Order Id */
+  order_id: string;
+  /** Intent Id */
+  intent_id: string;
+  /** Status */
+  status: string;
+  /** Checkout Url */
+  checkout_url: string | null;
+  /** Expires At */
+  expires_at: string | null;
+  /** Blocker Code */
+  blocker_code: string | null;
+}
+
+/** WizardDraftBuildIn */
+export interface WizardDraftBuildIn {
+  /**
+   * Version Name
+   * @minLength 1
+   * @maxLength 128
+   */
+  version_name: string;
+  /**
+   * Version Code
+   * @minLength 1
+   * @maxLength 64
+   */
+  version_code: string;
+  /**
+   * Source Kind
+   * @pattern ^(closed_track|uploaded_artifact)$
+   */
+  source_kind: string;
+  /** Source Ref */
+  source_ref?: string | null;
+  /** Checksum Sha256 */
+  checksum_sha256?: string | null;
+}
+
+/** WizardGenerationOut */
+export interface WizardGenerationOut {
+  /** Operation Id */
+  operation_id: string;
+  /** Status */
+  status: string;
+  /** Error Code */
+  error_code: string | null;
+  /** Scenario Version Id */
+  scenario_version_id: string | null;
+  /** Content Hash */
+  content_hash: string | null;
+  /** Scenario */
+  scenario: Record<string, any> | null;
+}
+
+/** WizardIntakeOut */
+export interface WizardIntakeOut {
+  /** Id */
+  id: string;
+  /** Revision */
+  revision: number;
+  /** Input Version */
+  input_version: number;
+  /** Package Name */
+  package_name: string;
+  /** Closed Track Link */
+  closed_track_link: string;
+  /** Test Goal */
+  test_goal: string;
+  /** Test Environment */
+  test_environment: Record<string, any>;
+  /** Status */
+  status: string;
+  /** Build */
+  build: Record<string, any>;
+}
+
+/** WizardPaymentOut */
+export interface WizardPaymentOut {
+  /** Provider Configured */
+  provider_configured: boolean;
+  /** Provider */
+  provider: string | null;
+  /** Amount Minor */
+  amount_minor: number | null;
+  /** Currency */
+  currency: string | null;
+  /** Pricing Version */
+  pricing_version: string | null;
+  /** Policy Version */
+  policy_version: string;
+  /** Quota */
+  quota: Record<string, number>;
+  /** Blocker Code */
+  blocker_code: string | null;
+  /** Order */
+  order: Record<string, any> | null;
+  /** Checkout Status */
+  checkout_status: string | null;
+  /** Checkout Expires At */
+  checkout_expires_at: string | null;
+  /** Checkout Error Code */
+  checkout_error_code: string | null;
+  /** Entitlement */
+  entitlement: Record<string, any> | null;
+}
+
+/** WizardStateOut */
+export interface WizardStateOut {
+  campaign: ServiceCampaignOut;
+  /** Current Step */
+  current_step: string;
+  intake: WizardIntakeOut | null;
+  generation: WizardGenerationOut | null;
+  approval: WizardApprovalOut | null;
+  payment: WizardPaymentOut;
+}
+
 /** PairBulkBody */
 export interface ApiRoutesDevicesPairBulkBody {
   /**
@@ -6095,6 +8288,11 @@ export interface ApiSchemasAuthUserOut {
   orgRole?: string | null;
   /** Defaultorgid */
   defaultOrgId?: string | null;
+  /**
+   * Mustchangepassword
+   * @default false
+   */
+  mustChangePassword?: boolean;
 }
 
 /** SessionOut */
@@ -6880,7 +9078,1374 @@ export class DeviceFarmHttpClient<
       }),
 
     /**
-     * @description Serve the STFService.apk used by Android devices. The file is resolved from a small set of well-known locations: - device_farm/bundle/apks/STFService.apk                (download_bundle.py output) - ../STFService.apk/app/build/outputs/apk/release/...   (local Gradle build)
+     * No description
+     *
+     * @tags admin
+     * @name AdminListAdminUsersApiAdminWorkspaceAdminsGet
+     * @summary Admin List Admin Users
+     * @request GET:/api/admin/workspace-admins
+     * @secure
+     */
+    adminListAdminUsersApiAdminWorkspaceAdminsGet: (
+      query?: {
+        /** Search */
+        search?: string | null;
+        /** Status */
+        status?: string | null;
+        /** Workspaceid */
+        workspaceId?: string | null;
+        /**
+         * Offset
+         * @min 0
+         * @default 0
+         */
+        offset?: number;
+        /**
+         * Limit
+         * @min 1
+         * @max 100
+         * @default 50
+         */
+        limit?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminUserListOut, HTTPValidationError>({
+        path: `/api/admin/workspace-admins`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminCreateAdminUserApiAdminWorkspaceAdminsPost
+     * @summary Admin Create Admin User
+     * @request POST:/api/admin/workspace-admins
+     * @secure
+     */
+    adminCreateAdminUserApiAdminWorkspaceAdminsPost: (
+      data: AdminUserCreate,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminUserCreated, HTTPValidationError>({
+        path: `/api/admin/workspace-admins`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminListAccountsApiAdminAccountsGet
+     * @summary Admin List Accounts
+     * @request GET:/api/admin/accounts
+     * @secure
+     */
+    adminListAccountsApiAdminAccountsGet: (
+      query?: {
+        /** Search */
+        search?: string | null;
+        /** Platform */
+        platform?: string | null;
+        /** Status */
+        status?: string | null;
+        /** State */
+        state?: string | null;
+        /** Workspaceid */
+        workspaceId?: string | null;
+        /**
+         * Offset
+         * @min 0
+         * @default 0
+         */
+        offset?: number;
+        /**
+         * Limit
+         * @min 1
+         * @max 200
+         * @default 50
+         */
+        limit?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminAccountListOut, HTTPValidationError>({
+        path: `/api/admin/accounts`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminListContentApiAdminContentGet
+     * @summary Admin List Content
+     * @request GET:/api/admin/content
+     * @secure
+     */
+    adminListContentApiAdminContentGet: (
+      query?: {
+        /** Search */
+        search?: string | null;
+        /** Collection */
+        collection?: string | null;
+        /** Platform */
+        platform?: string | null;
+        /** Content Type */
+        content_type?: string | null;
+        /** Device Serial */
+        device_serial?: string | null;
+        /** Campaign Id */
+        campaign_id?: string | null;
+        /** Execution Id */
+        execution_id?: string | null;
+        /** Content Hash */
+        content_hash?: string | null;
+        /** Parent Id */
+        parent_id?: string | null;
+        /** Workspaceid */
+        workspaceId?: string | null;
+        /**
+         * Offset
+         * @min 0
+         * @default 0
+         */
+        offset?: number;
+        /**
+         * Limit
+         * @min 1
+         * @max 500
+         * @default 50
+         */
+        limit?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminContentListOut, HTTPValidationError>({
+        path: `/api/admin/content`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminUpdateAdminUserApiAdminWorkspaceAdminsAdminUserIdPatch
+     * @summary Admin Update Admin User
+     * @request PATCH:/api/admin/workspace-admins/{admin_user_id}
+     * @secure
+     */
+    adminUpdateAdminUserApiAdminWorkspaceAdminsAdminUserIdPatch: (
+      adminUserId: string,
+      data: AdminUserUpdate,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminUserOut, HTTPValidationError>({
+        path: `/api/admin/workspace-admins/${adminUserId}`,
+        method: "PATCH",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminResetWorkspaceAdminPasswordApiAdminWorkspaceAdminsAdminUserIdResetPasswordPost
+     * @summary Admin Reset Workspace Admin Password
+     * @request POST:/api/admin/workspace-admins/{admin_user_id}/reset-password
+     * @secure
+     */
+    adminResetWorkspaceAdminPasswordApiAdminWorkspaceAdminsAdminUserIdResetPasswordPost:
+      (
+        adminUserId: string,
+        data: AdminOwnerPasswordReset,
+        params: RequestParams = {},
+      ) =>
+        this.request<AdminUserPasswordResetOut, HTTPValidationError>({
+          path: `/api/admin/workspace-admins/${adminUserId}/reset-password`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminBulkAssignWorkspaceAdminApiAdminWorkspaceAdminsAdminUserIdWorkspacesPost
+     * @summary Admin Bulk Assign Workspace Admin
+     * @request POST:/api/admin/workspace-admins/{admin_user_id}/workspaces
+     * @secure
+     */
+    adminBulkAssignWorkspaceAdminApiAdminWorkspaceAdminsAdminUserIdWorkspacesPost:
+      (
+        adminUserId: string,
+        data: AdminUserWorkspaceBulkUpdate,
+        params: RequestParams = {},
+      ) =>
+        this.request<AdminUserWorkspaceBulkOut, HTTPValidationError>({
+          path: `/api/admin/workspace-admins/${adminUserId}/workspaces`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminBulkRemoveWorkspaceAdminApiAdminWorkspaceAdminsAdminUserIdWorkspacesRemovePost
+     * @summary Admin Bulk Remove Workspace Admin
+     * @request POST:/api/admin/workspace-admins/{admin_user_id}/workspaces/remove
+     * @secure
+     */
+    adminBulkRemoveWorkspaceAdminApiAdminWorkspaceAdminsAdminUserIdWorkspacesRemovePost:
+      (
+        adminUserId: string,
+        data: AdminUserWorkspaceBulkUpdate,
+        params: RequestParams = {},
+      ) =>
+        this.request<AdminUserWorkspaceBulkOut, HTTPValidationError>({
+          path: `/api/admin/workspace-admins/${adminUserId}/workspaces/remove`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminWorkspaceSummaryApiAdminDashboardSummaryGet
+     * @summary Admin Workspace Summary
+     * @request GET:/api/admin/dashboard/summary
+     * @secure
+     */
+    adminWorkspaceSummaryApiAdminDashboardSummaryGet: (
+      query?: {
+        /** Workspaceid */
+        workspaceId?: string | null;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminDashboardSummaryOut, HTTPValidationError>({
+        path: `/api/admin/dashboard/summary`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminListWorkspacesApiAdminWorkspacesGet
+     * @summary Admin List Workspaces
+     * @request GET:/api/admin/workspaces
+     * @secure
+     */
+    adminListWorkspacesApiAdminWorkspacesGet: (
+      query?: {
+        /** Search */
+        search?: string | null;
+        /** Status */
+        status?: string | null;
+        /** Workspaceid */
+        workspaceId?: string | null;
+        /**
+         * Offset
+         * @min 0
+         * @default 0
+         */
+        offset?: number;
+        /**
+         * Limit
+         * @min 1
+         * @max 100
+         * @default 50
+         */
+        limit?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminWorkspaceListOut, HTTPValidationError>({
+        path: `/api/admin/workspaces`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminCreateWorkspaceApiAdminWorkspacesPost
+     * @summary Admin Create Workspace
+     * @request POST:/api/admin/workspaces
+     * @secure
+     */
+    adminCreateWorkspaceApiAdminWorkspacesPost: (
+      data: AdminWorkspaceCreate,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminWorkspaceCreated, HTTPValidationError>({
+        path: `/api/admin/workspaces`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminListAssignableWorkspacesApiAdminWorkspacesAssignableGet
+     * @summary Admin List Assignable Workspaces
+     * @request GET:/api/admin/workspaces/assignable
+     * @secure
+     */
+    adminListAssignableWorkspacesApiAdminWorkspacesAssignableGet: (
+      query?: {
+        /** Search */
+        search?: string | null;
+        /**
+         * Offset
+         * @min 0
+         * @default 0
+         */
+        offset?: number;
+        /**
+         * Limit
+         * @min 1
+         * @max 200
+         * @default 100
+         */
+        limit?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminAssignableWorkspaceListOut, HTTPValidationError>({
+        path: `/api/admin/workspaces/assignable`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminGetWorkspaceApiAdminWorkspacesWorkspaceIdGet
+     * @summary Admin Get Workspace
+     * @request GET:/api/admin/workspaces/{workspace_id}
+     * @secure
+     */
+    adminGetWorkspaceApiAdminWorkspacesWorkspaceIdGet: (
+      workspaceId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminWorkspaceOut, HTTPValidationError>({
+        path: `/api/admin/workspaces/${workspaceId}`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminUpdateWorkspaceApiAdminWorkspacesWorkspaceIdPatch
+     * @summary Admin Update Workspace
+     * @request PATCH:/api/admin/workspaces/{workspace_id}
+     * @secure
+     */
+    adminUpdateWorkspaceApiAdminWorkspacesWorkspaceIdPatch: (
+      workspaceId: string,
+      data: AdminWorkspaceUpdate,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminWorkspaceOut, HTTPValidationError>({
+        path: `/api/admin/workspaces/${workspaceId}`,
+        method: "PATCH",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminDeleteWorkspaceApiAdminWorkspacesWorkspaceIdDelete
+     * @summary Admin Delete Workspace
+     * @request DELETE:/api/admin/workspaces/{workspace_id}
+     * @secure
+     */
+    adminDeleteWorkspaceApiAdminWorkspacesWorkspaceIdDelete: (
+      workspaceId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<void, HTTPValidationError>({
+        path: `/api/admin/workspaces/${workspaceId}`,
+        method: "DELETE",
+        secure: true,
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminWorkspaceDependenciesApiAdminWorkspacesWorkspaceIdDependenciesGet
+     * @summary Admin Workspace Dependencies
+     * @request GET:/api/admin/workspaces/{workspace_id}/dependencies
+     * @secure
+     */
+    adminWorkspaceDependenciesApiAdminWorkspacesWorkspaceIdDependenciesGet: (
+      workspaceId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminWorkspaceDependenciesOut, HTTPValidationError>({
+        path: `/api/admin/workspaces/${workspaceId}/dependencies`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Members and admins for one workspace, or for every visible workspace.
+     *
+     * @tags admin
+     * @name AdminWorkspaceAccessApiAdminWorkspaceAccessGet
+     * @summary Admin Workspace Access
+     * @request GET:/api/admin/workspace-access
+     * @secure
+     */
+    adminWorkspaceAccessApiAdminWorkspaceAccessGet: (
+      query?: {
+        /** Workspaceid */
+        workspaceId?: string | null;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminWorkspaceAccessOut, HTTPValidationError>({
+        path: `/api/admin/workspace-access`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminListWorkspaceAdminsApiAdminWorkspacesWorkspaceIdAdminsGet
+     * @summary Admin List Workspace Admins
+     * @request GET:/api/admin/workspaces/{workspace_id}/admins
+     * @secure
+     */
+    adminListWorkspaceAdminsApiAdminWorkspacesWorkspaceIdAdminsGet: (
+      workspaceId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminWorkspaceAdminOut[], HTTPValidationError>({
+        path: `/api/admin/workspaces/${workspaceId}/admins`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminAssignWorkspaceAdminApiAdminWorkspacesWorkspaceIdAdminsPost
+     * @summary Admin Assign Workspace Admin
+     * @request POST:/api/admin/workspaces/{workspace_id}/admins
+     * @secure
+     */
+    adminAssignWorkspaceAdminApiAdminWorkspacesWorkspaceIdAdminsPost: (
+      workspaceId: string,
+      data: AdminWorkspaceAdminAssign,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminWorkspaceAdminOut, HTTPValidationError>({
+        path: `/api/admin/workspaces/${workspaceId}/admins`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminListWorkspaceMembersApiAdminWorkspacesWorkspaceIdMembersGet
+     * @summary Admin List Workspace Members
+     * @request GET:/api/admin/workspaces/{workspace_id}/members
+     * @secure
+     */
+    adminListWorkspaceMembersApiAdminWorkspacesWorkspaceIdMembersGet: (
+      workspaceId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<OrganizationMemberOut[], HTTPValidationError>({
+        path: `/api/admin/workspaces/${workspaceId}/members`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminInviteWorkspaceMemberApiAdminWorkspacesWorkspaceIdMembersPost
+     * @summary Admin Invite Workspace Member
+     * @request POST:/api/admin/workspaces/{workspace_id}/members
+     * @secure
+     */
+    adminInviteWorkspaceMemberApiAdminWorkspacesWorkspaceIdMembersPost: (
+      workspaceId: string,
+      data: OrganizationMemberInvite,
+      params: RequestParams = {},
+    ) =>
+      this.request<OrganizationMemberInviteOut, HTTPValidationError>({
+        path: `/api/admin/workspaces/${workspaceId}/members`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminUpdateWorkspaceMemberApiAdminWorkspacesWorkspaceIdMembersMemberUserIdPatch
+     * @summary Admin Update Workspace Member
+     * @request PATCH:/api/admin/workspaces/{workspace_id}/members/{member_user_id}
+     * @secure
+     */
+    adminUpdateWorkspaceMemberApiAdminWorkspacesWorkspaceIdMembersMemberUserIdPatch:
+      (
+        workspaceId: string,
+        memberUserId: string,
+        data: OrganizationMemberUpdate,
+        params: RequestParams = {},
+      ) =>
+        this.request<OrganizationMemberOut, HTTPValidationError>({
+          path: `/api/admin/workspaces/${workspaceId}/members/${memberUserId}`,
+          method: "PATCH",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminRemoveWorkspaceMemberApiAdminWorkspacesWorkspaceIdMembersMemberUserIdDelete
+     * @summary Admin Remove Workspace Member
+     * @request DELETE:/api/admin/workspaces/{workspace_id}/members/{member_user_id}
+     * @secure
+     */
+    adminRemoveWorkspaceMemberApiAdminWorkspacesWorkspaceIdMembersMemberUserIdDelete:
+      (workspaceId: string, memberUserId: string, params: RequestParams = {}) =>
+        this.request<void, HTTPValidationError>({
+          path: `/api/admin/workspaces/${workspaceId}/members/${memberUserId}`,
+          method: "DELETE",
+          secure: true,
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminRemoveWorkspaceAdminApiAdminWorkspacesWorkspaceIdAdminsAdminUserIdDelete
+     * @summary Admin Remove Workspace Admin
+     * @request DELETE:/api/admin/workspaces/{workspace_id}/admins/{admin_user_id}
+     * @secure
+     */
+    adminRemoveWorkspaceAdminApiAdminWorkspacesWorkspaceIdAdminsAdminUserIdDelete:
+      (workspaceId: string, adminUserId: string, params: RequestParams = {}) =>
+        this.request<void, HTTPValidationError>({
+          path: `/api/admin/workspaces/${workspaceId}/admins/${adminUserId}`,
+          method: "DELETE",
+          secure: true,
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminSuspendWorkspaceApiAdminWorkspacesWorkspaceIdSuspendPost
+     * @summary Admin Suspend Workspace
+     * @request POST:/api/admin/workspaces/{workspace_id}/suspend
+     * @secure
+     */
+    adminSuspendWorkspaceApiAdminWorkspacesWorkspaceIdSuspendPost: (
+      workspaceId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminWorkspaceOut, HTTPValidationError>({
+        path: `/api/admin/workspaces/${workspaceId}/suspend`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminReactivateWorkspaceApiAdminWorkspacesWorkspaceIdReactivatePost
+     * @summary Admin Reactivate Workspace
+     * @request POST:/api/admin/workspaces/{workspace_id}/reactivate
+     * @secure
+     */
+    adminReactivateWorkspaceApiAdminWorkspacesWorkspaceIdReactivatePost: (
+      workspaceId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminWorkspaceOut, HTTPValidationError>({
+        path: `/api/admin/workspaces/${workspaceId}/reactivate`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminArchiveWorkspaceApiAdminWorkspacesWorkspaceIdArchivePost
+     * @summary Admin Archive Workspace
+     * @request POST:/api/admin/workspaces/{workspace_id}/archive
+     * @secure
+     */
+    adminArchiveWorkspaceApiAdminWorkspacesWorkspaceIdArchivePost: (
+      workspaceId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminWorkspaceOut, HTTPValidationError>({
+        path: `/api/admin/workspaces/${workspaceId}/archive`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminTransferWorkspaceOwnerApiAdminWorkspacesWorkspaceIdTransferOwnerPost
+     * @summary Admin Transfer Workspace Owner
+     * @request POST:/api/admin/workspaces/{workspace_id}/transfer-owner
+     * @secure
+     */
+    adminTransferWorkspaceOwnerApiAdminWorkspacesWorkspaceIdTransferOwnerPost: (
+      workspaceId: string,
+      data: AdminWorkspaceTransferOwner,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminWorkspaceOut, HTTPValidationError>({
+        path: `/api/admin/workspaces/${workspaceId}/transfer-owner`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminUpdateWorkspaceOwnerApiAdminWorkspacesWorkspaceIdOwnerPatch
+     * @summary Admin Update Workspace Owner
+     * @request PATCH:/api/admin/workspaces/{workspace_id}/owner
+     * @secure
+     */
+    adminUpdateWorkspaceOwnerApiAdminWorkspacesWorkspaceIdOwnerPatch: (
+      workspaceId: string,
+      data: AdminOwnerUpdate,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminOwnerOut, HTTPValidationError>({
+        path: `/api/admin/workspaces/${workspaceId}/owner`,
+        method: "PATCH",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminResetWorkspaceOwnerPasswordApiAdminWorkspacesWorkspaceIdOwnerResetPasswordPost
+     * @summary Admin Reset Workspace Owner Password
+     * @request POST:/api/admin/workspaces/{workspace_id}/owner/reset-password
+     * @secure
+     */
+    adminResetWorkspaceOwnerPasswordApiAdminWorkspacesWorkspaceIdOwnerResetPasswordPost:
+      (
+        workspaceId: string,
+        data: AdminOwnerPasswordReset,
+        params: RequestParams = {},
+      ) =>
+        this.request<AdminOwnerPasswordResetOut, HTTPValidationError>({
+          path: `/api/admin/workspaces/${workspaceId}/owner/reset-password`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminListAgentActivationTokensApiAdminAgentActivationTokensGet
+     * @summary Admin List Agent Activation Tokens
+     * @request GET:/api/admin/agent-activation-tokens
+     * @secure
+     */
+    adminListAgentActivationTokensApiAdminAgentActivationTokensGet: (
+      query?: {
+        /** Workspaceid */
+        workspaceId?: string | null;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminAgentTokenOut[], HTTPValidationError>({
+        path: `/api/admin/agent-activation-tokens`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminCreateAgentActivationTokenApiAdminAgentActivationTokensPost
+     * @summary Admin Create Agent Activation Token
+     * @request POST:/api/admin/agent-activation-tokens
+     * @secure
+     */
+    adminCreateAgentActivationTokenApiAdminAgentActivationTokensPost: (
+      data: AdminAgentTokenCreate,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminAgentTokenCreated, HTTPValidationError>({
+        path: `/api/admin/agent-activation-tokens`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminRevokeAgentActivationTokenApiAdminAgentActivationTokensTokenIdDelete
+     * @summary Admin Revoke Agent Activation Token
+     * @request DELETE:/api/admin/agent-activation-tokens/{token_id}
+     * @secure
+     */
+    adminRevokeAgentActivationTokenApiAdminAgentActivationTokensTokenIdDelete: (
+      tokenId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<void, HTTPValidationError>({
+        path: `/api/admin/agent-activation-tokens/${tokenId}`,
+        method: "DELETE",
+        secure: true,
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminReplaceAgentActivationTokenApiAdminAgentActivationTokensTokenIdReplacePost
+     * @summary Admin Replace Agent Activation Token
+     * @request POST:/api/admin/agent-activation-tokens/{token_id}/replace
+     * @secure
+     */
+    adminReplaceAgentActivationTokenApiAdminAgentActivationTokensTokenIdReplacePost:
+      (tokenId: string, params: RequestParams = {}) =>
+        this.request<AdminAgentTokenCreated, HTTPValidationError>({
+          path: `/api/admin/agent-activation-tokens/${tokenId}/replace`,
+          method: "POST",
+          secure: true,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminListAgentsApiAdminAgentsGet
+     * @summary Admin List Agents
+     * @request GET:/api/admin/agents
+     * @secure
+     */
+    adminListAgentsApiAdminAgentsGet: (
+      query?: {
+        /** Search */
+        search?: string | null;
+        /** Workspaceid */
+        workspaceId?: string | null;
+        /** Status */
+        status?: string | null;
+        /**
+         * Offset
+         * @min 0
+         * @default 0
+         */
+        offset?: number;
+        /**
+         * Limit
+         * @min 1
+         * @max 100
+         * @default 50
+         */
+        limit?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminAgentListOut, HTTPValidationError>({
+        path: `/api/admin/agents`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminListAgentPhonesApiAdminAgentsRelayIdPhoneAllocationsGet
+     * @summary Admin List Agent Phones
+     * @request GET:/api/admin/agents/{relay_id}/phone-allocations
+     * @secure
+     */
+    adminListAgentPhonesApiAdminAgentsRelayIdPhoneAllocationsGet: (
+      relayId: string,
+      query?: {
+        /** Search */
+        search?: string | null;
+        /** Status */
+        status?: string | null;
+        /** Assignedworkspaceid */
+        assignedWorkspaceId?: string | null;
+        /**
+         * Offset
+         * @min 0
+         * @default 0
+         */
+        offset?: number;
+        /**
+         * Limit
+         * @min 1
+         * @max 200
+         * @default 100
+         */
+        limit?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminAgentPhoneListOut, HTTPValidationError>({
+        path: `/api/admin/agents/${relayId}/phone-allocations`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminAssignAgentPhonesApiAdminAgentsRelayIdPhoneAllocationsPost
+     * @summary Admin Assign Agent Phones
+     * @request POST:/api/admin/agents/{relay_id}/phone-allocations
+     * @secure
+     */
+    adminAssignAgentPhonesApiAdminAgentsRelayIdPhoneAllocationsPost: (
+      relayId: string,
+      data: AdminAgentPhoneAssign,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminAgentPhoneAssignOut, HTTPValidationError>({
+        path: `/api/admin/agents/${relayId}/phone-allocations`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminUnassignAgentPhonesApiAdminAgentsRelayIdPhoneAllocationsDelete
+     * @summary Admin Unassign Agent Phones
+     * @request DELETE:/api/admin/agents/{relay_id}/phone-allocations
+     * @secure
+     */
+    adminUnassignAgentPhonesApiAdminAgentsRelayIdPhoneAllocationsDelete: (
+      relayId: string,
+      data: AdminAgentPhoneUnassign,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminAgentPhoneAssignOut, HTTPValidationError>({
+        path: `/api/admin/agents/${relayId}/phone-allocations`,
+        method: "DELETE",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminUpdateAgentApiAdminAgentsRelayIdPatch
+     * @summary Admin Update Agent
+     * @request PATCH:/api/admin/agents/{relay_id}
+     * @secure
+     */
+    adminUpdateAgentApiAdminAgentsRelayIdPatch: (
+      relayId: string,
+      data: AdminAgentUpdate,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminAgentOut, HTTPValidationError>({
+        path: `/api/admin/agents/${relayId}`,
+        method: "PATCH",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminDeleteAgentApiAdminAgentsRelayIdDelete
+     * @summary Admin Delete Agent
+     * @request DELETE:/api/admin/agents/{relay_id}
+     * @secure
+     */
+    adminDeleteAgentApiAdminAgentsRelayIdDelete: (
+      relayId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<void, HTTPValidationError>({
+        path: `/api/admin/agents/${relayId}`,
+        method: "DELETE",
+        secure: true,
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminDisableAgentApiAdminAgentsRelayIdDisablePost
+     * @summary Admin Disable Agent
+     * @request POST:/api/admin/agents/{relay_id}/disable
+     * @secure
+     */
+    adminDisableAgentApiAdminAgentsRelayIdDisablePost: (
+      relayId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminAgentOut, HTTPValidationError>({
+        path: `/api/admin/agents/${relayId}/disable`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminEnableAgentApiAdminAgentsRelayIdEnablePost
+     * @summary Admin Enable Agent
+     * @request POST:/api/admin/agents/{relay_id}/enable
+     * @secure
+     */
+    adminEnableAgentApiAdminAgentsRelayIdEnablePost: (
+      relayId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminAgentOut, HTTPValidationError>({
+        path: `/api/admin/agents/${relayId}/enable`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminListDevicesApiAdminDevicesGet
+     * @summary Admin List Devices
+     * @request GET:/api/admin/devices
+     * @secure
+     */
+    adminListDevicesApiAdminDevicesGet: (
+      query?: {
+        /** Search */
+        search?: string | null;
+        /** Workspaceid */
+        workspaceId?: string | null;
+        /** Status */
+        status?: string | null;
+        /** Assigned */
+        assigned?: boolean | null;
+        /**
+         * Offset
+         * @min 0
+         * @default 0
+         */
+        offset?: number;
+        /**
+         * Limit
+         * @min 1
+         * @max 100
+         * @default 50
+         */
+        limit?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminDeviceListOut, HTTPValidationError>({
+        path: `/api/admin/devices`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminTransferDeviceWorkspaceApiAdminDevicesDeviceIdAssignmentPut
+     * @summary Admin Transfer Device Workspace
+     * @request PUT:/api/admin/devices/{device_id}/assignment
+     * @secure
+     */
+    adminTransferDeviceWorkspaceApiAdminDevicesDeviceIdAssignmentPut: (
+      deviceId: string,
+      data: AdminDeviceTransfer,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminDeviceOut, HTTPValidationError>({
+        path: `/api/admin/devices/${deviceId}/assignment`,
+        method: "PUT",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Drop a pool phone's row so its serial is free to register again. A serial is claimed globally (``services/device_registration.py``), so a row left behind by a retired pool agent blocks every other workspace from ever registering that physical phone. Only the pool workspace that manages the row can free it — the same rule the transfer endpoint enforces — and only while the phone is back in its pool, so this can never yank a phone out from under the tenant currently using it.
+     *
+     * @tags admin
+     * @name AdminDeleteDeviceApiAdminDevicesDeviceIdDelete
+     * @summary Admin Delete Device
+     * @request DELETE:/api/admin/devices/{device_id}
+     * @secure
+     */
+    adminDeleteDeviceApiAdminDevicesDeviceIdDelete: (
+      deviceId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<void, HTTPValidationError>({
+        path: `/api/admin/devices/${deviceId}`,
+        method: "DELETE",
+        secure: true,
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminAuditLogApiAdminAuditLogGet
+     * @summary Admin Audit Log
+     * @request GET:/api/admin/audit-log
+     * @secure
+     */
+    adminAuditLogApiAdminAuditLogGet: (
+      query?: {
+        /** Action */
+        action?: string | null;
+        /** Resourcetype */
+        resourceType?: string | null;
+        /** Resourceid */
+        resourceId?: string | null;
+        /** Workspaceid */
+        workspaceId?: string | null;
+        /** Actor */
+        actor?: string | null;
+        /**
+         * Offset
+         * @min 0
+         * @default 0
+         */
+        offset?: number;
+        /**
+         * Limit
+         * @min 1
+         * @max 100
+         * @default 50
+         */
+        limit?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<ActivityLogListOut, HTTPValidationError>({
+        path: `/api/admin/audit-log`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags devices
+     * @name RegistryPairDeviceApiDevicesRegistryPairPost
+     * @summary Registry Pair Device
+     * @request POST:/api/devices/registry/pair
+     * @secure
+     */
+    registryPairDeviceApiDevicesRegistryPairPost: (
+      data: PairRegistryBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<PairRegistryOut, HTTPValidationError>({
+        path: `/api/devices/registry/pair`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags devices
+     * @name RegistryUnpairDeviceApiDevicesDeviceIdUnpairPost
+     * @summary Registry Unpair Device
+     * @request POST:/api/devices/{device_id}/unpair
+     * @secure
+     */
+    registryUnpairDeviceApiDevicesDeviceIdUnpairPost: (
+      deviceId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<UnpairDeviceOut, HTTPValidationError>({
+        path: `/api/devices/${deviceId}/unpair`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags devices
+     * @name ClaimDeviceApiDevicesDeviceIdClaimPost
+     * @summary Claim Device
+     * @request POST:/api/devices/{device_id}/claim
+     * @secure
+     */
+    claimDeviceApiDevicesDeviceIdClaimPost: (
+      deviceId: string,
+      data: DeviceClaimBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<DeviceClaimOut, HTTPValidationError>({
+        path: `/api/devices/${deviceId}/claim`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags devices
+     * @name ReleaseDeviceApiDevicesDeviceIdReleasePost
+     * @summary Release Device
+     * @request POST:/api/devices/{device_id}/release
+     * @secure
+     */
+    releaseDeviceApiDevicesDeviceIdReleasePost: (
+      deviceId: string,
+      data: DeviceReleaseBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/devices/${deviceId}/release`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags devices
+     * @name GetDeviceActiveSessionApiDevicesDeviceIdSessionGet
+     * @summary Get Device Active Session
+     * @request GET:/api/devices/{device_id}/session
+     * @secure
+     */
+    getDeviceActiveSessionApiDevicesDeviceIdSessionGet: (
+      deviceId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<DeviceReserveSessionOut, HTTPValidationError>({
+        path: `/api/devices/${deviceId}/session`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags devices
+     * @name HeartbeatSessionApiSessionsSessionIdHeartbeatPost
+     * @summary Heartbeat Session
+     * @request POST:/api/sessions/{session_id}/heartbeat
+     * @secure
+     */
+    heartbeatSessionApiSessionsSessionIdHeartbeatPost: (
+      sessionId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<DeviceReserveSessionOut, HTTPValidationError>({
+        path: `/api/sessions/${sessionId}/heartbeat`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Serve the STFService.apk used by Android devices. The file is resolved from a small set of well-known locations: - backend/bundle/apks/STFService.apk                    (download_bundle.py output) - ../STFService.apk/app/build/outputs/apk/release/...   (local Gradle build)
      *
      * @tags devices
      * @name DownloadStfApkApiDevicesStfApkGet
@@ -6921,6 +10486,29 @@ export class DeviceFarmHttpClient<
       }),
 
     /**
+     * No description
+     *
+     * @tags devices
+     * @name ConnectLocalEmulatorApiDevicesConnectEmulatorPost
+     * @summary Connect Local Emulator
+     * @request POST:/api/devices/connect-emulator
+     * @secure
+     */
+    connectLocalEmulatorApiDevicesConnectEmulatorPost: (
+      data: ConnectLocalEmulatorBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/devices/connect-emulator`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
      * @description Đăng ký thiết bị: chỉ tạo bản ghi (serial = pending-xxx), chưa kết nối điện thoại. Để kết nối điện thoại thật, user vào thẻ thiết bị → nhấn Kết nối → quét mã QR (key=device_key).
      *
      * @tags devices
@@ -6939,6 +10527,38 @@ export class DeviceFarmHttpClient<
         body: data,
         secure: true,
         type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description List pool phones allocated to this workspace but not claimed by a user yet.
+     *
+     * @tags devices
+     * @name ListAllocatedDevicesApiDevicesAllocatedGet
+     * @summary List Allocated Devices
+     * @request GET:/api/devices/allocated
+     * @secure
+     */
+    listAllocatedDevicesApiDevicesAllocatedGet: (
+      query?: {
+        /** Q */
+        q?: string | null;
+        /**
+         * Limit
+         * @min 1
+         * @max 100
+         * @default 50
+         */
+        limit?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<DeviceOut[], HTTPValidationError>({
+        path: `/api/devices/allocated`,
+        method: "GET",
+        query: query,
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -7046,6 +10666,11 @@ export class DeviceFarmHttpClient<
         page?: number | null;
         /** Page Size */
         page_size?: number | null;
+        /**
+         * Connected Only
+         * @default false
+         */
+        connected_only?: boolean;
       },
       params: RequestParams = {},
     ) =>
@@ -7179,6 +10804,51 @@ export class DeviceFarmHttpClient<
      * No description
      *
      * @tags devices
+     * @name ClaimAllocatedDeviceRouteApiDevicesDeviceIdClaimAllocatedPost
+     * @summary Claim Allocated Device Route
+     * @request POST:/api/devices/{device_id}/claim-allocated
+     * @secure
+     */
+    claimAllocatedDeviceRouteApiDevicesDeviceIdClaimAllocatedPost: (
+      deviceId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<DeviceOut, HTTPValidationError>({
+        path: `/api/devices/${deviceId}/claim-allocated`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags devices
+     * @name ConnectViaManagedAgentApiDevicesDeviceIdConnectViaManagedAgentPost
+     * @summary Connect Via Managed Agent
+     * @request POST:/api/devices/{device_id}/connect-via-managed-agent
+     * @secure
+     */
+    connectViaManagedAgentApiDevicesDeviceIdConnectViaManagedAgentPost: (
+      deviceId: string,
+      data: ManagedAgentConnectBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<RelayCommandOut, HTTPValidationError>({
+        path: `/api/devices/${deviceId}/connect-via-managed-agent`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags devices
      * @name GetDeviceApiDevicesDeviceIdGet
      * @summary Get Device
      * @request GET:/api/devices/{device_id}
@@ -7232,6 +10902,30 @@ export class DeviceFarmHttpClient<
     ) =>
       this.request<DeviceOut, HTTPValidationError>({
         path: `/api/devices/${deviceId}/tags`,
+        method: "PATCH",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags devices
+     * @name UpdateNameApiDevicesDeviceIdNamePatch
+     * @summary Update Name
+     * @request PATCH:/api/devices/{device_id}/name
+     * @secure
+     */
+    updateNameApiDevicesDeviceIdNamePatch: (
+      deviceId: string,
+      data: DeviceNameUpdate,
+      params: RequestParams = {},
+    ) =>
+      this.request<DeviceOut, HTTPValidationError>({
+        path: `/api/devices/${deviceId}/name`,
         method: "PATCH",
         body: data,
         secure: true,
@@ -7785,130 +11479,6 @@ export class DeviceFarmHttpClient<
      * No description
      *
      * @tags campaigns
-     * @name ContinuousCrawlPreflightApiCampaignsCampaignIdContinuousCrawlPreflightPost
-     * @summary Continuous Crawl Preflight
-     * @request POST:/api/campaigns/{campaign_id}/continuous-crawl/preflight
-     * @secure
-     */
-    continuousCrawlPreflightApiCampaignsCampaignIdContinuousCrawlPreflightPost:
-      (campaignId: string, params: RequestParams = {}) =>
-        this.request<ContinuousCrawlPreflightOut, HTTPValidationError>({
-          path: `/api/campaigns/${campaignId}/continuous-crawl/preflight`,
-          method: "POST",
-          secure: true,
-          format: "json",
-          ...params,
-        }),
-
-    /**
-     * No description
-     *
-     * @tags campaigns
-     * @name StartContinuousCrawlApiCampaignsCampaignIdContinuousCrawlStartPost
-     * @summary Start Continuous Crawl
-     * @request POST:/api/campaigns/{campaign_id}/continuous-crawl/start
-     * @secure
-     */
-    startContinuousCrawlApiCampaignsCampaignIdContinuousCrawlStartPost: (
-      campaignId: string,
-      params: RequestParams = {},
-    ) =>
-      this.request<ContinuousCrawlStartOut, HTTPValidationError>({
-        path: `/api/campaigns/${campaignId}/continuous-crawl/start`,
-        method: "POST",
-        secure: true,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
-     * @tags campaigns
-     * @name ContinuousCrawlProgressApiCampaignsCampaignIdContinuousCrawlProgressGet
-     * @summary Continuous Crawl Progress
-     * @request GET:/api/campaigns/{campaign_id}/continuous-crawl/progress
-     * @secure
-     */
-    continuousCrawlProgressApiCampaignsCampaignIdContinuousCrawlProgressGet: (
-      campaignId: string,
-      params: RequestParams = {},
-    ) =>
-      this.request<ContinuousCrawlProgressOut, HTTPValidationError>({
-        path: `/api/campaigns/${campaignId}/continuous-crawl/progress`,
-        method: "GET",
-        secure: true,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
-     * @tags campaigns
-     * @name PauseContinuousCrawlApiCampaignsCampaignIdContinuousCrawlPausePost
-     * @summary Pause Continuous Crawl
-     * @request POST:/api/campaigns/{campaign_id}/continuous-crawl/pause
-     * @secure
-     */
-    pauseContinuousCrawlApiCampaignsCampaignIdContinuousCrawlPausePost: (
-      campaignId: string,
-      params: RequestParams = {},
-    ) =>
-      this.request<ContinuousCrawlProgressOut, HTTPValidationError>({
-        path: `/api/campaigns/${campaignId}/continuous-crawl/pause`,
-        method: "POST",
-        secure: true,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
-     * @tags campaigns
-     * @name ResumeContinuousCrawlApiCampaignsCampaignIdContinuousCrawlResumePost
-     * @summary Resume Continuous Crawl
-     * @request POST:/api/campaigns/{campaign_id}/continuous-crawl/resume
-     * @secure
-     */
-    resumeContinuousCrawlApiCampaignsCampaignIdContinuousCrawlResumePost: (
-      campaignId: string,
-      params: RequestParams = {},
-    ) =>
-      this.request<ContinuousCrawlProgressOut, HTTPValidationError>({
-        path: `/api/campaigns/${campaignId}/continuous-crawl/resume`,
-        method: "POST",
-        secure: true,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
-     * @tags campaigns
-     * @name CancelContinuousCrawlApiCampaignsCampaignIdContinuousCrawlCancelPost
-     * @summary Cancel Continuous Crawl
-     * @request POST:/api/campaigns/{campaign_id}/continuous-crawl/cancel
-     * @secure
-     */
-    cancelContinuousCrawlApiCampaignsCampaignIdContinuousCrawlCancelPost: (
-      campaignId: string,
-      params: RequestParams = {},
-    ) =>
-      this.request<ContinuousCrawlProgressOut, HTTPValidationError>({
-        path: `/api/campaigns/${campaignId}/continuous-crawl/cancel`,
-        method: "POST",
-        secure: true,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
-     * @tags campaigns
      * @name PauseCampaignApiCampaignsCampaignIdPausePost
      * @summary Pause Campaign
      * @request POST:/api/campaigns/{campaign_id}/pause
@@ -8063,7 +11633,7 @@ export class DeviceFarmHttpClient<
       }),
 
     /**
-     * @description Return cumulative device-run counts (passed/failed/…) across all executions.
+     * @description Return cumulative campaign-run counts (passed/failed/…) across all dispatches.
      *
      * @tags campaigns
      * @name CampaignRunStatsEndpointApiCampaignsCampaignIdRunStatsGet
@@ -8945,15 +12515,15 @@ export class DeviceFarmHttpClient<
      * No description
      *
      * @tags scenarios
-     * @name ScenarioTemplateSummaryOutApiScenariosTemplatesGet
-     * @summary  Scenario Template Summary Out
+     * @name ListScenarioTemplatesApiScenariosTemplatesGet
+     * @summary List Scenario Templates
      * @request GET:/api/scenarios/templates
      * @secure
      */
-    scenarioTemplateSummaryOutApiScenariosTemplatesGet: (
-      query: {
-        /** T */
-        t: any;
+    listScenarioTemplatesApiScenariosTemplatesGet: (
+      query?: {
+        /** Platform */
+        platform?: string | null;
       },
       params: RequestParams = {},
     ) =>
@@ -9047,6 +12617,29 @@ export class DeviceFarmHttpClient<
     ) =>
       this.request<OrgScenarioImportOut, HTTPValidationError>({
         path: `/api/scenarios/templates/${templateId}/clone`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags scenarios
+     * @name EnsureAccountLoginScenarioRouteApiScenariosAccountLoginEffectivePost
+     * @summary Ensure Account Login Scenario Route
+     * @request POST:/api/scenarios/account-login/effective
+     * @secure
+     */
+    ensureAccountLoginScenarioRouteApiScenariosAccountLoginEffectivePost: (
+      data: AccountLoginScenarioEnsureIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<OrgScenarioOut, HTTPValidationError>({
+        path: `/api/scenarios/account-login/effective`,
         method: "POST",
         body: data,
         secure: true,
@@ -9448,6 +13041,45 @@ export class DeviceFarmHttpClient<
       }),
 
     /**
+     * @description List visible devices that can still be added to this group.
+     *
+     * @tags device-groups
+     * @name ListAvailableDevicesForGroupApiDeviceGroupsGroupIdAvailableDevicesGet
+     * @summary List Available Devices For Group
+     * @request GET:/api/device-groups/{group_id}/available-devices
+     * @secure
+     */
+    listAvailableDevicesForGroupApiDeviceGroupsGroupIdAvailableDevicesGet: (
+      groupId: string,
+      query?: {
+        /** Q */
+        q?: string | null;
+        /**
+         * Offset
+         * @min 0
+         * @default 0
+         */
+        offset?: number;
+        /**
+         * Limit
+         * @min 1
+         * @max 100
+         * @default 20
+         */
+        limit?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<DeviceGroupAvailableDevicesOut, HTTPValidationError>({
+        path: `/api/device-groups/${groupId}/available-devices`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
      * @description Add one or more devices to the group. Already-present devices are ignored.
      *
      * @tags device-groups
@@ -9617,6 +13249,104 @@ export class DeviceFarmHttpClient<
       }),
 
     /**
+     * No description
+     *
+     * @tags accounts
+     * @name ListAccountImportFormatsEndpointApiAccountsImportFormatsGet
+     * @summary List Account Import Formats Endpoint
+     * @request GET:/api/accounts/import-formats
+     * @secure
+     */
+    listAccountImportFormatsEndpointApiAccountsImportFormatsGet: (
+      query?: {
+        /**
+         * Include Inactive
+         * @default false
+         */
+        include_inactive?: boolean;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<AccountImportFormatListOut, HTTPValidationError>({
+        path: `/api/accounts/import-formats`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags accounts
+     * @name BulkImportTxtApiAccountsImportTxtPost
+     * @summary Bulk Import Txt
+     * @request POST:/api/accounts/import-txt
+     * @secure
+     */
+    bulkImportTxtApiAccountsImportTxtPost: (
+      data: BodyBulkImportTxtApiAccountsImportTxtPost,
+      params: RequestParams = {},
+    ) =>
+      this.request<BulkImportResult, HTTPValidationError>({
+        path: `/api/accounts/import-txt`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.FormData,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags accounts
+     * @name AdminCreateAccountImportFormatApiAdminAccountImportFormatsPost
+     * @summary Admin Create Account Import Format
+     * @request POST:/api/admin/account-import-formats
+     * @secure
+     */
+    adminCreateAccountImportFormatApiAdminAccountImportFormatsPost: (
+      data: AccountImportFormatCreate,
+      params: RequestParams = {},
+    ) =>
+      this.request<AccountImportFormatOut, HTTPValidationError>({
+        path: `/api/admin/account-import-formats`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags accounts
+     * @name AdminUpdateAccountImportFormatApiAdminAccountImportFormatsFormatIdPatch
+     * @summary Admin Update Account Import Format
+     * @request PATCH:/api/admin/account-import-formats/{format_id}
+     * @secure
+     */
+    adminUpdateAccountImportFormatApiAdminAccountImportFormatsFormatIdPatch: (
+      formatId: string,
+      data: AccountImportFormatUpdate,
+      params: RequestParams = {},
+    ) =>
+      this.request<AccountImportFormatOut, HTTPValidationError>({
+        path: `/api/admin/account-import-formats/${formatId}`,
+        method: "PATCH",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
      * @description Auto-assign active accounts to devices in round-robin order.
      *
      * @tags accounts
@@ -9638,6 +13368,46 @@ export class DeviceFarmHttpClient<
         format: "json",
         ...params,
       }),
+
+    /**
+     * @description List visible devices that are not yet linked to this account.
+     *
+     * @tags accounts
+     * @name ListAccountAvailableDevicesEndpointApiAccountsAccountIdAvailableDevicesGet
+     * @summary List Account Available Devices Endpoint
+     * @request GET:/api/accounts/{account_id}/available-devices
+     * @secure
+     */
+    listAccountAvailableDevicesEndpointApiAccountsAccountIdAvailableDevicesGet:
+      (
+        accountId: string,
+        query?: {
+          /** Q */
+          q?: string | null;
+          /**
+           * Offset
+           * @min 0
+           * @default 0
+           */
+          offset?: number;
+          /**
+           * Limit
+           * @min 1
+           * @max 100
+           * @default 20
+           */
+          limit?: number;
+        },
+        params: RequestParams = {},
+      ) =>
+        this.request<AccountAvailableDevicesOut, HTTPValidationError>({
+          path: `/api/accounts/${accountId}/available-devices`,
+          method: "GET",
+          query: query,
+          secure: true,
+          format: "json",
+          ...params,
+        }),
 
     /**
      * @description Transition account FSM state with validation, audit, and domain event.
@@ -9962,209 +13732,6 @@ export class DeviceFarmHttpClient<
         format: "json",
         ...params,
       }),
-
-    /**
-     * @description Return the Facebook session provenance row, creating an unknown row on first read.
-     *
-     * @tags accounts
-     * @name GetFacebookPlatformSessionEndpointApiDevicesDeviceIdPlatformSessionsFacebookGet
-     * @summary Get Facebook Platform Session Endpoint
-     * @request GET:/api/devices/{device_id}/platform-sessions/facebook
-     * @secure
-     */
-    getFacebookPlatformSessionEndpointApiDevicesDeviceIdPlatformSessionsFacebookGet:
-      (deviceId: string, params: RequestParams = {}) =>
-        this.request<DevicePlatformSessionOut, HTTPValidationError>({
-          path: `/api/devices/${deviceId}/platform-sessions/facebook`,
-          method: "GET",
-          secure: true,
-          format: "json",
-          ...params,
-        }),
-
-    /**
-     * @description Operator-confirm the current Facebook session for migration only.
-     *
-     * @tags accounts
-     * @name ConfirmFacebookPlatformSessionEndpointApiDevicesDeviceIdPlatformSessionsFacebookConfirmPost
-     * @summary Confirm Facebook Platform Session Endpoint
-     * @request POST:/api/devices/{device_id}/platform-sessions/facebook/confirm
-     * @secure
-     */
-    confirmFacebookPlatformSessionEndpointApiDevicesDeviceIdPlatformSessionsFacebookConfirmPost:
-      (
-        deviceId: string,
-        data: ConfirmPlatformSessionBody,
-        params: RequestParams = {},
-      ) =>
-        this.request<DevicePlatformSessionOut, HTTPValidationError>({
-          path: `/api/devices/${deviceId}/platform-sessions/facebook/confirm`,
-          method: "POST",
-          body: data,
-          secure: true,
-          type: ContentType.Json,
-          format: "json",
-          ...params,
-        }),
-
-    /**
-     * @description Invalidate the current Facebook provenance row.
-     *
-     * @tags accounts
-     * @name InvalidateFacebookPlatformSessionEndpointApiDevicesDeviceIdPlatformSessionsFacebookInvalidatePost
-     * @summary Invalidate Facebook Platform Session Endpoint
-     * @request POST:/api/devices/{device_id}/platform-sessions/facebook/invalidate
-     * @secure
-     */
-    invalidateFacebookPlatformSessionEndpointApiDevicesDeviceIdPlatformSessionsFacebookInvalidatePost:
-      (
-        deviceId: string,
-        data: InvalidatePlatformSessionBody,
-        params: RequestParams = {},
-      ) =>
-        this.request<DevicePlatformSessionOut, HTTPValidationError>({
-          path: `/api/devices/${deviceId}/platform-sessions/facebook/invalidate`,
-          method: "POST",
-          body: data,
-          secure: true,
-          type: ContentType.Json,
-          format: "json",
-          ...params,
-        }),
-
-    /**
-     * No description
-     *
-     * @tags accounts
-     * @name ListFacebookLoginAttemptsEndpointApiDevicesDeviceIdPlatformSessionsFacebookLoginAttemptsGet
-     * @summary List Facebook Login Attempts Endpoint
-     * @request GET:/api/devices/{device_id}/platform-sessions/facebook/login-attempts
-     * @secure
-     */
-    listFacebookLoginAttemptsEndpointApiDevicesDeviceIdPlatformSessionsFacebookLoginAttemptsGet:
-      (
-        deviceId: string,
-        query?: {
-          /**
-           * Limit
-           * @min 1
-           * @max 100
-           * @default 20
-           */
-          limit?: number;
-        },
-        params: RequestParams = {},
-      ) =>
-        this.request<DevicePlatformLoginAttemptOut[], HTTPValidationError>({
-          path: `/api/devices/${deviceId}/platform-sessions/facebook/login-attempts`,
-          method: "GET",
-          query: query,
-          secure: true,
-          format: "json",
-          ...params,
-        }),
-
-    /**
-     * No description
-     *
-     * @tags accounts
-     * @name StartFacebookLoginAttemptEndpointApiDevicesDeviceIdPlatformSessionsFacebookLoginAttemptsPost
-     * @summary Start Facebook Login Attempt Endpoint
-     * @request POST:/api/devices/{device_id}/platform-sessions/facebook/login-attempts
-     * @secure
-     */
-    startFacebookLoginAttemptEndpointApiDevicesDeviceIdPlatformSessionsFacebookLoginAttemptsPost:
-      (
-        deviceId: string,
-        data: StartFacebookLoginAttemptBody,
-        params: RequestParams = {},
-      ) =>
-        this.request<DevicePlatformLoginAttemptOut, HTTPValidationError>({
-          path: `/api/devices/${deviceId}/platform-sessions/facebook/login-attempts`,
-          method: "POST",
-          body: data,
-          secure: true,
-          type: ContentType.Json,
-          format: "json",
-          ...params,
-        }),
-
-    /**
-     * No description
-     *
-     * @tags accounts
-     * @name StartControlledFacebookLoginAttemptEndpointApiDevicesDeviceIdPlatformSessionsFacebookLoginAttemptsControlledPost
-     * @summary Start Controlled Facebook Login Attempt Endpoint
-     * @request POST:/api/devices/{device_id}/platform-sessions/facebook/login-attempts/controlled
-     * @secure
-     */
-    startControlledFacebookLoginAttemptEndpointApiDevicesDeviceIdPlatformSessionsFacebookLoginAttemptsControlledPost:
-      (
-        deviceId: string,
-        data: StartFacebookLoginAttemptBody,
-        params: RequestParams = {},
-      ) =>
-        this.request<DevicePlatformLoginAttemptOut, HTTPValidationError>({
-          path: `/api/devices/${deviceId}/platform-sessions/facebook/login-attempts/controlled`,
-          method: "POST",
-          body: data,
-          secure: true,
-          type: ContentType.Json,
-          format: "json",
-          ...params,
-        }),
-
-    /**
-     * No description
-     *
-     * @tags accounts
-     * @name CompleteFacebookLoginAttemptEndpointApiDevicesDeviceIdPlatformSessionsFacebookLoginAttemptsAttemptIdCompletePost
-     * @summary Complete Facebook Login Attempt Endpoint
-     * @request POST:/api/devices/{device_id}/platform-sessions/facebook/login-attempts/{attempt_id}/complete
-     * @secure
-     */
-    completeFacebookLoginAttemptEndpointApiDevicesDeviceIdPlatformSessionsFacebookLoginAttemptsAttemptIdCompletePost:
-      (
-        deviceId: string,
-        attemptId: string,
-        data: CompleteFacebookLoginAttemptBody,
-        params: RequestParams = {},
-      ) =>
-        this.request<DevicePlatformLoginAttemptOut, HTTPValidationError>({
-          path: `/api/devices/${deviceId}/platform-sessions/facebook/login-attempts/${attemptId}/complete`,
-          method: "POST",
-          body: data,
-          secure: true,
-          type: ContentType.Json,
-          format: "json",
-          ...params,
-        }),
-
-    /**
-     * No description
-     *
-     * @tags accounts
-     * @name CancelFacebookLoginAttemptEndpointApiDevicesDeviceIdPlatformSessionsFacebookLoginAttemptsAttemptIdCancelPost
-     * @summary Cancel Facebook Login Attempt Endpoint
-     * @request POST:/api/devices/{device_id}/platform-sessions/facebook/login-attempts/{attempt_id}/cancel
-     * @secure
-     */
-    cancelFacebookLoginAttemptEndpointApiDevicesDeviceIdPlatformSessionsFacebookLoginAttemptsAttemptIdCancelPost:
-      (
-        deviceId: string,
-        attemptId: string,
-        data: CancelFacebookLoginAttemptBody,
-        params: RequestParams = {},
-      ) =>
-        this.request<DevicePlatformLoginAttemptOut, HTTPValidationError>({
-          path: `/api/devices/${deviceId}/platform-sessions/facebook/login-attempts/${attemptId}/cancel`,
-          method: "POST",
-          body: data,
-          secure: true,
-          type: ContentType.Json,
-          format: "json",
-          ...params,
-        }),
 
     /**
      * No description
@@ -11429,6 +14996,8 @@ export class DeviceFarmHttpClient<
         campaign_id?: string | null;
         /** Scenario Id */
         scenario_id?: string | null;
+        /** Account Id */
+        account_id?: string | null;
         /**
          * Offset
          * @default 0
@@ -12602,140 +16171,6 @@ export class DeviceFarmHttpClient<
     /**
      * No description
      *
-     * @tags devices
-     * @name RegistryPairDeviceApiDevicesRegistryPairPost
-     * @summary Registry Pair Device
-     * @request POST:/api/devices/registry/pair
-     * @secure
-     */
-    registryPairDeviceApiDevicesRegistryPairPost: (
-      data: PairRegistryBody,
-      params: RequestParams = {},
-    ) =>
-      this.request<PairRegistryOut, HTTPValidationError>({
-        path: `/api/devices/registry/pair`,
-        method: "POST",
-        body: data,
-        secure: true,
-        type: ContentType.Json,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
-     * @tags devices
-     * @name RegistryUnpairDeviceApiDevicesDeviceIdUnpairPost
-     * @summary Registry Unpair Device
-     * @request POST:/api/devices/{device_id}/unpair
-     * @secure
-     */
-    registryUnpairDeviceApiDevicesDeviceIdUnpairPost: (
-      deviceId: string,
-      params: RequestParams = {},
-    ) =>
-      this.request<UnpairDeviceOut, HTTPValidationError>({
-        path: `/api/devices/${deviceId}/unpair`,
-        method: "POST",
-        secure: true,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
-     * @tags devices
-     * @name ClaimDeviceApiDevicesDeviceIdClaimPost
-     * @summary Claim Device
-     * @request POST:/api/devices/{device_id}/claim
-     * @secure
-     */
-    claimDeviceApiDevicesDeviceIdClaimPost: (
-      deviceId: string,
-      data: DeviceClaimBody,
-      params: RequestParams = {},
-    ) =>
-      this.request<DeviceClaimOut, HTTPValidationError>({
-        path: `/api/devices/${deviceId}/claim`,
-        method: "POST",
-        body: data,
-        secure: true,
-        type: ContentType.Json,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
-     * @tags devices
-     * @name ReleaseDeviceApiDevicesDeviceIdReleasePost
-     * @summary Release Device
-     * @request POST:/api/devices/{device_id}/release
-     * @secure
-     */
-    releaseDeviceApiDevicesDeviceIdReleasePost: (
-      deviceId: string,
-      data: DeviceReleaseBody,
-      params: RequestParams = {},
-    ) =>
-      this.request<any, HTTPValidationError>({
-        path: `/api/devices/${deviceId}/release`,
-        method: "POST",
-        body: data,
-        secure: true,
-        type: ContentType.Json,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
-     * @tags devices
-     * @name GetDeviceActiveSessionApiDevicesDeviceIdSessionGet
-     * @summary Get Device Active Session
-     * @request GET:/api/devices/{device_id}/session
-     * @secure
-     */
-    getDeviceActiveSessionApiDevicesDeviceIdSessionGet: (
-      deviceId: string,
-      params: RequestParams = {},
-    ) =>
-      this.request<DeviceReserveSessionOut, HTTPValidationError>({
-        path: `/api/devices/${deviceId}/session`,
-        method: "GET",
-        secure: true,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
-     * @tags devices
-     * @name HeartbeatSessionApiSessionsSessionIdHeartbeatPost
-     * @summary Heartbeat Session
-     * @request POST:/api/sessions/{session_id}/heartbeat
-     * @secure
-     */
-    heartbeatSessionApiSessionsSessionIdHeartbeatPost: (
-      sessionId: string,
-      params: RequestParams = {},
-    ) =>
-      this.request<DeviceReserveSessionOut, HTTPValidationError>({
-        path: `/api/sessions/${sessionId}/heartbeat`,
-        method: "POST",
-        secure: true,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
      * @tags notifications
      * @name ListChannelsApiNotificationChannelsGet
      * @summary List Channels
@@ -13165,204 +16600,6 @@ export class DeviceFarmHttpClient<
     /**
      * No description
      *
-     * @tags social-ext
-     * @name ListSocialPlatformsApiSocialExtPlatformsGet
-     * @summary List Social Platforms
-     * @request GET:/api/social-ext/platforms
-     * @secure
-     */
-    listSocialPlatformsApiSocialExtPlatformsGet: (params: RequestParams = {}) =>
-      this.request<any, any>({
-        path: `/api/social-ext/platforms`,
-        method: "GET",
-        secure: true,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
-     * @tags social-ext
-     * @name GetSocialPlatformStepsApiSocialExtPlatformsPlatformStepsGet
-     * @summary Get Social Platform Steps
-     * @request GET:/api/social-ext/platforms/{platform}/steps
-     * @secure
-     */
-    getSocialPlatformStepsApiSocialExtPlatformsPlatformStepsGet: (
-      platform: string,
-      params: RequestParams = {},
-    ) =>
-      this.request<any, HTTPValidationError>({
-        path: `/api/social-ext/platforms/${platform}/steps`,
-        method: "GET",
-        secure: true,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
-     * @tags social-ext
-     * @name LoadSocialPlatformApiSocialExtPlatformsPlatformLoadPost
-     * @summary Load Social Platform
-     * @request POST:/api/social-ext/platforms/{platform}/load
-     * @secure
-     */
-    loadSocialPlatformApiSocialExtPlatformsPlatformLoadPost: (
-      platform: string,
-      data: PlatformLifecycleBody,
-      params: RequestParams = {},
-    ) =>
-      this.request<any, HTTPValidationError>({
-        path: `/api/social-ext/platforms/${platform}/load`,
-        method: "POST",
-        body: data,
-        secure: true,
-        type: ContentType.Json,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
-     * @tags social-ext
-     * @name UnloadSocialPlatformApiSocialExtPlatformsPlatformUnloadPost
-     * @summary Unload Social Platform
-     * @request POST:/api/social-ext/platforms/{platform}/unload
-     * @secure
-     */
-    unloadSocialPlatformApiSocialExtPlatformsPlatformUnloadPost: (
-      platform: string,
-      params: RequestParams = {},
-    ) =>
-      this.request<any, HTTPValidationError>({
-        path: `/api/social-ext/platforms/${platform}/unload`,
-        method: "POST",
-        secure: true,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
-     * @tags social-ext
-     * @name MigrateSocialPlatformApiSocialExtPlatformsPlatformMigratePost
-     * @summary Migrate Social Platform
-     * @request POST:/api/social-ext/platforms/{platform}/migrate
-     * @secure
-     */
-    migrateSocialPlatformApiSocialExtPlatformsPlatformMigratePost: (
-      platform: string,
-      data: PlatformLifecycleBody,
-      params: RequestParams = {},
-    ) =>
-      this.request<any, HTTPValidationError>({
-        path: `/api/social-ext/platforms/${platform}/migrate`,
-        method: "POST",
-        body: data,
-        secure: true,
-        type: ContentType.Json,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
-     * @tags social-ext
-     * @name GetSocialPlatformVersionHistoryApiSocialExtPlatformsPlatformVersionHistoryGet
-     * @summary Get Social Platform Version History
-     * @request GET:/api/social-ext/platforms/{platform}/version-history
-     * @secure
-     */
-    getSocialPlatformVersionHistoryApiSocialExtPlatformsPlatformVersionHistoryGet:
-      (platform: string, params: RequestParams = {}) =>
-        this.request<any, HTTPValidationError>({
-          path: `/api/social-ext/platforms/${platform}/version-history`,
-          method: "GET",
-          secure: true,
-          format: "json",
-          ...params,
-        }),
-
-    /**
-     * No description
-     *
-     * @tags social-ext
-     * @name ListOrgSocialPlatformFlagsApiSocialExtOrgsOrgIdPlatformsGet
-     * @summary List Org Social Platform Flags
-     * @request GET:/api/social-ext/orgs/{org_id}/platforms
-     * @secure
-     */
-    listOrgSocialPlatformFlagsApiSocialExtOrgsOrgIdPlatformsGet: (
-      orgId: string,
-      params: RequestParams = {},
-    ) =>
-      this.request<any, HTTPValidationError>({
-        path: `/api/social-ext/orgs/${orgId}/platforms`,
-        method: "GET",
-        secure: true,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
-     * @tags social-ext
-     * @name EnableOrgSocialPlatformApiSocialExtOrgsOrgIdPlatformsPlatformEnablePost
-     * @summary Enable Org Social Platform
-     * @request POST:/api/social-ext/orgs/{org_id}/platforms/{platform}/enable
-     * @secure
-     */
-    enableOrgSocialPlatformApiSocialExtOrgsOrgIdPlatformsPlatformEnablePost: (
-      orgId: string,
-      platform: string,
-      data: PlatformFlagBody,
-      params: RequestParams = {},
-    ) =>
-      this.request<any, HTTPValidationError>({
-        path: `/api/social-ext/orgs/${orgId}/platforms/${platform}/enable`,
-        method: "POST",
-        body: data,
-        secure: true,
-        type: ContentType.Json,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
-     * @tags social-ext
-     * @name DisableOrgSocialPlatformApiSocialExtOrgsOrgIdPlatformsPlatformDisablePost
-     * @summary Disable Org Social Platform
-     * @request POST:/api/social-ext/orgs/{org_id}/platforms/{platform}/disable
-     * @secure
-     */
-    disableOrgSocialPlatformApiSocialExtOrgsOrgIdPlatformsPlatformDisablePost: (
-      orgId: string,
-      platform: string,
-      data: PlatformFlagBody,
-      params: RequestParams = {},
-    ) =>
-      this.request<any, HTTPValidationError>({
-        path: `/api/social-ext/orgs/${orgId}/platforms/${platform}/disable`,
-        method: "POST",
-        body: data,
-        secure: true,
-        type: ContentType.Json,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
      * @tags mcp
      * @name ListMcpToolsApiMcpToolsGet
      * @summary List Mcp Tools
@@ -13586,29 +16823,6 @@ export class DeviceFarmHttpClient<
      * No description
      *
      * @tags external-entities
-     * @name SyncAuthorsFromContentRouteApiExternalEntitiesSyncAuthorsFromContentPost
-     * @summary Sync Authors From Content Route
-     * @request POST:/api/external-entities/sync-authors-from-content
-     * @secure
-     */
-    syncAuthorsFromContentRouteApiExternalEntitiesSyncAuthorsFromContentPost: (
-      data: ExternalEntityAuthorSyncIn,
-      params: RequestParams = {},
-    ) =>
-      this.request<ExternalEntityAuthorSyncOut, HTTPValidationError>({
-        path: `/api/external-entities/sync-authors-from-content`,
-        method: "POST",
-        body: data,
-        secure: true,
-        type: ContentType.Json,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
-     * @tags external-entities
      * @name GetExternalEntityRouteApiExternalEntitiesEntityIdGet
      * @summary Get External Entity Route
      * @request GET:/api/external-entities/{entity_id}
@@ -13674,38 +16888,411 @@ export class DeviceFarmHttpClient<
     /**
      * No description
      *
-     * @tags facebook-candidates
-     * @name ListFacebookCandidatesRouteApiFacebookCandidatesGet
-     * @summary List Facebook Candidates Route
-     * @request GET:/api/facebook-candidates
+     * @tags ai-device-lab
+     * @name StartWizardCheckoutRouteApiAiDeviceLabServiceCampaignsCampaignIdWizardPaymentCheckoutPost
+     * @summary Start Wizard Checkout Route
+     * @request POST:/api/ai-device-lab/service-campaigns/{campaign_id}/wizard/payment/checkout
      * @secure
      */
-    listFacebookCandidatesRouteApiFacebookCandidatesGet: (
+    startWizardCheckoutRouteApiAiDeviceLabServiceCampaignsCampaignIdWizardPaymentCheckoutPost:
+      (
+        campaignId: string,
+        data: StartWizardCheckoutIn,
+        params: RequestParams = {},
+      ) =>
+        this.request<WizardCheckoutOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/service-campaigns/${campaignId}/wizard/payment/checkout`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name RecordDeviceHygieneResultRouteApiAiDeviceLabDevicesDeviceIdHygieneResultsPost
+     * @summary Record Device Hygiene Result Route
+     * @request POST:/api/ai-device-lab/devices/{device_id}/hygiene-results
+     * @secure
+     */
+    recordDeviceHygieneResultRouteApiAiDeviceLabDevicesDeviceIdHygieneResultsPost:
+      (
+        deviceId: string,
+        data: DeviceHygieneResultIn,
+        params: RequestParams = {},
+      ) =>
+        this.request<DeviceHygieneResultOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/devices/${deviceId}/hygiene-results`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name CreateFarmRunRouteApiAiDeviceLabServiceCampaignsCampaignIdFarmRunsPost
+     * @summary Create Farm Run Route
+     * @request POST:/api/ai-device-lab/service-campaigns/{campaign_id}/farm-runs
+     * @secure
+     */
+    createFarmRunRouteApiAiDeviceLabServiceCampaignsCampaignIdFarmRunsPost: (
+      campaignId: string,
+      data: CreateFarmRunIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<FarmRunOut, HTTPValidationError>({
+        path: `/api/ai-device-lab/service-campaigns/${campaignId}/farm-runs`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name GetFarmJobRouteApiAiDeviceLabFarmJobsJobIdGet
+     * @summary Get Farm Job Route
+     * @request GET:/api/ai-device-lab/farm-jobs/{job_id}
+     * @secure
+     */
+    getFarmJobRouteApiAiDeviceLabFarmJobsJobIdGet: (
+      jobId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<FarmRunOut, HTTPValidationError>({
+        path: `/api/ai-device-lab/farm-jobs/${jobId}`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name RecordFarmEventRouteApiAiDeviceLabFarmJobsJobIdEventsPost
+     * @summary Record Farm Event Route
+     * @request POST:/api/ai-device-lab/farm-jobs/{job_id}/events
+     * @secure
+     */
+    recordFarmEventRouteApiAiDeviceLabFarmJobsJobIdEventsPost: (
+      jobId: string,
+      data: FarmEventIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<FarmEventOut, HTTPValidationError>({
+        path: `/api/ai-device-lab/farm-jobs/${jobId}/events`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name CreateServiceCampaignRouteApiAiDeviceLabServiceCampaignsPost
+     * @summary Create Service Campaign Route
+     * @request POST:/api/ai-device-lab/service-campaigns
+     * @secure
+     */
+    createServiceCampaignRouteApiAiDeviceLabServiceCampaignsPost: (
+      data: ServiceCampaignCreateIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<ServiceCampaignOut, HTTPValidationError>({
+        path: `/api/ai-device-lab/service-campaigns`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name GetServiceCampaignRouteApiAiDeviceLabServiceCampaignsCampaignIdGet
+     * @summary Get Service Campaign Route
+     * @request GET:/api/ai-device-lab/service-campaigns/{campaign_id}
+     * @secure
+     */
+    getServiceCampaignRouteApiAiDeviceLabServiceCampaignsCampaignIdGet: (
+      campaignId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<ServiceCampaignOut, HTTPValidationError>({
+        path: `/api/ai-device-lab/service-campaigns/${campaignId}`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name GetCampaignFunnelRouteApiAiDeviceLabServiceCampaignsCampaignIdFunnelGet
+     * @summary Get Campaign Funnel Route
+     * @request GET:/api/ai-device-lab/service-campaigns/{campaign_id}/funnel
+     * @secure
+     */
+    getCampaignFunnelRouteApiAiDeviceLabServiceCampaignsCampaignIdFunnelGet: (
+      campaignId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<CampaignFunnelOut, HTTPValidationError>({
+        path: `/api/ai-device-lab/service-campaigns/${campaignId}/funnel`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name GetWizardStateRouteApiAiDeviceLabServiceCampaignsCampaignIdWizardGet
+     * @summary Get Wizard State Route
+     * @request GET:/api/ai-device-lab/service-campaigns/{campaign_id}/wizard
+     * @secure
+     */
+    getWizardStateRouteApiAiDeviceLabServiceCampaignsCampaignIdWizardGet: (
+      campaignId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<WizardStateOut, HTTPValidationError>({
+        path: `/api/ai-device-lab/service-campaigns/${campaignId}/wizard`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name ListPaymentReconciliationsRouteApiAiDeviceLabServiceCampaignsCampaignIdPaymentReconciliationsGet
+     * @summary List Payment Reconciliations Route
+     * @request GET:/api/ai-device-lab/service-campaigns/{campaign_id}/payment-reconciliations
+     * @secure
+     */
+    listPaymentReconciliationsRouteApiAiDeviceLabServiceCampaignsCampaignIdPaymentReconciliationsGet:
+      (
+        campaignId: string,
+        query?: {
+          /**
+           * Offset
+           * @min 0
+           * @default 0
+           */
+          offset?: number;
+          /**
+           * Limit
+           * @min 1
+           * @max 100
+           * @default 50
+           */
+          limit?: number;
+        },
+        params: RequestParams = {},
+      ) =>
+        this.request<PaymentReconciliationListOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/service-campaigns/${campaignId}/payment-reconciliations`,
+          method: "GET",
+          query: query,
+          secure: true,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name SaveWizardDraftRouteApiAiDeviceLabServiceCampaignsCampaignIdWizardAppPut
+     * @summary Save Wizard Draft Route
+     * @request PUT:/api/ai-device-lab/service-campaigns/{campaign_id}/wizard/app
+     * @secure
+     */
+    saveWizardDraftRouteApiAiDeviceLabServiceCampaignsCampaignIdWizardAppPut: (
+      campaignId: string,
+      data: SaveWizardDraftIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<WizardStateOut, HTTPValidationError>({
+        path: `/api/ai-device-lab/service-campaigns/${campaignId}/wizard/app`,
+        method: "PUT",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name GenerateWizardScenarioRouteApiAiDeviceLabServiceCampaignsCampaignIdWizardScenarioGeneratePost
+     * @summary Generate Wizard Scenario Route
+     * @request POST:/api/ai-device-lab/service-campaigns/{campaign_id}/wizard/scenario/generate
+     * @secure
+     */
+    generateWizardScenarioRouteApiAiDeviceLabServiceCampaignsCampaignIdWizardScenarioGeneratePost:
+      (
+        campaignId: string,
+        data: StartWizardGenerationIn,
+        params: RequestParams = {},
+      ) =>
+        this.request<WizardStateOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/service-campaigns/${campaignId}/wizard/scenario/generate`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name ApproveWizardScenarioRouteApiAiDeviceLabServiceCampaignsCampaignIdWizardScenarioApprovePost
+     * @summary Approve Wizard Scenario Route
+     * @request POST:/api/ai-device-lab/service-campaigns/{campaign_id}/wizard/scenario/approve
+     * @secure
+     */
+    approveWizardScenarioRouteApiAiDeviceLabServiceCampaignsCampaignIdWizardScenarioApprovePost:
+      (
+        campaignId: string,
+        data: ApproveWizardScenarioIn,
+        params: RequestParams = {},
+      ) =>
+        this.request<WizardStateOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/service-campaigns/${campaignId}/wizard/scenario/approve`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name StartServiceCampaignRouteApiAiDeviceLabServiceCampaignsCampaignIdStartPost
+     * @summary Start Service Campaign Route
+     * @request POST:/api/ai-device-lab/service-campaigns/{campaign_id}/start
+     * @secure
+     */
+    startServiceCampaignRouteApiAiDeviceLabServiceCampaignsCampaignIdStartPost:
+      (campaignId: string, data: StartCampaignIn, params: RequestParams = {}) =>
+        this.request<StartCampaignOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/service-campaigns/${campaignId}/start`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name MaterializeSlotsRouteApiAiDeviceLabServiceCampaignsCampaignIdSlotsMaterializePost
+     * @summary Materialize Slots Route
+     * @request POST:/api/ai-device-lab/service-campaigns/{campaign_id}/slots/materialize
+     * @secure
+     */
+    materializeSlotsRouteApiAiDeviceLabServiceCampaignsCampaignIdSlotsMaterializePost:
+      (campaignId: string, params: RequestParams = {}) =>
+        this.request<MaterializeSlotsOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/service-campaigns/${campaignId}/slots/materialize`,
+          method: "POST",
+          secure: true,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name ServiceProgressRouteApiAiDeviceLabServiceCampaignsCampaignIdProgressGet
+     * @summary Service Progress Route
+     * @request GET:/api/ai-device-lab/service-campaigns/{campaign_id}/progress
+     * @secure
+     */
+    serviceProgressRouteApiAiDeviceLabServiceCampaignsCampaignIdProgressGet: (
+      campaignId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<ServiceProgressOut, HTTPValidationError>({
+        path: `/api/ai-device-lab/service-campaigns/${campaignId}/progress`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name ListServiceLanesRouteApiAiDeviceLabServiceCampaignsCampaignIdLanesGet
+     * @summary List Service Lanes Route
+     * @request GET:/api/ai-device-lab/service-campaigns/{campaign_id}/lanes
+     * @secure
+     */
+    listServiceLanesRouteApiAiDeviceLabServiceCampaignsCampaignIdLanesGet: (
+      campaignId: string,
       query?: {
-        /** Account Id */
-        account_id?: string | null;
-        /** Status */
-        status?: string | null;
-        /** Search */
-        search?: string | null;
-        /**
-         * Limit
-         * @min 1
-         * @max 500
-         * @default 100
-         */
-        limit?: number;
         /**
          * Offset
          * @min 0
          * @default 0
          */
         offset?: number;
+        /**
+         * Limit
+         * @min 1
+         * @max 50
+         * @default 12
+         */
+        limit?: number;
       },
       params: RequestParams = {},
     ) =>
-      this.request<FacebookCandidateListOut, HTTPValidationError>({
-        path: `/api/facebook-candidates`,
+      this.request<ServiceLaneListOut, HTTPValidationError>({
+        path: `/api/ai-device-lab/service-campaigns/${campaignId}/lanes`,
         method: "GET",
         query: query,
         secure: true,
@@ -13716,18 +17303,438 @@ export class DeviceFarmHttpClient<
     /**
      * No description
      *
-     * @tags facebook-candidates
-     * @name ObserveFacebookCandidateRouteApiFacebookCandidatesPost
-     * @summary Observe Facebook Candidate Route
-     * @request POST:/api/facebook-candidates
+     * @tags ai-device-lab
+     * @name GetServiceLaneDetailRouteApiAiDeviceLabServiceCampaignsCampaignIdLanesLaneIdGet
+     * @summary Get Service Lane Detail Route
+     * @request GET:/api/ai-device-lab/service-campaigns/{campaign_id}/lanes/{lane_id}
      * @secure
      */
-    observeFacebookCandidateRouteApiFacebookCandidatesPost: (
-      data: FacebookCandidateObserveIn,
+    getServiceLaneDetailRouteApiAiDeviceLabServiceCampaignsCampaignIdLanesLaneIdGet:
+      (
+        campaignId: string,
+        laneId: string,
+        query?: {
+          /**
+           * Slot Offset
+           * @min 0
+           * @default 0
+           */
+          slot_offset?: number;
+          /**
+           * Slot Limit
+           * @min 1
+           * @max 50
+           * @default 14
+           */
+          slot_limit?: number;
+        },
+        params: RequestParams = {},
+      ) =>
+        this.request<ServiceLaneDetailOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/service-campaigns/${campaignId}/lanes/${laneId}`,
+          method: "GET",
+          query: query,
+          secure: true,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name CreateEvidenceDownloadUrlRouteApiAiDeviceLabServiceCampaignsCampaignIdEvidenceEvidenceIdDownloadUrlPost
+     * @summary Create Evidence Download Url Route
+     * @request POST:/api/ai-device-lab/service-campaigns/{campaign_id}/evidence/{evidence_id}/download-url
+     * @secure
+     */
+    createEvidenceDownloadUrlRouteApiAiDeviceLabServiceCampaignsCampaignIdEvidenceEvidenceIdDownloadUrlPost:
+      (campaignId: string, evidenceId: string, params: RequestParams = {}) =>
+        this.request<EvidenceDownloadOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/service-campaigns/${campaignId}/evidence/${evidenceId}/download-url`,
+          method: "POST",
+          secure: true,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name ListCampaignParticipationRouteApiAiDeviceLabServiceCampaignsCampaignIdParticipationGet
+     * @summary List Campaign Participation Route
+     * @request GET:/api/ai-device-lab/service-campaigns/{campaign_id}/participation
+     * @secure
+     */
+    listCampaignParticipationRouteApiAiDeviceLabServiceCampaignsCampaignIdParticipationGet:
+      (
+        campaignId: string,
+        query?: {
+          /**
+           * Offset
+           * @min 0
+           * @default 0
+           */
+          offset?: number;
+          /**
+           * Limit
+           * @min 1
+           * @max 100
+           * @default 25
+           */
+          limit?: number;
+        },
+        params: RequestParams = {},
+      ) =>
+        this.request<ParticipationListOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/service-campaigns/${campaignId}/participation`,
+          method: "GET",
+          query: query,
+          secure: true,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name RecordCampaignParticipationRouteApiAiDeviceLabServiceCampaignsCampaignIdParticipationPost
+     * @summary Record Campaign Participation Route
+     * @request POST:/api/ai-device-lab/service-campaigns/{campaign_id}/participation
+     * @secure
+     */
+    recordCampaignParticipationRouteApiAiDeviceLabServiceCampaignsCampaignIdParticipationPost:
+      (
+        campaignId: string,
+        data: RecordParticipationIn,
+        params: RequestParams = {},
+      ) =>
+        this.request<ParticipationRecordOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/service-campaigns/${campaignId}/participation`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name ListCampaignIssuesRouteApiAiDeviceLabServiceCampaignsCampaignIdIssuesGet
+     * @summary List Campaign Issues Route
+     * @request GET:/api/ai-device-lab/service-campaigns/{campaign_id}/issues
+     * @secure
+     */
+    listCampaignIssuesRouteApiAiDeviceLabServiceCampaignsCampaignIdIssuesGet: (
+      campaignId: string,
+      query?: {
+        /**
+         * Offset
+         * @min 0
+         * @default 0
+         */
+        offset?: number;
+        /**
+         * Limit
+         * @min 1
+         * @max 100
+         * @default 25
+         */
+        limit?: number;
+      },
       params: RequestParams = {},
     ) =>
-      this.request<FacebookCandidateObserveOut, HTTPValidationError>({
-        path: `/api/facebook-candidates`,
+      this.request<IssueListOut, HTTPValidationError>({
+        path: `/api/ai-device-lab/service-campaigns/${campaignId}/issues`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name CreateCampaignIssueRouteApiAiDeviceLabServiceCampaignsCampaignIdIssuesPost
+     * @summary Create Campaign Issue Route
+     * @request POST:/api/ai-device-lab/service-campaigns/{campaign_id}/issues
+     * @secure
+     */
+    createCampaignIssueRouteApiAiDeviceLabServiceCampaignsCampaignIdIssuesPost:
+      (campaignId: string, data: CreateIssueIn, params: RequestParams = {}) =>
+        this.request<IssueSummaryOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/service-campaigns/${campaignId}/issues`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name RequestCampaignRetestRouteApiAiDeviceLabServiceCampaignsCampaignIdIssuesIssueIdRetestsPost
+     * @summary Request Campaign Retest Route
+     * @request POST:/api/ai-device-lab/service-campaigns/{campaign_id}/issues/{issue_id}/retests
+     * @secure
+     */
+    requestCampaignRetestRouteApiAiDeviceLabServiceCampaignsCampaignIdIssuesIssueIdRetestsPost:
+      (
+        campaignId: string,
+        issueId: string,
+        data: RequestRetestIn,
+        params: RequestParams = {},
+      ) =>
+        this.request<RetestRequestOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/service-campaigns/${campaignId}/issues/${issueId}/retests`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name ListCampaignReportsRouteApiAiDeviceLabServiceCampaignsCampaignIdReportsGet
+     * @summary List Campaign Reports Route
+     * @request GET:/api/ai-device-lab/service-campaigns/{campaign_id}/reports
+     * @secure
+     */
+    listCampaignReportsRouteApiAiDeviceLabServiceCampaignsCampaignIdReportsGet:
+      (
+        campaignId: string,
+        query?: {
+          /**
+           * Offset
+           * @min 0
+           * @default 0
+           */
+          offset?: number;
+          /**
+           * Limit
+           * @min 1
+           * @max 100
+           * @default 20
+           */
+          limit?: number;
+        },
+        params: RequestParams = {},
+      ) =>
+        this.request<ReportListOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/service-campaigns/${campaignId}/reports`,
+          method: "GET",
+          query: query,
+          secure: true,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name PublishCampaignReportRouteApiAiDeviceLabServiceCampaignsCampaignIdReportsReportIdPublishPost
+     * @summary Publish Campaign Report Route
+     * @request POST:/api/ai-device-lab/service-campaigns/{campaign_id}/reports/{report_id}/publish
+     * @secure
+     */
+    publishCampaignReportRouteApiAiDeviceLabServiceCampaignsCampaignIdReportsReportIdPublishPost:
+      (campaignId: string, reportId: string, params: RequestParams = {}) =>
+        this.request<ReportSummaryOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/service-campaigns/${campaignId}/reports/${reportId}/publish`,
+          method: "POST",
+          secure: true,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name CreateReportDownloadUrlRouteApiAiDeviceLabServiceCampaignsCampaignIdReportsReportIdDownloadUrlPost
+     * @summary Create Report Download Url Route
+     * @request POST:/api/ai-device-lab/service-campaigns/{campaign_id}/reports/{report_id}/download-url
+     * @secure
+     */
+    createReportDownloadUrlRouteApiAiDeviceLabServiceCampaignsCampaignIdReportsReportIdDownloadUrlPost:
+      (campaignId: string, reportId: string, params: RequestParams = {}) =>
+        this.request<ReportDownloadOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/service-campaigns/${campaignId}/reports/${reportId}/download-url`,
+          method: "POST",
+          secure: true,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name ReplaceLaneDeviceRouteApiAiDeviceLabServiceCampaignsCampaignIdLanesLaneIdReplacePost
+     * @summary Replace Lane Device Route
+     * @request POST:/api/ai-device-lab/service-campaigns/{campaign_id}/lanes/{lane_id}/replace
+     * @secure
+     */
+    replaceLaneDeviceRouteApiAiDeviceLabServiceCampaignsCampaignIdLanesLaneIdReplacePost:
+      (
+        campaignId: string,
+        laneId: string,
+        data: ReplaceLaneDeviceIn,
+        params: RequestParams = {},
+      ) =>
+        this.request<FleetLifecycleOperationOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/service-campaigns/${campaignId}/lanes/${laneId}/replace`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name CompleteReplacementRouteApiAiDeviceLabServiceCampaignsCampaignIdOperationsOperationIdCompleteReplacementPost
+     * @summary Complete Replacement Route
+     * @request POST:/api/ai-device-lab/service-campaigns/{campaign_id}/operations/{operation_id}/complete-replacement
+     * @secure
+     */
+    completeReplacementRouteApiAiDeviceLabServiceCampaignsCampaignIdOperationsOperationIdCompleteReplacementPost:
+      (campaignId: string, operationId: string, params: RequestParams = {}) =>
+        this.request<FleetLifecycleOperationOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/service-campaigns/${campaignId}/operations/${operationId}/complete-replacement`,
+          method: "POST",
+          secure: true,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name ExtendServiceCampaignRouteApiAiDeviceLabServiceCampaignsCampaignIdExtendPost
+     * @summary Extend Service Campaign Route
+     * @request POST:/api/ai-device-lab/service-campaigns/{campaign_id}/extend
+     * @secure
+     */
+    extendServiceCampaignRouteApiAiDeviceLabServiceCampaignsCampaignIdExtendPost:
+      (
+        campaignId: string,
+        data: ExtendServiceCampaignIn,
+        params: RequestParams = {},
+      ) =>
+        this.request<ServiceExtensionOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/service-campaigns/${campaignId}/extend`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name CancelServiceCampaignRouteApiAiDeviceLabServiceCampaignsCampaignIdCancelPost
+     * @summary Cancel Service Campaign Route
+     * @request POST:/api/ai-device-lab/service-campaigns/{campaign_id}/cancel
+     * @secure
+     */
+    cancelServiceCampaignRouteApiAiDeviceLabServiceCampaignsCampaignIdCancelPost:
+      (
+        campaignId: string,
+        data: CancelServiceCampaignIn,
+        params: RequestParams = {},
+      ) =>
+        this.request<FleetLifecycleOperationOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/service-campaigns/${campaignId}/cancel`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name ExpireServiceCampaignRouteApiAiDeviceLabServiceCampaignsCampaignIdExpirePost
+     * @summary Expire Service Campaign Route
+     * @request POST:/api/ai-device-lab/service-campaigns/{campaign_id}/expire
+     * @secure
+     */
+    expireServiceCampaignRouteApiAiDeviceLabServiceCampaignsCampaignIdExpirePost:
+      (
+        campaignId: string,
+        data: CancelServiceCampaignIn,
+        params: RequestParams = {},
+      ) =>
+        this.request<FleetLifecycleOperationOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/service-campaigns/${campaignId}/expire`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name CompleteCancellationRouteApiAiDeviceLabServiceCampaignsCampaignIdOperationsOperationIdCompleteCancellationPost
+     * @summary Complete Cancellation Route
+     * @request POST:/api/ai-device-lab/service-campaigns/{campaign_id}/operations/{operation_id}/complete-cancellation
+     * @secure
+     */
+    completeCancellationRouteApiAiDeviceLabServiceCampaignsCampaignIdOperationsOperationIdCompleteCancellationPost:
+      (campaignId: string, operationId: string, params: RequestParams = {}) =>
+        this.request<FleetLifecycleOperationOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/service-campaigns/${campaignId}/operations/${operationId}/complete-cancellation`,
+          method: "POST",
+          secure: true,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name SignKpiDefinitionRouteApiAiDeviceLabKpiDefinitionsPost
+     * @summary Sign Kpi Definition Route
+     * @request POST:/api/ai-device-lab/kpi/definitions
+     * @secure
+     */
+    signKpiDefinitionRouteApiAiDeviceLabKpiDefinitionsPost: (
+      data: SignKpiDefinitionIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<KpiDefinitionOut, HTTPValidationError>({
+        path: `/api/ai-device-lab/kpi/definitions`,
         method: "POST",
         body: data,
         secure: true,
@@ -13739,18 +17746,18 @@ export class DeviceFarmHttpClient<
     /**
      * No description
      *
-     * @tags facebook-candidates
-     * @name RecomputeFacebookCandidatesRouteApiFacebookCandidatesRecomputePost
-     * @summary Recompute Facebook Candidates Route
-     * @request POST:/api/facebook-candidates/recompute
+     * @tags ai-device-lab
+     * @name FreezeKpiCohortRouteApiAiDeviceLabKpiCohortsPost
+     * @summary Freeze Kpi Cohort Route
+     * @request POST:/api/ai-device-lab/kpi/cohorts
      * @secure
      */
-    recomputeFacebookCandidatesRouteApiFacebookCandidatesRecomputePost: (
-      data: FacebookCandidateRecomputeIn,
+    freezeKpiCohortRouteApiAiDeviceLabKpiCohortsPost: (
+      data: FreezeKpiCohortIn,
       params: RequestParams = {},
     ) =>
-      this.request<FacebookCandidateRecomputeOut, HTTPValidationError>({
-        path: `/api/facebook-candidates/recompute`,
+      this.request<KpiCohortOut, HTTPValidationError>({
+        path: `/api/ai-device-lab/kpi/cohorts`,
         method: "POST",
         body: data,
         secure: true,
@@ -13762,41 +17769,19 @@ export class DeviceFarmHttpClient<
     /**
      * No description
      *
-     * @tags facebook-candidates
-     * @name GetFacebookCandidateRouteApiFacebookCandidatesCandidateIdGet
-     * @summary Get Facebook Candidate Route
-     * @request GET:/api/facebook-candidates/{candidate_id}
+     * @tags ai-device-lab
+     * @name RecordKpiAssistanceRouteApiAiDeviceLabKpiAssistanceEventsPost
+     * @summary Record Kpi Assistance Route
+     * @request POST:/api/ai-device-lab/kpi/assistance-events
      * @secure
      */
-    getFacebookCandidateRouteApiFacebookCandidatesCandidateIdGet: (
-      candidateId: string,
+    recordKpiAssistanceRouteApiAiDeviceLabKpiAssistanceEventsPost: (
+      data: RecordKpiAssistanceIn,
       params: RequestParams = {},
     ) =>
-      this.request<FacebookCandidateDetailOut, HTTPValidationError>({
-        path: `/api/facebook-candidates/${candidateId}`,
-        method: "GET",
-        secure: true,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
-     * @tags facebook-candidates
-     * @name ReviewFacebookCandidateRouteApiFacebookCandidatesCandidateIdReviewPatch
-     * @summary Review Facebook Candidate Route
-     * @request PATCH:/api/facebook-candidates/{candidate_id}/review
-     * @secure
-     */
-    reviewFacebookCandidateRouteApiFacebookCandidatesCandidateIdReviewPatch: (
-      candidateId: string,
-      data: FacebookCandidateReviewIn,
-      params: RequestParams = {},
-    ) =>
-      this.request<FacebookCandidateDetailOut, HTTPValidationError>({
-        path: `/api/facebook-candidates/${candidateId}/review`,
-        method: "PATCH",
+      this.request<KpiAssistanceOut, HTTPValidationError>({
+        path: `/api/ai-device-lab/kpi/assistance-events`,
+        method: "POST",
         body: data,
         secure: true,
         type: ContentType.Json,
@@ -13807,19 +17792,23 @@ export class DeviceFarmHttpClient<
     /**
      * No description
      *
-     * @tags facebook-candidates
-     * @name GetFacebookCandidateSettingsRouteApiFacebookCandidateSettingsGet
-     * @summary Get Facebook Candidate Settings Route
-     * @request GET:/api/facebook-candidate-settings
+     * @tags ai-device-lab
+     * @name ComputeKpiSnapshotRouteApiAiDeviceLabKpiCohortsCohortIdSnapshotsPost
+     * @summary Compute Kpi Snapshot Route
+     * @request POST:/api/ai-device-lab/kpi/cohorts/{cohort_id}/snapshots
      * @secure
      */
-    getFacebookCandidateSettingsRouteApiFacebookCandidateSettingsGet: (
+    computeKpiSnapshotRouteApiAiDeviceLabKpiCohortsCohortIdSnapshotsPost: (
+      cohortId: string,
+      data: ComputeKpiSnapshotIn,
       params: RequestParams = {},
     ) =>
-      this.request<FacebookCandidateSettingsOut, any>({
-        path: `/api/facebook-candidate-settings`,
-        method: "GET",
+      this.request<KpiSnapshotOut, HTTPValidationError>({
+        path: `/api/ai-device-lab/kpi/cohorts/${cohortId}/snapshots`,
+        method: "POST",
+        body: data,
         secure: true,
+        type: ContentType.Json,
         format: "json",
         ...params,
       }),
@@ -13827,25 +17816,50 @@ export class DeviceFarmHttpClient<
     /**
      * No description
      *
-     * @tags facebook-candidates
-     * @name UpdateFacebookCandidateSettingsRouteApiFacebookCandidateSettingsPut
-     * @summary Update Facebook Candidate Settings Route
-     * @request PUT:/api/facebook-candidate-settings
+     * @tags ai-device-lab
+     * @name BuildAcceptanceCandidateRouteApiAiDeviceLabAcceptanceCandidatesPost
+     * @summary Build Acceptance Candidate Route
+     * @request POST:/api/ai-device-lab/acceptance/candidates
      * @secure
      */
-    updateFacebookCandidateSettingsRouteApiFacebookCandidateSettingsPut: (
-      data: FacebookCandidateSettingsIn,
+    buildAcceptanceCandidateRouteApiAiDeviceLabAcceptanceCandidatesPost: (
+      data: BuildAcceptanceCandidateIn,
       params: RequestParams = {},
     ) =>
-      this.request<FacebookCandidateSettingsOut, HTTPValidationError>({
-        path: `/api/facebook-candidate-settings`,
-        method: "PUT",
+      this.request<AcceptanceCandidateOut, HTTPValidationError>({
+        path: `/api/ai-device-lab/acceptance/candidates`,
+        method: "POST",
         body: data,
         secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
       }),
+
+    /**
+     * No description
+     *
+     * @tags ai-device-lab
+     * @name EvaluateAcceptanceCandidateRouteApiAiDeviceLabAcceptanceCandidatesCandidateIdEvaluatePost
+     * @summary Evaluate Acceptance Candidate Route
+     * @request POST:/api/ai-device-lab/acceptance/candidates/{candidate_id}/evaluate
+     * @secure
+     */
+    evaluateAcceptanceCandidateRouteApiAiDeviceLabAcceptanceCandidatesCandidateIdEvaluatePost:
+      (
+        candidateId: string,
+        data: EvaluateAcceptanceCandidateIn,
+        params: RequestParams = {},
+      ) =>
+        this.request<AcceptanceDecisionOut, HTTPValidationError>({
+          path: `/api/ai-device-lab/acceptance/candidates/${candidateId}/evaluate`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
 
     /**
      * No description
@@ -13879,6 +17893,51 @@ export class DeviceFarmHttpClient<
         path: `/api/scenario/schema`,
         method: "GET",
         secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags device-control
+     * @name ApiScenarioDeviceCapabilitiesApiScenarioDeviceCapabilitiesSerialGet
+     * @summary Api Scenario Device Capabilities
+     * @request GET:/api/scenario/device-capabilities/{serial}
+     * @secure
+     */
+    apiScenarioDeviceCapabilitiesApiScenarioDeviceCapabilitiesSerialGet: (
+      serial: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/scenario/device-capabilities/${serial}`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags device-control
+     * @name ApiScenarioPreflightApiScenarioPreflightSerialPost
+     * @summary Api Scenario Preflight
+     * @request POST:/api/scenario/preflight/{serial}
+     * @secure
+     */
+    apiScenarioPreflightApiScenarioPreflightSerialPost: (
+      serial: string,
+      data: Record<string, any>,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/scenario/preflight/${serial}`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
         format: "json",
         ...params,
       }),
@@ -14643,6 +18702,32 @@ export class DeviceFarmHttpClient<
      * No description
      *
      * @tags device-control
+     * @name ApiScenarioPreviewStreamInputApiDevicesSerialScenarioPreviewStreamTraceIdInputPost
+     * @summary Api Scenario Preview Stream Input
+     * @request POST:/api/devices/{serial}/scenario/preview-stream/{trace_id}/input
+     * @secure
+     */
+    apiScenarioPreviewStreamInputApiDevicesSerialScenarioPreviewStreamTraceIdInputPost:
+      (
+        serial: string,
+        traceId: string,
+        data: InputTextRequest,
+        params: RequestParams = {},
+      ) =>
+        this.request<any, HTTPValidationError>({
+          path: `/api/devices/${serial}/scenario/preview-stream/${traceId}/input`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags device-control
      * @name ApiScenarioRunApiDevicesSerialScenarioRunPost
      * @summary Api Scenario Run
      * @request POST:/api/devices/{serial}/scenario/run
@@ -15340,6 +19425,26 @@ export class DeviceFarmHttpClient<
         body: data,
         secure: true,
         type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description The cheap rung of the viewer's stall ladder. A decoder that stalls while bytes keep arriving has a broken reference chain; one IDR repairs it in about 100ms with the PeerConnection intact, where the next rung rebuilds the session and flashes the picture black. Only the gRPC control plane carries this. The direct-HTTP adapter has no such endpoint, and inventing a 404 round trip to find that out would just add latency to a caller that already escalates on failure.
+     *
+     * @name RequestKeyframeApiMediaWebrtcSessionsSessionIdKeyframePost
+     * @summary Request Keyframe
+     * @request POST:/api/media/webrtc/sessions/{session_id}/keyframe
+     * @secure
+     */
+    requestKeyframeApiMediaWebrtcSessionsSessionIdKeyframePost: (
+      sessionId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/media/webrtc/sessions/${sessionId}/keyframe`,
+        method: "POST",
+        secure: true,
         format: "json",
         ...params,
       }),

@@ -1,0 +1,101 @@
+{
+  "job": {
+    "status": "succeeded",
+    "reason": "ASSERTIONS_PASSED"
+  },
+  "attempt": {
+    "status": "passed",
+    "failure": null,
+    "observed_build": {
+      "version_name": "15",
+      "version_code": "35",
+      "package_name": "com.android.settings",
+      "target_app_build_id": "06068451-78a8-439c-aec4-940434b603b1"
+    }
+  },
+  "execution": {
+    "status": "completed",
+    "error": null,
+    "meta": {
+      "target_type": "emulator",
+      "proof": "ADL-16-review-fixes",
+      "suffix": "429f7bd447",
+      "dispatch_source": "ai_device_lab_farm_outbox",
+      "runtime_engine": "fallback",
+      "workflow_id": "fallback_exec_03f1fed2-7d99-49ca-a83e-b2bb8134ae2b",
+      "workflow_ids": [
+        "fallback_exec_03f1fed2-7d99-49ca-a83e-b2bb8134ae2b"
+      ]
+    }
+  },
+  "outbox": {
+    "status": "delivered",
+    "error": null
+  },
+  "steps": [
+    {
+      "index": 0,
+      "type": "launch_app",
+      "status": "passed",
+      "error": null,
+      "attempts": [
+        {
+          "attempt": 1,
+          "timestamp": 1791110484.7470222,
+          "error_reason": null,
+          "wait_ms_before_next": null
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "type": "wait",
+      "status": "passed",
+      "error": null,
+      "attempts": [
+        {
+          "attempt": 1,
+          "timestamp": 1791110485.257924,
+          "error_reason": null,
+          "wait_ms_before_next": null
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "type": "assert_element",
+      "status": "passed",
+      "error": null,
+      "attempts": [
+        {
+          "attempt": 1,
+          "timestamp": 1791110485.2941172,
+          "error_reason": null,
+          "wait_ms_before_next": null
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "type": "key",
+      "status": "passed",
+      "error": null,
+      "attempts": [
+        {
+          "attempt": 1,
+          "timestamp": 1791110485.4125981,
+          "error_reason": null,
+          "wait_ms_before_next": null
+        }
+      ]
+    }
+  ],
+  "events": [
+    {
+      "type": "completed",
+      "reason": "ASSERTIONS_PASSED",
+      "schema": "adl-farm-event-v1",
+      "execution_id": "03f1fed2-7d99-49ca-a83e-b2bb8134ae2b"
+    }
+  ]
+}

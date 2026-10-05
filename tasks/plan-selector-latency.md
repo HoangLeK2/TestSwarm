@@ -29,7 +29,7 @@ Chi phí thật (chỉ leaf step):
 **Task 1 — fallback so khớp chuẩn hoá whitespace.**
 
 - `services/scenario_selector.normalize_match_text()` — NFC → gộp `\s+` → strip.
-  Không casefold, không bỏ dấu (`fb_labels.fold()` quá rộng, xem `CLAUDE.md`).
+  Không casefold, không bỏ dấu; phép chuẩn hóa quá rộng có thể tạo false positive.
 - `runtime/element_resolver.phase_text_normalized()` — dump hierarchy 1 lần, quét
   `text` + `content-desc`, so khớp sau chuẩn hoá, trả bounds khi đúng 1 node.
   - **>1 node ⇒ trả None** (từ chối tap).

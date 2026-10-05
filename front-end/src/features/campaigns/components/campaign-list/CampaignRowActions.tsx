@@ -19,7 +19,6 @@ import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { RunCampaignDialog } from '../run-campaign-dialog';
 import { DispatchCampaignDialog } from '../dispatch-campaign-dialog';
-import { ContinuousCrawlStartDialog } from '../continuous-crawl-start-dialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -68,7 +67,6 @@ import {
 } from '../../types';
 import { summarizeDispatchResult } from '../../lib/campaign-dispatch-result';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
-import { isContinuousCrawl } from '../../lib/continuous-crawl-monitor';
 import {
   automationPrimaryAction,
   automationRunState,
@@ -131,8 +129,7 @@ export function CampaignRowActions({
     return isCampaignEntityOut(row) ? row : null;
   })();
   const effectiveVariables = campaignVariables(effectiveCampaign);
-  const continuous = isContinuousCrawl(effectiveVariables);
-  const runJourney = campaignRunJourney(isEntityCampaign, continuous);
+  const runJourney = campaignRunJourney(isEntityCampaign, false);
   const automationAction = automationPrimaryAction(
     automationRunState(effectiveVariables)
   );
@@ -448,108 +445,74 @@ export function CampaignRowActions({
             />
 
             {isEntityCampaign ? (
-              continuous ? (
-                <ContinuousCrawlStartDialog
-                  open={automationDialogOpen}
-                  campaignName={campaign.name}
-                  campaignId={campaign.id}
-                  initialStep={resumeAutomationReview ? 'review' : 'goal'}
-                  onClose={() => {
-                    setAutomationDialogOpen(false);
-                    setResumeAutomationReview(false);
-                  }}
-                  onManageDevices={() => {
-                    setResumeAutomationReview(true);
-                    setAutomationDialogOpen(false);
-                    setAddDevicesOpen(true);
-                  }}
-                  onManageTargets={() => {
-                    setResumeAutomationReview(true);
-                    setAutomationDialogOpen(false);
-                    setEntityEditOpen(true);
-                  }}
-                  onEditConfiguration={() => {
-                    setResumeAutomationReview(true);
-                    setAutomationDialogOpen(false);
-                    setEntityEditOpen(true);
-                  }}
-                  devices={devices}
-                  scenarios={dispatchScenarios}
-                  onStarted={() => {
-                    setAutomationDialogOpen(false);
-                    router.push(ROUTES.CAMPAIGNS.MONITOR(campaign.id));
-                  }}
-                />
-              ) : (
-                <DispatchCampaignDialog
-                  open={dispatchDialogOpen}
-                  campaignId={campaign.id}
-                  onClose={() => setDispatchDialogOpen(false)}
-                  devices={devices}
-                  scenarios={dispatchScenarios}
-                  campaignVariables={
-                    entityDetail ? campaignVariables(entityDetail) : {}
-                  }
-                  perDeviceOverrides={entityDetail?.per_device_overrides ?? {}}
-                  isDispatching={isDispatching}
-                  onConfirm={(body) => {
-                    setDispatchDialogOpen(false);
-                    dispatchCampaign(
-                      { id: campaign.id, body },
-                      {
-                        onSuccess: (data) => {
-                          const summary = summarizeDispatchResult(data);
-                          const usedFallback =
-                            executionRuntime?.campaign_run
-                              ?.fallback_mode_active ||
-                            data.executions?.some(
-                              (e) => e.dispatch_source === 'fallback'
-                            );
-                          if (usedFallback) {
-                            toast.warning(t('fallbackDispatchActive'), {
-                              duration: 8000
-                            });
-                          }
-                          if (summary.allFailed) {
-                            toast.error(
-                              summary.allFailuresAreDeviceClaim
-                                ? t('dispatchAllDevicesBusy', {
-                                    count: summary.deviceClaimFailed
-                                  })
-                                : t('dispatchAllFailed', {
-                                    count: summary.failed
-                                  }),
-                              {
-                                description: campaign.name,
-                                duration: 8000
-                              }
-                            );
-                            return;
-                          }
-                          toast.success(
-                            t('dispatchStarted', { count: data.target_count }),
+              <DispatchCampaignDialog
+                open={dispatchDialogOpen}
+                campaignId={campaign.id}
+                onClose={() => setDispatchDialogOpen(false)}
+                devices={devices}
+                scenarios={dispatchScenarios}
+                campaignVariables={
+                  entityDetail ? campaignVariables(entityDetail) : {}
+                }
+                perDeviceOverrides={entityDetail?.per_device_overrides ?? {}}
+                isDispatching={isDispatching}
+                onConfirm={(body) => {
+                  setDispatchDialogOpen(false);
+                  dispatchCampaign(
+                    { id: campaign.id, body },
+                    {
+                      onSuccess: (data) => {
+                        const summary = summarizeDispatchResult(data);
+                        const usedFallback =
+                          executionRuntime?.campaign_run
+                            ?.fallback_mode_active ||
+                          data.executions?.some(
+                            (e) => e.dispatch_source === 'fallback'
+                          );
+                        if (usedFallback) {
+                          toast.warning(t('fallbackDispatchActive'), {
+                            duration: 8000
+                          });
+                        }
+                        if (summary.allFailed) {
+                          toast.error(
+                            summary.allFailuresAreDeviceClaim
+                              ? t('dispatchAllDevicesBusy', {
+                                  count: summary.deviceClaimFailed
+                                })
+                              : t('dispatchAllFailed', {
+                                  count: summary.failed
+                                }),
                             {
-                              description:
-                                summary.failed > 0
-                                  ? t('dispatchPartialFailures', {
-                                      count: summary.failed
-                                    })
-                                  : campaign.name,
-                              duration: 5000
+                              description: campaign.name,
+                              duration: 8000
                             }
                           );
-                          router.push(ROUTES.DEVICES.ROOT);
-                        },
-                        onError: (err) => {
-                          toast.error(
-                            formatFarmApiError(err, t('dispatchFailed'))
-                          );
+                          return;
                         }
+                        toast.success(
+                          t('dispatchStarted', { count: data.target_count }),
+                          {
+                            description:
+                              summary.failed > 0
+                                ? t('dispatchPartialFailures', {
+                                    count: summary.failed
+                                  })
+                                : campaign.name,
+                            duration: 5000
+                          }
+                        );
+                        router.push(ROUTES.DEVICES.ROOT);
+                      },
+                      onError: (err) => {
+                        toast.error(
+                          formatFarmApiError(err, t('dispatchFailed'))
+                        );
                       }
-                    );
-                  }}
-                />
-              )
+                    }
+                  );
+                }}
+              />
             ) : null}
           </>
         )}

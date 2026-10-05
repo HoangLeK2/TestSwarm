@@ -99,7 +99,7 @@ function humanizeCore(
     });
   }
 
-  if (/edge extra_data fb_posts:/i.test(msg) && /failed/i.test(msg)) {
+  if (/edge extra_data posts:/i.test(msg) && /failed/i.test(msg)) {
     return t('monitorDlqErrPostExtractFailed');
   }
 

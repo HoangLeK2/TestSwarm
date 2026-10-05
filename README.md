@@ -24,7 +24,7 @@ The repository is a full-stack workspace:
 
 | Area | Path | Purpose |
 |---|---|---|
-| Backend | `device_farm/` | FastAPI API, device runtime, Temporal workers, relay server, MCP server |
+| Backend | `backend/` | FastAPI API, device runtime, Temporal workers, relay server, MCP server |
 | Frontend | `front-end/` | Next.js dashboard and generated Device Farm API client |
 | Local relay | `agent-boot/` | Runs on a machine with ADB access to Android devices |
 | Docs | `docs/` | Product, module, API, data, and implementation documentation |
@@ -123,7 +123,7 @@ Never commit `.env` files. Start from the templates and edit for your machine:
 
 ```bash
 cp .env.example .env
-cp device_farm/.env.example device_farm/.env
+cp backend/.env.example backend/.env
 cp front-end/.env.example front-end/.env
 cp agent-boot/.env.example agent-boot/.env
 ```
@@ -132,7 +132,8 @@ Important variables:
 
 | Variable | Used by | Notes |
 |---|---|---|
-| `DATABASE_URL`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | Backend, Compose | Root `.env.example` is set for in-compose Postgres. Host-run backend should use `localhost:5433`. |
+| `ANDROID_PLATFORM_TESTER_DATABASE_URL` | Backend | Required dedicated DSN. Generic `DATABASE_URL` and inherited `DB_*` settings are ignored. |
+| `ANDROID_PLATFORM_TESTER_DB_*` | Compose | Creates the independent `android_platform_tester` database on host port `55434`. |
 | `SECRET_KEY` | Backend | Required for JWT auth outside throwaway local runs. |
 | `RELAY_API_KEY` | Backend, `agent-boot` | Must match on both sides when relay auth is enabled. |
 | `RELAY_SERVER` | `agent-boot` | Use `localhost:50051` for local gRPC relay. |
@@ -161,16 +162,16 @@ changing them later requires rebuilding the frontend image.
 ### Backend local development
 
 ```bash
-cd device_farm
+cd backend
 cp .env.example .env
 uv sync
 ```
 
 If you use the root Docker services for Postgres, Redis, and Temporal while
-running the backend on the host, set these in `device_farm/.env`:
+running the backend on the host, set these in `backend/.env`:
 
 ```dotenv
-DATABASE_URL=postgresql://postgres:postgres@localhost:5433/device_farm
+ANDROID_PLATFORM_TESTER_DATABASE_URL=postgresql://platform_tester:platform_tester@localhost:55434/android_platform_tester
 TEMPORAL_SERVER_URL=localhost:7233
 REDIS_URL=redis://localhost:6379/0
 FARM_AGENT_BOOT=0
@@ -247,8 +248,9 @@ docker compose down
 ### Run deploy-style Compose with external Postgres
 
 `docker-compose.deploy.yml` is for an environment where Postgres is managed
-outside this Compose file. Edit `.env` so `DB_HOST`, `DB_PORT`, `DB_NAME`,
-`DB_USER`, and `DB_PASSWORD` point to that database. Also point `REDIS_URL` to an
+outside this Compose file. Set `ANDROID_PLATFORM_TESTER_DATABASE_URL` to a
+dedicated database whose name starts with `android_platform_tester`. Configure
+`ANDROID_PLATFORM_TESTER_DB_*` for Temporal's PostgreSQL connection. Also point `REDIS_URL` to an
 external Redis instance or leave it blank to use in-memory state only. Set
 `DB_CONNECTION_LIMIT` to the real PostgreSQL `max_connections`; deploy Compose
 fails fast when this value is missing.
@@ -271,7 +273,7 @@ docker compose up -d postgres redis temporal temporal-ui
 Run backend:
 
 ```bash
-cd device_farm
+cd backend
 uv run main.py
 ```
 
@@ -306,7 +308,7 @@ The web backend starts Temporal workers in-process when `temporal.enabled=true`.
 To run a standalone worker process instead, use:
 
 ```bash
-cd device_farm
+cd backend
 uv run python -m temporal.worker_main
 ```
 
@@ -321,11 +323,11 @@ The backend must already be running.
 Or from the backend directory:
 
 ```bash
-cd device_farm
+cd backend
 uv run python -m mcp.server
 ```
 
-See `device_farm/mcp/README.md` for Cursor and token setup.
+See `backend/mcp/README.md` for Cursor and token setup.
 
 ## Health Checks
 
@@ -346,7 +348,7 @@ Expected basics:
 Backend:
 
 ```bash
-cd device_farm
+cd backend
 uv run pytest
 uv run export-openapi
 ```
@@ -365,7 +367,7 @@ pnpm gen:api
 Regenerate the frontend API client after backend API changes:
 
 ```bash
-cd device_farm
+cd backend
 uv run export-openapi
 cp swagger/openapi.json ../front-end/generate/openapi.json
 cd ../front-end
@@ -377,7 +379,7 @@ pnpm gen:api
 | Symptom | Check |
 |---|---|
 | Compose fails before starting services | Run `docker compose config --quiet` and check `.env` values. |
-| Backend cannot connect to DB from host | Use `DATABASE_URL=postgresql://postgres:postgres@localhost:5433/device_farm`. |
+| Backend cannot connect to DB from host | Use `ANDROID_PLATFORM_TESTER_DATABASE_URL=postgresql://platform_tester:platform_tester@localhost:55434/android_platform_tester`. |
 | Frontend shows empty data or WebSocket errors | Check `NEXT_PUBLIC_PRODUCT_API_URL`, `NEXT_PUBLIC_DEVICE_FARM_WS_URL`, then restart/rebuild frontend. |
 | `agent-boot` cannot connect | Confirm `RELAY_SERVER`, `RELAY_API_KEY`, firewall, and that backend exposes `50051`. |
 | No devices online | Run `adb devices`, confirm USB/wireless debugging, then restart `agent-boot`. |
@@ -389,7 +391,9 @@ pnpm gen:api
 - `docs/modules/README.md` - module boundaries and source ownership.
 - `docs/api/route-matrix.md` - exposed API routes and frontend client mapping.
 - `docs/data/schema.md` - database schema ownership and migrations.
-- `device_farm/README.md` - backend notes.
+- `backend/README.md` - backend notes.
 - `front-end/README.md` - frontend notes.
 - `agent-boot/README.md` and `agent-boot/INSTALL.md` - relay setup and customer installation.
-- `device_farm/mcp/README.md` - MCP tools and AI-agent integration.
+- `backend/mcp/README.md` - MCP tools and AI-agent integration.
+
+# TestSwarm
